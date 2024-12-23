@@ -156,18 +156,20 @@ QDRANT_REQUIRED = ["qdrant-client>=1.12.0"]
 
 GO_REQUIRED = ["cffi~=1.15.0"]
 
+MILVUS_REQUIRED = ["pymilvus"]
+
 CI_REQUIRED = (
     [
         "build",
         "virtualenv==20.23.0",
-        "cryptography>=35.0,<43",
+        "cryptography>=43.0,<44",
         "ruff>=0.8.0",
         "mypy-protobuf>=3.1",
         "grpcio-tools>=1.56.2,<2",
         "grpcio-testing>=1.56.2,<2",
         # FastAPI does not correctly pull starlette dependency on httpx see thread(https://github.com/tiangolo/fastapi/issues/5656).
-        "httpx>=0.23.3",
-        "minio==7.1.0",
+        "httpx==0.27.2",
+        "minio==7.2.11",
         "mock==2.0.0",
         "moto<5",
         "mypy>=1.4.1,<1.11.3",
@@ -226,6 +228,7 @@ CI_REQUIRED = (
     + OPENTELEMETRY
     + FAISS_REQUIRED
     + QDRANT_REQUIRED
+    + MILVUS_REQUIRED
 )
 
 DOCS_REQUIRED = CI_REQUIRED
@@ -355,6 +358,7 @@ setup(
         "faiss": FAISS_REQUIRED,
         "qdrant": QDRANT_REQUIRED,
         "go": GO_REQUIRED,
+        "milvus": MILVUS_REQUIRED,
     },
     include_package_data=True,
     license="Apache",
