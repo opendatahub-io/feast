@@ -12,8 +12,6 @@ COPY go.sum go.sum
 RUN go mod download
 
 USER root
-# Copy the go source
-COPY ["Makefile", "./"]
 
 # Copy the go source
 COPY cmd/ cmd/
