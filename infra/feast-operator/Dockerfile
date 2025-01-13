@@ -11,6 +11,7 @@ COPY go.sum go.sum
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
+USER root
 # Copy the go source
 COPY ["Makefile", "./"]
 
