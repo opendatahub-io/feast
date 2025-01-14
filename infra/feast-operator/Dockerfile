@@ -15,8 +15,9 @@ USER root
 
 COPY ["Makefile", "./"]
 
-RUN pwd && echo sdfljsdfljksdfljk
-RUN ls && echo sdfljsdfljksdfljk
+RUN pwd && echo sdfljsdfljksdfljk1
+RUN ls && echo sdfljsdfljksdfljk1
+RUN ls /tmp/build/inputs && echo sdfljsdfljksdfljk1
 
 # Copy the go source
 COPY cmd/ cmd/
