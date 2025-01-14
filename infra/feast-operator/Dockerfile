@@ -13,10 +13,12 @@ RUN go mod download
 
 USER root
 
+RUN pwd && echo sdfljsdfljksdfljk
 RUN ls && echo sdfljsdfljksdfljk
 
 # Copy the go source
 COPY cmd/ cmd/
+RUN ls && echo sdfljsdfljksdfljk
 COPY api/ api/
 COPY internal/ internal/
 
