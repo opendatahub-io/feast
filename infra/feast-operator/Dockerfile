@@ -13,6 +13,8 @@ RUN go mod download
 
 USER root
 
+COPY ["Makefile", "./"]
+
 RUN pwd && echo sdfljsdfljksdfljk
 RUN ls && echo sdfljsdfljksdfljk
 
