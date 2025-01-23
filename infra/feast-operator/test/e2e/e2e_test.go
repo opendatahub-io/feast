@@ -148,8 +148,8 @@ var _ = Describe("controller", Ordered, func() {
 			namespace := "default"
 			cmd := exec.Command("kubectl", "apply", "-f",
 				"test/testdata/feast_integration_test_crs/v1alpha1_default_featurestore.yaml", "-n", namespace)
-			_, cmdOutputerr := utils.Run(cmd)
-			ExpectWithOffset(1, cmdOutputerr).NotTo(HaveOccurred())
+			_, cmdOutputErr := utils.Run(cmd)
+			ExpectWithOffset(1, cmdOutputErr).NotTo(HaveOccurred())
 
 			featureStoreName := "simple-feast-setup"
 			validateTheFeatureStoreCustomResource(namespace, featureStoreName, timeout)
@@ -162,8 +162,8 @@ var _ = Describe("controller", Ordered, func() {
 			By("deploying the Simple Feast remote registry Custom Resource on Kubernetes")
 			cmd = exec.Command("kubectl", "apply", "-f",
 				"test/testdata/feast_integration_test_crs/v1alpha1_remote_registry_featurestore.yaml", "-n", remoteRegistryNs)
-			_, cmdOutputerr = utils.Run(cmd)
-			ExpectWithOffset(1, cmdOutputerr).NotTo(HaveOccurred())
+			_, cmdOutputErr = utils.Run(cmd)
+			ExpectWithOffset(1, cmdOutputErr).NotTo(HaveOccurred())
 
 			remoteFeatureStoreName := "simple-feast-remote-setup"
 
@@ -172,14 +172,14 @@ var _ = Describe("controller", Ordered, func() {
 			By("deleting the feast remote registry deployment")
 			cmd = exec.Command("kubectl", "delete", "-f",
 				"test/testdata/feast_integration_test_crs/v1alpha1_remote_registry_featurestore.yaml", "-n", remoteRegistryNs)
-			_, cmdOutputerr = utils.Run(cmd)
-			ExpectWithOffset(1, cmdOutputerr).NotTo(HaveOccurred())
+			_, cmdOutputErr = utils.Run(cmd)
+			ExpectWithOffset(1, cmdOutputErr).NotTo(HaveOccurred())
 
 			By("deleting the feast deployment")
 			cmd = exec.Command("kubectl", "delete", "-f",
 				"test/testdata/feast_integration_test_crs/v1alpha1_default_featurestore.yaml", "-n", namespace)
-			_, cmdOutputerr = utils.Run(cmd)
-			ExpectWithOffset(1, cmdOutputerr).NotTo(HaveOccurred())
+			_, cmdOutputErr = utils.Run(cmd)
+			ExpectWithOffset(1, cmdOutputErr).NotTo(HaveOccurred())
 		})
 	})
 })
