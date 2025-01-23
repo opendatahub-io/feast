@@ -128,28 +128,10 @@ var _ = Describe("controller", Ordered, func() {
 			By("deploying the Simple Feast Custom Resource to Kubernetes")
 			namespace := "default"
 
-			cmd := exec.Command("kubectl", "logs", "deployment", controllerDeploymentName, "-n", feastControllerNamespace)
-			output, _ := utils.Run(cmd)
-			fmt.Printf(string(output))
-
-			cmd = exec.Command("kubectl", "get", "pods", "-A")
-			output, _ = utils.Run(cmd)
-			fmt.Printf(string(output))
-
-			fmt.Printf("Printed before CR invoked\n")
-
-			cmd = exec.Command("kubectl", "apply", "-f",
+			cmd := exec.Command("kubectl", "apply", "-f",
 				"test/testdata/feast_integration_test_crs/v1alpha1_default_featurestore.yaml", "-n", namespace)
 			_, cmdOutputerr := utils.Run(cmd)
 			ExpectWithOffset(1, cmdOutputerr).NotTo(HaveOccurred())
-
-			//Sleep 90 seconds to see effect of CR apply
-			time.Sleep(90 * time.Second)
-
-			cmd = exec.Command("kubectl", "get", "pods", "-A")
-			output, _ = utils.Run(cmd)
-			fmt.Printf(string(output))
-			fmt.Printf("Printed after CR invoked\n")
 
 			featureStoreName := "simple-feast-setup"
 			validateTheFeatureStoreCustomResource(namespace, featureStoreName, timeout)
