@@ -37,40 +37,31 @@ const (
 
 var _ = Describe("controller", Ordered, func() {
 	BeforeAll(func() {
-		shouldNotCreateNs := os.Getenv("SHOULD_NOT_CREATE_NS")
-		if shouldNotCreateNs == "" {
+		isRunOnOpenShiftCI := os.Getenv("RUN_ON_OPENSHIFT_CI")
+		if isRunOnOpenShiftCI == "" {
 			By("creating manager namespace")
 			cmd := exec.Command("kubectl", "create", "ns", feastControllerNamespace)
 			_, _ = utils.Run(cmd)
-		}
 
-		var err error
-		// projectimage stores the name of the image used in the example
-		var projectimage = "localhost/feast-operator:v0.0.1"
+			var err error
+			// projectimage stores the name of the image used in the example
+			var projectimage = "localhost/feast-operator:v0.0.1"
 
-		shouldNotBuildImage := os.Getenv("SHOULD_NOT_BUILD_OPERATOR_IMAGE")
-		if shouldNotBuildImage == "" {
 			By("building the manager(Operator) image")
-			cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
+			cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-		}
 
-		shouldNotLoadImageToKind := os.Getenv("SHOULD_NOT_LOAD_IMAGE_TO_KIND")
-		if shouldNotLoadImageToKind == "" {
 			By("loading the the manager(Operator) image on Kind")
 			err = utils.LoadImageToKindClusterWithName(projectimage)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-		}
 
-		// this image will be built in above make target.
-		var feastImage = "feastdev/feature-server:dev"
-		var feastLocalImage = "localhost/feastdev/feature-server:dev"
+			// this image will be built in above make target.
+			var feastImage = "feastdev/feature-server:dev"
+			var feastLocalImage = "localhost/feastdev/feature-server:dev"
 
-		shouldNotBuildFeastImage := os.Getenv("SHOULD_NOT_BUILD_FEAST_IMAGE")
-		if shouldNotBuildFeastImage == "" {
 			By("building the feast image")
-			cmd := exec.Command("make", "feast-ci-dev-docker-img")
+			cmd = exec.Command("make", "feast-ci-dev-docker-img")
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
@@ -78,19 +69,13 @@ var _ = Describe("controller", Ordered, func() {
 			cmd = exec.Command("docker", "image", "tag", feastImage, feastLocalImage)
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-		}
 
-		shouldNotLoadFeastImageToKind := os.Getenv("SHOULD_NOT_LOAD_FEAST_IMAGE_TO_KIND")
-		if shouldNotLoadFeastImageToKind == "" {
 			By("loading the the feast image on Kind cluster")
 			err = utils.LoadImageToKindClusterWithName(feastLocalImage)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-		}
 
-		shouldNotDeployOperator := os.Getenv("SHOULD_NOT_DEPLOY_OPERATOR")
-		if shouldNotDeployOperator == "" {
 			By("installing CRDs")
-			cmd := exec.Command("make", "install")
+			cmd = exec.Command("make", "install")
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
@@ -98,10 +83,7 @@ var _ = Describe("controller", Ordered, func() {
 			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage), fmt.Sprintf("FS_IMG=%s", feastLocalImage))
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
-		}
 
-		shouldNotValidateDeployment := os.Getenv("SHOULD_NOT_VALIDATE_DEPLOYMENT")
-		if shouldNotValidateDeployment == "" {
 			By("Validating that the controller-manager deployment is in available state")
 			err = checkIfDeploymentExistsAndAvailable(feastControllerNamespace, controllerDeploymentName, timeout)
 			Expect(err).ToNot(HaveOccurred(), fmt.Sprintf(
@@ -114,8 +96,8 @@ var _ = Describe("controller", Ordered, func() {
 
 	AfterAll(func() {
 		// Add any post clean up code here.
-		shouldNotUninstallCRD := os.Getenv("SHOULD_NOT_UNINSTALL_CRD")
-		if shouldNotUninstallCRD == "" {
+		isRunOnOpenShiftCI := os.Getenv("RUN_ON_OPENSHIFT_CI")
+		if isRunOnOpenShiftCI == "" {
 			By("Uninstalling the feast CRD")
 			cmd := exec.Command("kubectl", "delete", "deployment", controllerDeploymentName, "-n", feastControllerNamespace)
 			_, err := utils.Run(cmd)
