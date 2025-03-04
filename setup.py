@@ -24,6 +24,7 @@ from pathlib import Path
 from setuptools import find_packages, setup, Command
 
 NAME = "feast"
+VERSION = "0.46.0"
 DESCRIPTION = "Python SDK for Feast"
 URL = "https://github.com/feast-dev/feast"
 AUTHOR = "Feast"
