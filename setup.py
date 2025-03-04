@@ -261,6 +261,7 @@ PYTHON_CODE_PREFIX = "sdk/python"
 
 setup(
     name=NAME,
+    version=VERSION,
     author=AUTHOR,
     description=DESCRIPTION,
     long_description=LONG_DESCRIPTION,
