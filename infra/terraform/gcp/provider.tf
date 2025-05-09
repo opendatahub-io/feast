@@ -17,7 +17,7 @@ provider "kubernetes" {
 }
 
 provider "helm" {
-  version = "~> 1.3.2"
+  version = "~> 2.17.0"
   kubernetes {
     host                   = google_container_cluster.feast_gke_cluster.endpoint
     token                  = data.google_client_config.gcp_client.access_token

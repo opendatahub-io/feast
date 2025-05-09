@@ -4,7 +4,7 @@ provider "azurerm" {
 }
 
 provider "helm" {
-  version = "~> 1.3.2"
+  version = "~> 2.17.0"
   kubernetes {
     host                   = azurerm_kubernetes_cluster.main.kube_config.0.host
     username               = azurerm_kubernetes_cluster.main.kube_config.0.username
