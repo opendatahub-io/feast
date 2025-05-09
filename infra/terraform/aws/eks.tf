@@ -60,7 +60,7 @@ resource "aws_security_group" "all_worker_mgmt" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "2.47.0"
+  version = "2.78.0"
 
   name                 = "${var.name_prefix}-vpc"
   cidr                 = "10.0.0.0/16"
