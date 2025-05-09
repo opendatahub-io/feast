@@ -5,7 +5,7 @@ resource "random_password" "db_password" {
 }
 
 module "rds_cluster" {
-  source          = "git::https://github.com/cloudposse/terraform-aws-rds-cluster.git?ref=tags/0.36.0"
+  source          = "git::https://github.com/cloudposse/terraform-aws-rds-cluster.git?ref=0.50.2"
   name            = "${var.name_prefix}-db"
   engine          = "aurora-postgresql"
   engine_mode     = "serverless"
