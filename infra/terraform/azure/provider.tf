@@ -17,7 +17,7 @@ provider "helm" {
 }
 
 provider "kubernetes" {
-  version = "~> 1.13.3"
+  version = "~> 2.36.0"
   host                   = azurerm_kubernetes_cluster.main.kube_config.0.host
   username               = azurerm_kubernetes_cluster.main.kube_config.0.username
   password               = azurerm_kubernetes_cluster.main.kube_config.0.password

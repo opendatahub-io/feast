@@ -8,7 +8,7 @@ data "google_client_config" "gcp_client" {
 }
 
 provider "kubernetes" {
-  version = "~> 1.13.3"
+  version = "~> 2.36.0"
 
   host                   = google_container_cluster.feast_gke_cluster.endpoint
   token                  = data.google_client_config.gcp_client.access_token
