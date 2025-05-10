@@ -199,7 +199,7 @@ CI_REQUIRED = (
         "pytest-lazy-fixture==0.6.3",
         "pytest-timeout==1.4.2",
         "pytest-ordering~=0.6.0",
-        "pytest-mock==1.10.4",
+        "pytest-mock==3.14.0",
         "pytest-env",
         "Sphinx>4.0.0,<7",
         "testcontainers==4.9.0",
