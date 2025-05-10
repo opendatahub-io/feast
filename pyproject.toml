@@ -59,7 +59,7 @@ clickhouse = ["clickhouse-connect>=0.7.19"]
 couchbase = ["couchbase==4.3.2", "couchbase-columnar==1.0.0"]
 delta = ["deltalake"]
 docling = ["docling==2.27.0"]
-duckdb = ["ibis-framework[duckdb]>=9.0.0,<=9.5.0"]
+duckdb = ["ibis-framework[duckdb]>=10.5.0,<=10.5.0"]
 elasticsearch = ["elasticsearch>=8.13.0"]
 faiss = ["faiss-cpu>=1.7.0,<2"]
 gcp = [
@@ -82,7 +82,7 @@ grpcio = [
 hazelcast = ["hazelcast-python-client>=5.1"]
 hbase = ["happybase>=1.2.0,<3"]
 ibis = [
-    "ibis-framework>=9.0.0,<=9.5.0",
+    "ibis-framework>=10.5.0,<=10.5.0",
     "ibis-substrait>=4.0.0",
     "poetry-core<2",
     "poetry-dynamic-versioning",
@@ -96,7 +96,7 @@ milvus = [
     "milvus-lite==2.4.12",
     "feast[setuptools]"
 ]
-mssql = ["ibis-framework[mssql]>=9.0.0,<=9.5.0"]
+mssql = ["ibis-framework[mssql]>=10.5.0,<=10.5.0"]
 mysql = ["pymysql", "types-PyMySQL"]
 opentelemetry = ["prometheus_client", "psutil"]
 spark = ["pyspark>=3.0.0,<4"]

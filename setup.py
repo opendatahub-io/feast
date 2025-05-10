@@ -132,7 +132,7 @@ HAZELCAST_REQUIRED = [
 ]
 
 IBIS_REQUIRED = [
-    "ibis-framework>=9.0.0,<10",
+    "ibis-framework>=10.5,<11",
     "ibis-substrait>=4.0.0",
 ]
 
@@ -142,7 +142,7 @@ GRPCIO_REQUIRED = [
     "grpcio-health-checking>=1.56.2,<2",
 ]
 
-DUCKDB_REQUIRED = ["ibis-framework[duckdb]>=9.0.0,<10"]
+DUCKDB_REQUIRED = ["ibis-framework[duckdb]>=10.5,<11"]
 
 DELTA_REQUIRED = ["deltalake"]
 
@@ -157,7 +157,7 @@ COUCHBASE_REQUIRED = [
     "couchbase-columnar==1.0.0"
 ]
 
-MSSQL_REQUIRED = ["ibis-framework[mssql]>=9.0.0,<10"]
+MSSQL_REQUIRED = ["ibis-framework[mssql]>=10.5,<11"]
 
 FAISS_REQUIRED = ["faiss-cpu>=1.7.0,<2"]
 QDRANT_REQUIRED = ["qdrant-client>=1.12.0"]
