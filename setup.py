@@ -201,7 +201,7 @@ CI_REQUIRED = (
         "pytest-ordering~=0.6.0",
         "pytest-mock==1.10.4",
         "pytest-env",
-        "Sphinx>4.0.0,<7",
+        "Sphinx>8.2,<9",
         "testcontainers==4.9.0",
         "python-keycloak==4.2.2",
         "pre-commit<3.3.2",
