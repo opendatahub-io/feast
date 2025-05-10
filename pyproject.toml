@@ -148,7 +148,7 @@ ci = [
     "sqlglot[rs]>=23.4",
     "testcontainers==4.9.0",
     "python-keycloak==4.2.2",
-    "pre-commit<3.3.2",
+    "pre-commit<3.8.1",
     "assertpy==1.1",
     "pip-tools",
     "pybindgen==0.22.0",
