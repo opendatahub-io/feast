@@ -360,7 +360,7 @@ setup(
     entry_points={"console_scripts": ["feast=feast.cli.cli:cli"]},
     use_scm_version=use_scm_version,
     setup_requires=[
-        "pybindgen==0.22.0",  # TODO do we need this?
+        "pybindgen==0.22.1",  # TODO do we need this?
         "setuptools_scm>=6.2",  # TODO do we need this?
     ],
 )
