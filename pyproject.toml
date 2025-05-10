@@ -30,7 +30,7 @@ dependencies = [
     "requests",
     "SQLAlchemy[mypy]>1",
     "tabulate>=0.8.0,<1",
-    "tenacity>=7,<9",
+    "tenacity>=9,<10",
     "toml>=0.10.0,<1",
     "tqdm>=4,<5",
     "typeguard>=4.0.0",
