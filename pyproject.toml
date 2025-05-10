@@ -138,7 +138,7 @@ ci = [
     "pytest-asyncio<=0.24.0",
     "pytest-cov",
     "pytest-xdist",
-    "pytest-benchmark>=3.4.1,<4",
+    "pytest-benchmark>=5.1,<6",
     "pytest-lazy-fixture==0.6.3",
     "pytest-timeout==1.4.2",
     "pytest-ordering~=0.6.0",
