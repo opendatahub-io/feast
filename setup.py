@@ -113,7 +113,7 @@ CASSANDRA_REQUIRED = [
     "cassandra-driver>=3.24.0,<4",
 ]
 
-GE_REQUIRED = ["great_expectations>=0.15.41,<1"]
+GE_REQUIRED = ["great_expectations>=1.4.3,<2"]
 
 AZURE_REQUIRED = [
     "azure-storage-blob>=0.37.0",
