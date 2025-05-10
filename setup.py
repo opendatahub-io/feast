@@ -204,7 +204,7 @@ CI_REQUIRED = (
         "Sphinx>4.0.0,<7",
         "testcontainers==4.9.0",
         "python-keycloak==4.2.2",
-        "pre-commit<3.3.2",
+        "pre-commit<4.2.1",
         "assertpy==1.1",
         "pip-tools",
         "pybindgen",
