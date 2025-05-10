@@ -84,7 +84,7 @@ hbase = ["happybase>=1.2.0,<3"]
 ibis = [
     "ibis-framework>=9.0.0,<=9.5.0",
     "ibis-substrait>=4.0.0",
-    "poetry-core<2",
+    "poetry-core<3",
     "poetry-dynamic-versioning",
 ]
 ikv = [
