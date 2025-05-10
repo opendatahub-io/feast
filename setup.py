@@ -213,7 +213,7 @@ CI_REQUIRED = (
         "types-pytz",
         "types-PyYAML",
         "types-redis",
-        "types-requests<2.31.0",
+        "types-requests<2.32.1",
         "types-setuptools",
         "types-tabulate",
         "virtualenv<20.24.2",
