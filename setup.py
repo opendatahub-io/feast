@@ -203,7 +203,7 @@ CI_REQUIRED = (
         "pytest-env",
         "Sphinx>4.0.0,<7",
         "testcontainers==4.9.0",
-        "python-keycloak==4.2.2",
+        "python-keycloak==4.7.3",
         "pre-commit<3.3.2",
         "assertpy==1.1",
         "pip-tools",
