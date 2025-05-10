@@ -111,7 +111,7 @@ redis = [
     "redis>=4.2.2,<5",
     "hiredis>=2.0.0,<3",
 ]
-singlestore = ["singlestoredb<1.8.0"]
+singlestore = ["singlestoredb<1.13.1"]
 snowflake = [
     "snowflake-connector-python[pandas]>=3.7,<4",
 ]
