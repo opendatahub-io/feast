@@ -140,7 +140,7 @@ ci = [
     "pytest-xdist",
     "pytest-benchmark>=3.4.1,<4",
     "pytest-lazy-fixture==0.6.3",
-    "pytest-timeout==1.4.2",
+    "pytest-timeout==2.4.0",
     "pytest-ordering~=0.6.0",
     "pytest-mock==1.10.4",
     "pytest-env",
