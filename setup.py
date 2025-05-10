@@ -153,7 +153,7 @@ ELASTICSEARCH_REQUIRED = ["elasticsearch>=8.13.0"]
 SINGLESTORE_REQUIRED = ["singlestoredb<1.8.0"]
 
 COUCHBASE_REQUIRED = [
-    "couchbase==4.3.2",
+    "couchbase==4.3.5",
     "couchbase-columnar==1.0.0"
 ]
 
