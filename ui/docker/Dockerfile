@@ -1,4 +1,4 @@
-FROM node:17.9.0-slim
+FROM node:22.15.0-slim
 
 WORKDIR /app
 # add `/app/node_modules/.bin` to $PATH
