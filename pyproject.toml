@@ -181,7 +181,7 @@ minimal-sdist-build = [
     "greenlet!=0.4.17",
 
     # numpy deps
-    "meson-python<0.16.0,>=0.15.0",
+    "meson-python<0.18.1,>=0.18.0",
     "Cython<3.1,>=0.29.34",
     "flit_core<4,>=3.8",
     "patchelf>=0.11.0",
