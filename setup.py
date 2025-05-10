@@ -185,7 +185,7 @@ CI_REQUIRED = (
         # FastAPI does not correctly pull starlette dependency on httpx see thread(https://github.com/tiangolo/fastapi/issues/5656).
         "httpx==0.27.2",
         "minio==7.2.11",
-        "mock==2.0.0",
+        "mock==5.2.0",
         "moto<5",
         "mypy>=1.4.1,<1.11.3",
         "urllib3>=1.25.4,<3",
