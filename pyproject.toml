@@ -52,7 +52,7 @@ azure = [
     "azure-identity>=1.6.1",
     "SQLAlchemy>=1.4.19",
     "pyodbc>=4.0.30",
-    "pymssql<2.3.3"
+    "pymssql<2.3.5"
 ]
 cassandra = ["cassandra-driver>=3.24.0,<4"]
 clickhouse = ["clickhouse-connect>=0.7.19"]
