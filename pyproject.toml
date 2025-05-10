@@ -152,7 +152,7 @@ ci = [
     "assertpy==1.1",
     "pip-tools",
     "pybindgen==0.22.0",
-    "types-protobuf~=3.19.22",
+    "types-protobuf~=6.30.2",
     "python-dateutil==2.9.0",
     "types-python-dateutil",
     "types-pytz",
