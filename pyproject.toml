@@ -182,7 +182,7 @@ minimal-sdist-build = [
 
     # numpy deps
     "meson-python<0.16.0,>=0.15.0",
-    "Cython<3.1,>=0.29.34",
+    "Cython<3.2,>=3.1",
     "flit_core<4,>=3.8",
     "patchelf>=0.11.0",
     "scikit-build-core>=0.10",
