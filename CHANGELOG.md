@@ -1,6 +1,6 @@
 # Changelog
 
-# [0.50.0](https://github.com/feast-dev/feast/compare/v0.49.0...v0.50.0) (2025-06-30)
+# [0.50.0](https://github.com/feast-dev/feast/compare/v0.49.0...v0.50.0) (2025-07-01)
 
 
 ### Bug Fixes
@@ -72,6 +72,7 @@
 
 ### Reverts
 
+* Chore Release "chore(release): release 0.50.0" ([#5483](https://github.com/feast-dev/feast/issues/5483)) ([0eef391](https://github.com/feast-dev/feast/commit/0eef391e3a10108c7bc62fbae10f861d7d6ad3f7))
 * Feat: Add CLI, SDK, and API documentation page to Feast UI" ([#5341](https://github.com/feast-dev/feast/issues/5341)) ([b492f14](https://github.com/feast-dev/feast/commit/b492f14c3fec7313807f426c3c070ea62e7c9dcb)), closes [#5337](https://github.com/feast-dev/feast/issues/5337)
 * Revert "feat: Add s3 storage-based registry store in Go feature server" ([#5351](https://github.com/feast-dev/feast/issues/5351)) ([d5d6766](https://github.com/feast-dev/feast/commit/d5d6766c5cb02a2292ea42e3ee648a005af8a61a)), closes [#5336](https://github.com/feast-dev/feast/issues/5336)
 * Revert "fix: Update milvus connect function to work with remote instance" ([#5398](https://github.com/feast-dev/feast/issues/5398)) ([434dd92](https://github.com/feast-dev/feast/commit/434dd92fa72660ff59fd20219970f4ef6de63d67)), closes [#5382](https://github.com/feast-dev/feast/issues/5382)
