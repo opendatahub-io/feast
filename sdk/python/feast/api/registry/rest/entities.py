@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 
+from feast.api.registry.rest.codegen_utils import render_entity_code
 from feast.api.registry.rest.rest_utils import (
     aggregate_across_projects,
     create_grpc_pagination_params,
@@ -95,12 +96,44 @@ def get_entity_router(grpc_handler) -> APIRouter:
 
         result = entity
 
+        relationships = get_object_relationships(
+            grpc_handler, "entity", name, project, allow_cache
+        )
+        ds_list_req = RegistryServer_pb2.ListDataSourcesRequest(
+            project=project,
+            allow_cache=allow_cache,
+        )
+        ds_list_resp = grpc_call(grpc_handler.ListDataSources, ds_list_req)
+        ds_map = {ds["name"]: ds for ds in ds_list_resp.get("dataSources", [])}
+        data_source_objs = []
+        seen_ds_names = set()
+        for rel in relationships:
+            if rel.get("target", {}).get("type") == "dataSource":
+                ds_name = rel["target"]["name"]
+                if ds_name not in seen_ds_names:
+                    ds_obj = ds_map.get(ds_name)
+                    if ds_obj:
+                        data_source_objs.append(ds_obj)
+                        seen_ds_names.add(ds_name)
+        result["dataSources"] = data_source_objs
+
         if include_relationships:
-            relationships = get_object_relationships(
-                grpc_handler, "entity", name, project, allow_cache
-            )
             result["relationships"] = relationships
 
+        if result:
+            spec = result.get("spec", result)
+            name = spec.get("name") or result.get("name") or "default_entity"
+            join_keys = spec.get("joinKeys") or (
+                [spec["joinKey"]] if "joinKey" in spec else []
+            )
+
+            context = {
+                "name": name,
+                "join_keys": join_keys,
+                "description": spec.get("description", ""),
+                "tags": spec.get("tags", {}),
+            }
+            result["featureDefinition"] = render_entity_code(context)
         return result
 
     return router

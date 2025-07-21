@@ -1,3 +1,4 @@
+import ast
 import os
 import tempfile
 
@@ -97,7 +98,18 @@ def test_entities_via_rest(fastapi_test_app):
     assert "entities" in response.json()
     response = fastapi_test_app.get("/entities/user_id?project=demo_project")
     assert response.status_code == 200
-    assert response.json()["spec"]["name"] == "user_id"
+    data = response.json()
+    assert data["spec"]["name"] == "user_id"
+    # Check featureDefinition
+    assert "featureDefinition" in data
+    code = data["featureDefinition"]
+    assert code
+    assert "Entity" in code
+    assert "user_id" in code
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        pytest.fail(f"featureDefinition is not valid Python: {e}")
 
 
 def test_feature_views_via_rest(fastapi_test_app):
@@ -106,7 +118,18 @@ def test_feature_views_via_rest(fastapi_test_app):
     assert "featureViews" in response.json()
     response = fastapi_test_app.get("/feature_views/user_profile?project=demo_project")
     assert response.status_code == 200
-    assert response.json()["spec"]["name"] == "user_profile"
+    data = response.json()
+    assert data["spec"]["name"] == "user_profile"
+    # Check featureDefinition
+    assert "featureDefinition" in data
+    code = data["featureDefinition"]
+    assert code
+    assert "FeatureView" in code
+    assert "user_profile" in code
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        pytest.fail(f"featureDefinition is not valid Python: {e}")
 
 
 def test_feature_views_type_field_via_rest(fastapi_test_app):
@@ -140,18 +163,39 @@ def test_feature_services_via_rest(fastapi_test_app):
         "/feature_services/user_service?project=demo_project"
     )
     assert response.status_code == 200
-    assert response.json()["spec"]["name"] == "user_service"
+    data = response.json()
+    assert data["spec"]["name"] == "user_service"
+    # Check featureDefinition
+    assert "featureDefinition" in data
+    code = data["featureDefinition"]
+    assert code
+    assert "FeatureService" in code
+    assert "user_service" in code
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        pytest.fail(f"featureDefinition is not valid Python: {e}")
 
 
 def test_data_sources_via_rest(fastapi_test_app):
     response = fastapi_test_app.get("/data_sources?project=demo_project")
-    assert response.status_code == 200
-    assert "data_sources" in response.json()
+    assert "dataSources" in response.json()
     response = fastapi_test_app.get(
         "/data_sources/user_profile_source?project=demo_project"
     )
     assert response.status_code == 200
-    assert response.json()["name"] == "user_profile_source"
+    data = response.json()
+    assert data["name"] == "user_profile_source"
+    # Check featureDefinition
+    assert "featureDefinition" in data
+    code = data["featureDefinition"]
+    assert code
+    assert "FileSource" in code
+    assert "user_profile_source" in code
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        pytest.fail(f"featureDefinition is not valid Python: {e}")
 
 
 def test_projects_via_rest(fastapi_test_app):
@@ -650,9 +694,9 @@ def test_data_sources_pagination_via_rest(fastapi_test_app_with_multiple_objects
     response = client.get("/data_sources?project=demo_project&page=1&limit=2")
     assert response.status_code == 200
     data = response.json()
-    assert "data_sources" in data
+    assert "dataSources" in data
     assert "pagination" in data
-    assert len(data["data_sources"]) == 2
+    assert len(data["dataSources"]) == 2
     assert data["pagination"]["page"] == 1
     assert data["pagination"]["limit"] == 2
     assert data["pagination"]["totalCount"] == 3
@@ -669,7 +713,7 @@ def test_data_sources_sorting_via_rest(fastapi_test_app_with_multiple_objects):
     )
     assert response.status_code == 200
     data = response.json()
-    ds_names = [ds["name"] for ds in data["data_sources"]]
+    ds_names = [ds["name"] for ds in data["dataSources"]]
     assert ds_names == sorted(ds_names)
 
 
@@ -882,6 +926,16 @@ def test_features_get_via_rest(fastapi_test_app):
     assert data["name"] == "age"
     assert data["featureView"] == "user_profile"
     assert data["type"] == "Int64"
+    # Check featureDefinition
+    assert "featureDefinition" in data
+    code = data["featureDefinition"]
+    assert code
+    assert "Feature" in code
+    assert "age" in code
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        pytest.fail(f"featureDefinition is not valid Python: {e}")
 
     response = fastapi_test_app.get(
         "/features/user_profile/age?project=demo_project&include_relationships=true"
@@ -1064,3 +1118,70 @@ def test_lineage_complete_all_via_rest(fastapi_test_app):
         assert "dataSources" in project_data["objects"]
         assert "featureViews" in project_data["objects"]
         assert "featureServices" in project_data["objects"]
+
+
+def test_invalid_project_name_with_relationships_via_rest(fastapi_test_app):
+    """Test REST API response with invalid project name using include_relationships=true.
+    The API should not throw 500 or any other error when an invalid project name is provided
+    with include_relationships=true parameter.
+    """
+    response = fastapi_test_app.get(
+        "/entities?project=invalid_project_name&include_relationships=true"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "entities" in data
+    assert isinstance(data["entities"], list)
+    assert len(data["entities"]) == 0
+    assert "relationships" in data
+    assert isinstance(data["relationships"], dict)
+    assert len(data["relationships"]) == 0
+
+    response = fastapi_test_app.get(
+        "/feature_views?project=invalid_project_name&include_relationships=true"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "featureViews" in data
+    assert isinstance(data["featureViews"], list)
+    assert len(data["featureViews"]) == 0
+    assert "relationships" in data
+    assert isinstance(data["relationships"], dict)
+    assert len(data["relationships"]) == 0
+
+    response = fastapi_test_app.get(
+        "/data_sources?project=invalid_project_name&include_relationships=true"
+    )
+    # Should return 200 with empty results, not 500 or other errors
+    assert response.status_code == 200
+    data = response.json()
+    assert "dataSources" in data
+    assert isinstance(data["dataSources"], list)
+    assert len(data["dataSources"]) == 0
+    assert "relationships" in data
+    assert isinstance(data["relationships"], dict)
+    assert len(data["relationships"]) == 0
+
+    response = fastapi_test_app.get(
+        "/feature_services?project=invalid_project_name&include_relationships=true"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "featureServices" in data
+    assert isinstance(data["featureServices"], list)
+    assert len(data["featureServices"]) == 0
+    assert "relationships" in data
+    assert isinstance(data["relationships"], dict)
+    assert len(data["relationships"]) == 0
+
+    response = fastapi_test_app.get(
+        "/features?project=invalid_project_name&include_relationships=true"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "features" in data
+    assert isinstance(data["features"], list)
+    assert len(data["features"]) == 0
+    assert "relationships" in data
+    assert isinstance(data["relationships"], dict)
+    assert len(data["relationships"]) == 0
