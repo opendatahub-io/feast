@@ -31,6 +31,7 @@ from feast.on_demand_feature_view import OnDemandFeatureView
 from feast.permissions.permission import Permission
 from feast.project import Project
 from feast.project_metadata import ProjectMetadata
+from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast.protos.feast.core.Entity_pb2 import Entity as EntityProto
 from feast.protos.feast.core.FeatureService_pb2 import (
     FeatureService as FeatureServiceProto,
@@ -862,7 +863,7 @@ class BaseRegistry(ABC):
         Get relationships for a specific object.
         Args:
             project: Feast project name
-            object_type: Type of object (dataSource, entity, featureView, featureService)
+            object_type: Type of object (dataSource, entity, featureView, featureService, feature)
             object_name: Name of the object
             include_indirect: Whether to include indirect relationships
             allow_cache: Whether to allow returning data from a cached registry
@@ -875,10 +876,10 @@ class BaseRegistry(ABC):
 
         registry_proto = self._build_registry_proto(project, allow_cache)
         lineage_generator = RegistryLineageGenerator()
-
-        return lineage_generator.get_object_relationships(
+        relationships = lineage_generator.get_object_relationships(
             registry_proto, object_type, object_name, include_indirect=include_indirect
         )
+        return relationships
 
     def _build_registry_proto(
         self, project: str, allow_cache: bool = False
@@ -1057,4 +1058,6 @@ class BaseRegistry(ABC):
             return PermissionProto.FromString(serialized_proto)
         if feast_obj_type == Project:
             return ProjectProto.FromString(serialized_proto)
+        if issubclass(feast_obj_type, DataSource):
+            return DataSourceProto.FromString(serialized_proto)
         return None
