@@ -801,6 +801,36 @@ All endpoints return JSON responses with the following general structure:
 - **Not Found (404)**: Requested resource does not exist
 - **Internal Server Error (500)**: Server-side error
 
+### Error Handling
+
+The REST API provides consistent error responses with HTTP status codes included in the JSON response body. All error responses follow this format:
+
+```json
+{
+  "status_code": 404,
+  "detail": "Entity 'user_id' does not exist in project 'demo_project'",
+  "error_type": "FeastObjectNotFoundException"
+}
+```
+
+#### Error Response Fields
+
+- **`status_code`**: The HTTP status code (e.g., 404, 422, 500)
+- **`detail`**: Human-readable error message describing the issue
+- **`error_type`**: The specific type of error that occurred
+
+#### HTTP Status Code Mapping
+
+| HTTP Status | Error Type | Description | Common Causes |
+|-------------|------------|-------------|---------------|
+| **400** | `HTTPException` | Bad Request | Invalid request format or parameters |
+| **401** | `HTTPException` | Unauthorized | Missing or invalid authentication token |
+| **403** | `FeastPermissionError` | Forbidden | Insufficient permissions to access the resource |
+| **404** | `FeastObjectNotFoundException` | Not Found | Requested entity, feature view, data source, etc. does not exist |
+| **422** | `ValidationError` / `RequestValidationError` / `ValueError` / `PushSourceNotFoundException` | Unprocessable Entity | Validation errors, missing required parameters, or invalid input |
+| **500** | `InternalServerError` | Internal Server Error | Unexpected server-side errors |
+
+
 #### Enhanced Response Formats
 
 The REST API now supports enhanced response formats for relationships and pagination:
@@ -1123,7 +1153,72 @@ Please refer the [page](./../../../docs/getting-started/concepts/permission.md) 
 
 **Note**: Recent visits are automatically logged when users access registry objects via the REST API. The logging behavior can be configured through the `feature_server.recent_visit_logging` section in `feature_store.yaml` (see configuration section below).
 
----
+#### Get Popular Tags
+- **Endpoint**: `GET /api/v1/metrics/popular_tags`
+- **Description**: Discover Feature Views by popular tags. Returns the most popular tags (tags assigned to maximum number of feature views) with their associated feature views. If no project is specified, returns popular tags across all projects.
+- **Parameters**:
+  - `project` (optional): Project name for popular tags (returns all projects if not specified)
+  - `limit` (optional, default: 4): Number of popular tags to return
+  - `allow_cache` (optional, default: true): Whether to allow cached responses
+- **Examples**:
+  ```bash
+  # Basic usage (all projects)
+  curl -H "Authorization: Bearer <token>" \
+    "http://localhost:6572/api/v1/metrics/popular_tags"
+  
+  # Specific project
+  curl -H "Authorization: Bearer <token>" \
+    "http://localhost:6572/api/v1/metrics/popular_tags?project=my_project"
+  
+  # Custom limit
+  curl -H "Authorization: Bearer <token>" \
+    "http://localhost:6572/api/v1/metrics/popular_tags?project=my_project&limit=3"
+  ```
+- **Response Model**: `PopularTagsResponse`
+- **Response Example**:
+  ```json
+  {
+    "popular_tags": [
+      {
+        "tag_key": "environment",
+        "tag_value": "production",
+        "feature_views": [
+          {
+            "name": "user_features",
+            "project": "my_project"
+          },
+          {
+            "name": "order_features",
+            "project": "my_project"
+          }
+        ],
+        "total_feature_views": 2
+      },
+      {
+        "tag_key": "team",
+        "tag_value": "ml_team",
+        "feature_views": [
+          {
+            "name": "user_features",
+            "project": "my_project"
+          }
+        ],
+        "total_feature_views": 1
+      }
+    ],
+    "metadata": {
+      "totalFeatureViews": 3,
+      "totalTags": 2,
+      "limit": 4
+    }
+  }
+  ```
+
+**Response Models:**
+- `FeatureViewInfo`: Contains feature view name and project
+- `PopularTagInfo`: Contains tag information and associated feature views
+- `PopularTagsMetadata`: Contains metadata about the response
+- `PopularTagsResponse`: Main response model containing popular tags and metadata
 
 ## Registry Server Configuration: Recent Visit Logging
 
@@ -1162,3 +1257,4 @@ feature_server:
 - Only the most recent `limit` visits per user are stored
 - Metrics endpoints (`/metrics/*`) are automatically excluded from logging to prevent circular references
 - Visit data is stored per user and per project in the registry metadata
+
