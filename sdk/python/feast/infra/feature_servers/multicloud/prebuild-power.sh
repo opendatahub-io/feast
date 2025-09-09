@@ -31,7 +31,8 @@ git checkout v1.1.3
 
 cd tools/pythonpkg
 python${PYTHON_VERSION} -m build --wheel --no-isolation
-cp dist/*.whl /wheelhouse/
+ls dist/*.whl >/dev/null
+cp -v dist/*.whl /wheelhouse/
 cd ../../..
 
 #######################################################
@@ -45,21 +46,60 @@ git submodule update --init --recursive
 python${PYTHON_VERSION} -m pip install -r requirements.txt
 export GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1
 python${PYTHON_VERSION} -m build --wheel --no-isolation
-cp dist/*.whl /wheelhouse/
+ls dist/*.whl >/dev/null
+cp -v dist/*.whl /wheelhouse/
 cd ..
 
 #######################################################
 # Build Pyarrow  (Python package)
 #######################################################
 echo "Building pyarrow..."
-dnf install -y https://mirror.stream.centos.org/9-stream/BaseOS/ppc64le/os/Packages/centos-gpg-keys-9.0-24.el9.noarch.rpm \
-https://mirror.stream.centos.org/9-stream/BaseOS/`arch`/os/Packages/centos-stream-repos-9.0-24.el9.noarch.rpm \
-https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-dnf config-manager --add-repo https://mirror.stream.centos.org/9-stream/BaseOS/ppc64le/os
-dnf config-manager --add-repo https://mirror.stream.centos.org/9-stream/AppStream/ppc64le/os
-dnf config-manager --set-enabled crb
 dnf install -y boost1.78-devel.ppc64le gflags-devel rapidjson-devel.ppc64le re2-devel.ppc64le \
-               utf8proc-devel.ppc64le gtest-devel gmock-devel snappy snappy-devel
+               gtest-devel gmock-devel
+
+
+# utf8proc installing
+git clone https://github.com/JuliaStrings/utf8proc.git
+cd utf8proc
+git submodule update --init
+git checkout v2.6.1
+
+mkdir utf8proc_prefix
+export UTF8PROC_PREFIX=$(pwd)/utf8proc_prefix
+
+# Create build directory
+mkdir build
+cd build
+# Run cmake to configure the build
+cmake -G "Unix Makefiles" \
+  -DCMAKE_BUILD_TYPE="Release" \
+  -DCMAKE_INSTALL_PREFIX="${UTF8PROC_PREFIX}" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=1 \
+  -DBUILD_SHARED_LIBS=1 \
+  ..
+
+cmake --build .
+cmake --build . --target install
+cd $WORKDIR
+
+# snappy installing
+git clone https://github.com/google/snappy.git
+cd snappy
+git submodule update --init --recursive
+
+mkdir -p local/snappy
+export SNAPPY_PREFIX=$(pwd)/local/snappy
+mkdir build
+cd build
+echo "Running cmake to configure the build for snappy..."
+cmake -DCMAKE_INSTALL_PREFIX=$SNAPPY_PREFIX \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_INSTALL_LIBDIR=lib \
+      ..
+make -j$(nproc)
+make install
+cd ..
+cd $WORKDIR
 
 git clone https://github.com/apache/arrow.git
 cd arrow
@@ -90,7 +130,8 @@ make install
 cd ../../python
 export BUILD_TYPE=release
 python${PYTHON_VERSION} setup.py build_ext --build-type=$BUILD_TYPE --bundle-arrow-cpp bdist_wheel
-cp dist/*.whl /wheelhouse/
+ls dist/*.whl >/dev/null
+cp -v dist/*.whl /wheelhouse/
 cd ../../..
 
 #######################################################
@@ -173,6 +214,7 @@ mkdir -p $HOME/.cargo/bin/
 
 python${PYTHON_VERSION} -m build --wheel --no-isolation
 
-cp dist/*.whl /wheelhouse/
+ls dist/*.whl >/dev/null
+cp -v dist/*.whl /wheelhouse/
 
 

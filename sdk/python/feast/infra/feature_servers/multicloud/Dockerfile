@@ -13,7 +13,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
         /prebuild-power.sh && pip install /wheelhouse/*.whl; \
         echo "Listing built wheels:" && ls -lh /wheelhouse; \
     else \
-        echo "x86 detected, skipping Power prebuild"; \
+        echo "Non-Power architecture detected; skipping Power prebuild"; \
     fi
 
 COPY requirements.txt requirements.txt
@@ -21,3 +21,6 @@ RUN pip install -r requirements.txt
 
 # modify permissions to support running with a random uid
 RUN chmod g+w $(python -c "import feast.ui as ui; print(ui.__path__)" | tr -d "[']")/build/projects-list.json
+
+# Switch back to the default non-root user
+USER 1001
