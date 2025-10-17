@@ -31,15 +31,15 @@ mkdir -p /wheelhouse
 #######################################################
 # Build DuckDB (Python package)
 #######################################################
-# echo "Building duckdb..."
-# git clone https://github.com/duckdb/duckdb.git
-# cd duckdb
-# git checkout v1.1.3
-# cd tools/pythonpkg
-# python${PYTHON_VERSION} -m build --wheel --no-isolation
-# ls dist/*.whl >/dev/null
-# cp -v dist/*.whl /wheelhouse/
-# cd $WORKDIR
+echo "Building duckdb..."
+git clone https://github.com/duckdb/duckdb.git
+cd duckdb
+git checkout v1.1.3
+cd tools/pythonpkg
+python${PYTHON_VERSION} -m build --wheel --no-isolation
+ls dist/*.whl >/dev/null
+cp -v dist/*.whl /wheelhouse/
+cd $WORKDIR
 
 #######################################################
 # Build gRPC  (Python package)
