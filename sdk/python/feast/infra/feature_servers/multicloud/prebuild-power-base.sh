@@ -85,6 +85,7 @@ cd $WORKDIR
 # Build Milvus-Lite  (Python package)
 #######################################################
 echo "Building milvus-lite..."
+# Remove gcc-toolset-13; Milvus-Lite build (via Conan) requires standard gcc
 dnf remove -y gcc-toolset-13
 
 dnf install -y perl ncurses-devel wget openblas-devel cargo gcc gcc-c++ libstdc++-static which libaio \
@@ -101,3 +102,4 @@ cd milvus-lite/python
 git checkout v2.4.12
 git submodule update --init --recursive
 python${PYTHON_VERSION} -m pip install -v -e .
+cd $WORKDIR
