@@ -5,8 +5,6 @@ shopt -s dotglob nullglob
 
 PYTHON_VERSION=3.11
 WORKDIR=$(pwd)
-CMAKE_VERSION=3.30.5
-CMAKE_REQUIRED_VERSION=3.30.5
 
 dnf install -y gcc-toolset-13 make cmake ninja-build libomp-devel \
                git python${PYTHON_VERSION} python${PYTHON_VERSION}-devel python${PYTHON_VERSION}-pip \
@@ -44,9 +42,8 @@ cd $WORKDIR
 #######################################################
 # Build gRPC  (Python package)
 #######################################################
-echo "Building grpcio..."
-export GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1
-pip install grpcio==1.62.3
+echo "Building grpcio from source..."
+GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 pip install --no-binary=:all: grpcio==1.62.3
 
 #######################################################
 # Build Pyarrow  (Python package)
@@ -75,7 +72,7 @@ cmake -DCMAKE_BUILD_TYPE=Release \
       -DProtobuf_SOURCE=BUNDLED \
       -DARROW_DEPENDENCY_SOURCE=BUNDLED \
     ..
-make -j$(nproc)
+make -j"$(nproc)"
 make install
 cd ../../python
 export BUILD_TYPE=release
