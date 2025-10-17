@@ -4,7 +4,7 @@ FROM registry.access.redhat.com/ubi9/python-311:1
 USER 0
 
 # Copy Power prebuild script
-COPY prebuild-power.sh /prebuild-power.sh
+COPY prebuild-power-base.sh /prebuild-power.sh
 RUN chmod +x /prebuild-power.sh
 
 # Run prebuild script conditionally (Power only)
