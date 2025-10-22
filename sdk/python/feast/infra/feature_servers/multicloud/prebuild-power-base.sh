@@ -95,7 +95,7 @@ export CC=gcc
 export CXX=g++
 export CXXFLAGS="-std=c++17"
 
-python${PYTHON_VERSION} -m pip install conan==1.64.1 setuptools==70.0.0
+python${PYTHON_VERSION} -m pip install conan==1.64.1 setuptools
 
 git clone https://github.com/milvus-io/milvus-lite
 cd milvus-lite/python
