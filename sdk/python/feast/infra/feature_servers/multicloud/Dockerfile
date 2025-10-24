@@ -7,6 +7,8 @@ USER 0
 COPY prebuild-power-base.sh /prebuild-power.sh
 RUN chmod +x /prebuild-power.sh
 
+COPY requirements.txt requirements.txt
+
 # Run prebuild script conditionally (Power only)
 RUN if [ "$(uname -m)" = "ppc64le" ]; then \
         echo "Power architecture detected. Running prebuild script..."; \
@@ -16,7 +18,6 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
         echo "Non-Power architecture detected; skipping Power prebuild"; \
     fi
 
-COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 
 # modify permissions to support running with a random uid
