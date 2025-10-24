@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 trap 'echo "[prebuild-power] failed at line $LINENO"; exit 1' ERR
 shopt -s dotglob nullglob
+PYTHON_VERSION=3.11
+WORKDIR=$(pwd)
 
 echo "[prebuild-power] Starting prebuild script..."
 
@@ -12,13 +14,13 @@ if [[ -z "${RELEASE_VERSION:-}" && -f "requirements.txt" ]]; then
 fi
 
 # URL to requirements file (using the release version)
-REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/${RELEASE_VERSION}/sdk/python/requirements/py3.11-ci-requirements.txt"
+REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/${RELEASE_VERSION}/sdk/python/requirements/py${PYTHON_VERSION}-ci-requirements.txt"
 
 # Fetch the file
 echo "[prebuild-power] Fetching package versions from $REQ_FILE_URL ..."
 if ! REQ_CONTENT=$(curl -fsSL "$REQ_FILE_URL"); then
     echo "[prebuild-power] Failed to fetch from '$RELEASE_VERSION'. Falling back to master..."
-    REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/master/sdk/python/requirements/py3.11-ci-requirements.txt"
+    REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/master/sdk/python/requirements/py${PYTHON_VERSION}-ci-requirements.txt"
     REQ_CONTENT=$(curl -fsSL "$REQ_FILE_URL")
 fi
 
@@ -39,10 +41,6 @@ if [[ -z "$DUCKDB_VER" || -z "$GRPCIO_VER" || -z "$PYARROW_VER" || -z "$MILVUS_V
     echo "[prebuild-power] Error: One or more package versions could not be detected."
     exit 1
 fi
-
-
-PYTHON_VERSION=3.11
-WORKDIR=$(pwd)
 
 dnf install -y gcc-toolset-13 make cmake ninja-build libomp-devel \
                git python${PYTHON_VERSION} python${PYTHON_VERSION}-devel python${PYTHON_VERSION}-pip \
