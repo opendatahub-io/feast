@@ -17,7 +17,7 @@ REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/${RELEASE_V
 # Fetch the file
 echo "[prebuild-power] Fetching package versions from $REQ_FILE_URL ..."
 if ! REQ_CONTENT=$(curl -fsSL "$REQ_FILE_URL"); then
-    echo "[prebuild-power] Failed to fetch from branch '$BRANCH'. Falling back to master..."
+    echo "[prebuild-power] Failed to fetch from branch '$RELEASE_VERSION'. Falling back to master..."
     REQ_FILE_URL="https://raw.githubusercontent.com/opendatahub-io/feast/master/sdk/python/requirements/py3.11-ci-requirements.txt"
     REQ_CONTENT=$(curl -fsSL "$REQ_FILE_URL")
 fi
