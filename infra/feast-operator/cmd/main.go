@@ -27,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -164,6 +165,22 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "FeatureStore")
+		os.Exit(1)
+	}
+
+	// Setup Notebook ConfigMap controller for OpenDataHub integration
+	// Default to kubeflow.org/v1 Notebook CRD (used by OpenDataHub)
+	notebookGVK := schema.GroupVersionKind{
+		Group:   "kubeflow.org",
+		Version: "v1",
+		Kind:    "Notebook",
+	}
+	if err = (&controller.NotebookConfigMapReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		NotebookGVK: notebookGVK,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NotebookConfigMap")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
