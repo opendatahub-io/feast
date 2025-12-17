@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	feastdevv1alpha1 "github.com/feast-dev/feast/infra/feast-operator/api/v1alpha1"
+	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
 )
 
@@ -244,14 +244,14 @@ func (r *NotebookConfigMapReconciler) getClientConfigYAMLForProject(ctx context.
 	logger := log.FromContext(ctx)
 
 	// List all FeatureStores to find one with matching feastProject
-	var featureStoreList feastdevv1alpha1.FeatureStoreList
+	var featureStoreList feastdevv1.FeatureStoreList
 	if err := r.List(ctx, &featureStoreList, client.InNamespace("")); err != nil {
 		return "", fmt.Errorf("failed to list FeatureStores: %w", err)
 	}
 
 	// Find FeatureStore with matching project name
 	// Try to match by spec.feastProject first, then by metadata.name as fallback
-	var matchingFeatureStore *feastdevv1alpha1.FeatureStore
+	var matchingFeatureStore *feastdevv1.FeatureStore
 
 	for i := range featureStoreList.Items {
 		fs := &featureStoreList.Items[i]
@@ -355,7 +355,7 @@ func (r *NotebookConfigMapReconciler) cleanupNotebookConfigMap(ctx context.Conte
 func (r *NotebookConfigMapReconciler) mapFeatureStoreToNotebookRequests(ctx context.Context, obj client.Object) []reconcile.Request {
 	logger := log.FromContext(ctx)
 
-	featureStore, ok := obj.(*feastdevv1alpha1.FeatureStore)
+	featureStore, ok := obj.(*feastdevv1.FeatureStore)
 	if !ok {
 		return nil
 	}
@@ -501,7 +501,7 @@ func (r *NotebookConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// that reference its project and trigger their reconciliation
 		// This ensures notebook ConfigMaps are updated when FeatureStore client configs change
 		Watches(
-			&feastdevv1alpha1.FeatureStore{},
+			&feastdevv1.FeatureStore{},
 			handler.EnqueueRequestsFromMapFunc(r.mapFeatureStoreToNotebookRequests),
 		)
 

@@ -34,7 +34,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	feastdevv1alpha1 "github.com/feast-dev/feast/infra/feast-operator/api/v1alpha1"
+	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
 )
 
@@ -148,7 +148,7 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 		}
 
 		// Clean up feature stores
-		fsList := &feastdevv1alpha1.FeatureStoreList{}
+		fsList := &feastdevv1.FeatureStoreList{}
 		_ = k8sClient.List(ctx, fsList, client.InNamespace(namespace))
 		for i := range fsList.Items {
 			_ = k8sClient.Delete(ctx, &fsList.Items[i])
@@ -169,13 +169,13 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 		return notebook
 	}
 
-	createFeatureStore := func(name, ns, project string) *feastdevv1alpha1.FeatureStore {
-		fs := &feastdevv1alpha1.FeatureStore{
+	createFeatureStore := func(name, ns, project string) *feastdevv1.FeatureStore {
+		fs := &feastdevv1.FeatureStore{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: ns,
 			},
-			Spec: feastdevv1alpha1.FeatureStoreSpec{
+			Spec: feastdevv1.FeatureStoreSpec{
 				FeastProject: project,
 			},
 		}
@@ -183,7 +183,7 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 	}
 
 	// Helper to set FeatureStore status after creation
-	setFeatureStoreStatus := func(fs *feastdevv1alpha1.FeatureStore, project string, configMapName string) {
+	setFeatureStoreStatus := func(fs *feastdevv1.FeatureStore, project string, configMapName string) {
 		fs.Status.ClientConfigMap = configMapName
 		fs.Status.Applied.FeastProject = project
 	}
