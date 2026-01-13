@@ -43,7 +43,7 @@ spec:
             --ServerApp.port=8888
                               --ServerApp.token=''
                               --ServerApp.password=''
-                              --ServerApp.base_url=/notebook/test-feast-wb/jupyter-nb-kube-3aadmin
+                              --ServerApp.base_url=/notebook/{{.Namespace}}/jupyter-nb-kube-3aadmin
                               --ServerApp.quit_button=False
                               --ServerApp.tornado_settings={"user":"{{.Username}}","hub_host":"https://odh-dashboard-{{.OpenDataHubNamespace}}.{{.IngressDomain}}","hub_prefix":"/notebookController/{{.Username}}"}
         - name: JUPYTER_IMAGE
@@ -55,7 +55,7 @@ spec:
         - name: PIP_TRUSTED_HOST
           value: {{.PipTrustedHost}}
         - name: FEAST_VERSION
-          value: {{.FeastVerison}}
+          value: {{.FeastVersion}}
         - name: OPENAI_API_KEY
           value: {{.OpenAIAPIKey}}
         - name: NAMESPACE
