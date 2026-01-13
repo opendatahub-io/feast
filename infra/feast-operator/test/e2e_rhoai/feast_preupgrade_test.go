@@ -52,6 +52,7 @@ var _ = Describe("Feast PreUpgrade scenario Testing", Ordered, func() {
 		By("Restoring original namespace in CR YAMLs")
 		Expect(ReplaceNamespaceInYamlFilesInPlace(filesToUpdateNamespace, namespace, replaceNamespace)).To(Succeed())
 
+		// Only delete namespace on failure; successful runs preserve resources for post-upgrade verification
 		if CurrentSpecReport().Failed() {
 			By(fmt.Sprintf("Deleting test namespace: %s", namespace))
 			Expect(DeleteNamespace(namespace, testDir)).To(Succeed())

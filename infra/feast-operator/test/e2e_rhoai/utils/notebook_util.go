@@ -28,7 +28,7 @@ type NotebookTemplateParams struct {
 	Command               string
 	PipIndexUrl           string
 	PipTrustedHost        string
-	FeastVerison          string
+	FeastVersion          string
 	OpenAIAPIKey          string
 	FeastProject          string
 }
@@ -314,7 +314,7 @@ func GetNotebookParams(namespace, configMapName, notebookPVC, notebookName, test
 		Command:               "[\"" + strings.Join(command, "\",\"") + "\"]",
 		PipIndexUrl:           getEnv("PIP_INDEX_URL"),
 		PipTrustedHost:        getEnv("PIP_TRUSTED_HOST"),
-		FeastVerison:          getEnv("FEAST_VERSION"),
+		FeastVersion:          getEnv("FEAST_VERSION"),
 		OpenAIAPIKey:          getEnv("OPENAI_API_KEY"),
 		FeastProject:          feastProject,
 	}
