@@ -24,15 +24,13 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/feature-server:{{revision}}
+    value: quay.io/opendatahub/feature-server:odh-pr
   - name: dockerfile
     value: Dockerfile
   - name: path-context
     value: sdk/python/feast/infra/feature_servers/multicloud
   - name: additional-tags
-    value:
-    - '{{target_branch}}-{{revision}}'
-    - 'odh-pr' 
+    value: 
     - 'odh-pr-{{revision}}'
   - name: pipeline-type
     value: pull-request
