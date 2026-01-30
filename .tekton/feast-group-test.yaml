@@ -20,7 +20,7 @@ metadata:
 spec:
   params:
   - name: group-components
-    value: '{ "feast-operator-poc": "opendatahub/feast-operator", "feature-server-poc": "opendatahub/feature-server" }'
+    value: '{ "odh-feast-operator-ci": "opendatahub/feast-operator", "odh-feature-server-ci": "opendatahub/feature-server" }'
   pipelineRef:
     resolver: git
     params:
