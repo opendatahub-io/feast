@@ -8,13 +8,13 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "stable"
+      == "$$TARGET_BRANCH$$"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-release
     appstudio.openshift.io/component: odh-feast-operator
     pipelines.appstudio.openshift.io/type: build
-  name: odh-feast-operator-release-on-push
+  name: odh-feast-operator-on-push
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/feast-operator:v0.59.0
+    value: quay.io/opendatahub/feast-operator:$$OUTPUT_IMAGE_TAG$$
   - name: dockerfile
     value: Dockerfile
   - name: path-context
