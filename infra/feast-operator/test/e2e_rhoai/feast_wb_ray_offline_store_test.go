@@ -61,7 +61,7 @@ var _ = Describe("Feast Jupyter Notebook Testing with Ray Offline Store", Ordere
 		By("Deleting Kueue resources")
 		// Delete with namespace flag - will delete namespace-scoped resources from the namespace
 		// and cluster-scoped resources from the cluster
-		cmd := exec.Command("kubectl", "delete", "-f", kueueResourcesFile, "-n", namespace, "--ignore-not-found=true")
+		cmd := exec.Command("kubectl", "delete", "-f", kueueResourcesFile, "-n", namespace, "--ignore-not-found=true", "--timeout=60s")
 		_, _ = testutils.Run(cmd, testDir)
 		fmt.Printf("Kueue resources cleanup completed\n")
 
