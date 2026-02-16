@@ -22,6 +22,8 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-feast-operator-ci": "opendatahub/feast-operator", "odh-feature-server-ci": "opendatahub/feature-server" }'
+  - name: artifact-browser-url
+    value: 'https://app-artifact-browser.apps.rosa.konflux-qe.zmr9.p3.openshiftapps.com'
   pipelineRef:
     resolver: git
     params:
