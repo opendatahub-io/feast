@@ -43,6 +43,9 @@ spec:
         operator: Equal
         value: konflux-tenants
     serviceAccountName: konflux-integration-runner
+  taskRunSpecs:
+    - pipelineTaskName: pull-request-status-message
+      serviceAccountName: build-pipeline-feast-group
   workspaces:
   - name: git-auth
     secret:
