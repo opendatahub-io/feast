@@ -44,9 +44,9 @@ spec:
         operator: Equal
         value: konflux-tenants
     serviceAccountName: konflux-integration-runner
-  taskRunSpecs:
-    - pipelineTaskName: push-ci-artifacts-and-update-pr
-      serviceAccountName: build-pipeline-feast-group
+#  taskRunSpecs:
+#    - pipelineTaskName: push-ci-artifacts-and-update-pr
+#      serviceAccountName: build-pipeline-feast-group
   ttlSecondsAfterFinished: 300
   workspaces:
   - name: git-auth
