@@ -50,3 +50,11 @@ spec:
   - name: git-auth
     secret:
       secretName: '{{ git_auth_secret }}'
+  - name: shared-data
+    volumeClaimTemplate:
+      spec:
+        accessModes:
+          - ReadWriteMany
+        resources:
+          requests:
+            storage: 1Gi
