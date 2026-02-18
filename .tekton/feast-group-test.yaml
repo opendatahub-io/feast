@@ -3,6 +3,7 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 #test
 metadata:
+  generateName: feast-group-test-
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/feast?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
@@ -46,15 +47,20 @@ spec:
   taskRunSpecs:
     - pipelineTaskName: push-ci-artifacts-and-update-pr
       serviceAccountName: build-pipeline-feast-group
+  ttlSecondsAfterFinished: 300
   workspaces:
   - name: git-auth
     secret:
       secretName: '{{ git_auth_secret }}'
   - name: shared-data
     volumeClaimTemplate:
+      metadata:
+        labels:
+          tekton.dev/pipelineRun: "$(context.pipelineRun.name)"
       spec:
         accessModes:
           - ReadWriteMany
         resources:
           requests:
             storage: 100Mi
+        storageClassName: standard
