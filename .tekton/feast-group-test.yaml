@@ -44,7 +44,7 @@ spec:
         value: konflux-tenants
     serviceAccountName: konflux-integration-runner
   taskRunSpecs:
-    - pipelineTaskName: pull-request-status-message
+    - pipelineTaskName: push-ci-artifacts-and-update-pr
       serviceAccountName: build-pipeline-feast-group
   workspaces:
   - name: git-auth
