@@ -3,7 +3,7 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 #test
 metadata:
-  generateName: feast-group-test-
+#  generateName: feast-group-test-
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/feast?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
