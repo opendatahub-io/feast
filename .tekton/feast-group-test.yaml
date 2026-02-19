@@ -47,20 +47,7 @@ spec:
 #  taskRunSpecs:
 #    - pipelineTaskName: push-ci-artifacts-and-update-pr
 #      serviceAccountName: build-pipeline-feast-group
-  ttlSecondsAfterFinished: 300
   workspaces:
   - name: git-auth
     secret:
       secretName: '{{ git_auth_secret }}'
-  - name: shared-data
-    volumeClaimTemplate:
-      metadata:
-        labels:
-          tekton.dev/pipelineRun: "$(context.pipelineRun.name)"
-      spec:
-        accessModes:
-          - ReadWriteMany
-        resources:
-          requests:
-            storage: 100Mi
-        storageClassName: standard
