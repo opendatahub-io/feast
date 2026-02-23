@@ -1,9 +1,7 @@
 ---
 apiVersion: tekton.dev/v1
 kind: PipelineRun
-#test
 metadata:
-#  generateName: feast-group-test-
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/feast?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
@@ -23,8 +21,6 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-feast-operator-ci": "opendatahub/feast-operator", "odh-feature-server-ci": "opendatahub/feature-server" }'
-  - name: artifact-browser-url
-    value: 'https://app-artifact-browser.apps.rosa.konflux-qe.zmr9.p3.openshiftapps.com'
   pipelineRef:
     resolver: git
     params:
@@ -33,7 +29,7 @@ spec:
     - name: revision
       value: main
     - name: pathInRepo
-      value: integration-tests/feast/poc-pr-group-testing-pipeline.yaml
+      value: integration-tests/feast/pr-group-testing-pipeline.yaml
   taskRunTemplate:
     podTemplate:
       nodeSelector:
@@ -44,9 +40,6 @@ spec:
         operator: Equal
         value: konflux-tenants
     serviceAccountName: konflux-integration-runner
-#  taskRunSpecs:
-#    - pipelineTaskName: push-ci-artifacts-and-update-pr
-#      serviceAccountName: build-pipeline-feast-group
   workspaces:
   - name: git-auth
     secret:
