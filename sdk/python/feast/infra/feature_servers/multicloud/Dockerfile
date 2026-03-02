@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-311:1
+FROM registry.access.redhat.com/ubi9/python-312:1
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -9,6 +9,7 @@ USER 0
 COPY prebuild-power-base.sh /prebuild-power.sh
 RUN chmod +x /prebuild-power.sh
 
+ENV UV_CACHE_DIR=/tmp/uv-cache
 COPY requirements.txt requirements.txt
 
 # Run prebuild script conditionally (Power only)
