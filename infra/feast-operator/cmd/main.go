@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -188,8 +190,6 @@ func main() {
 	crdExists, err := validateNotebookCRD(mgr.GetConfig(), notebookGVK)
 	if err != nil {
 		setupLog.Error(err, "Notebook CRD validation failed for feast specific configmap", "GVK", notebookGVK)
-		// If we can't verify (e.g., permission denied), set up controller anyway
-		// If CRD is confirmed missing, skip controller setup
 		if !crdExists {
 			setupLog.Info("Skipping Notebook ConfigMap controller setup - Notebook CRD not found")
 		} else {
@@ -197,15 +197,21 @@ func main() {
 		}
 	}
 	if crdExists {
-		if err = (&controller.NotebookConfigMapReconciler{
-			Client:      mgr.GetClient(),
-			Scheme:      mgr.GetScheme(),
-			NotebookGVK: notebookGVK,
-		}).SetupWithManager(mgr); err != nil {
+		if err = setupNotebookController(mgr, notebookGVK); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "NotebookConfigMap")
 			os.Exit(1)
 		}
-		setupLog.Info("Notebook ConfigMap controller setup completed successfully")
+	} else if err == nil {
+		// CRD not found at startup (not an error, just not installed yet).
+		// During DSC deployment the Notebook CRD may be installed after the Feast
+		// operator starts. Poll in the background so the controller is registered
+		// as soon as the CRD becomes available.
+		setupLog.Info("Notebook CRD not found at startup, will poll for CRD availability", "GVK", notebookGVK)
+		if addErr := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return waitForCRDAndSetupController(ctx, mgr, notebookGVK)
+		})); addErr != nil {
+			setupLog.Error(addErr, "Failed to add CRD watcher runnable")
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
@@ -268,4 +274,50 @@ func validateNotebookCRD(config *rest.Config, gvk schema.GroupVersionKind) (bool
 
 	setupLog.Info("Notebook CRD validated successfully", "CRD", crdName, "GVK", gvk)
 	return true, nil
+}
+
+const crdPollInterval = 5 * time.Second
+
+func setupNotebookController(mgr ctrl.Manager, notebookGVK schema.GroupVersionKind) error {
+	if err := (&controller.NotebookConfigMapReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		NotebookGVK: notebookGVK,
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
+	setupLog.Info("Notebook ConfigMap controller setup completed successfully")
+	return nil
+}
+
+// waitForCRDAndSetupController polls for the Notebook CRD and registers the
+// NotebookConfigMapReconciler once the CRD becomes available. This handles the
+// race condition where the Feast operator starts before the Notebook CRD is
+// installed (e.g. during DSC deployment).
+func waitForCRDAndSetupController(ctx context.Context, mgr ctrl.Manager, gvk schema.GroupVersionKind) error {
+	ticker := time.NewTicker(crdPollInterval)
+	defer ticker.Stop()
+
+	setupLog.Info("Waiting for Notebook CRD to become available...", "GVK", gvk)
+
+	for {
+		select {
+		case <-ctx.Done():
+			setupLog.Info("Context cancelled, stopping CRD watch", "GVK", gvk)
+			return nil
+		case <-ticker.C:
+			crdExists, err := validateNotebookCRD(mgr.GetConfig(), gvk)
+			if err != nil {
+				setupLog.Error(err, "Failed to check Notebook CRD availability, will retry")
+				continue
+			}
+			if crdExists {
+				setupLog.Info("Notebook CRD became available, setting up controller", "GVK", gvk)
+				if err := setupNotebookController(mgr, gvk); err != nil {
+					return fmt.Errorf("failed to setup Notebook ConfigMap controller after CRD became available: %w", err)
+				}
+				return nil
+			}
+		}
+	}
 }
