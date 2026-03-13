@@ -29,6 +29,18 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - batch
   resources:
   - cronjobs
@@ -115,6 +127,18 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io

@@ -33,7 +33,7 @@ Feast allows ML platform teams to:
 
 * **Make features consistently available for training and serving** by managing an _offline store_ (to process historical data for scale-out batch scoring or model training), a low-latency _online store_ (to power real-time prediction)_,_ and a battle-tested _feature server_ (to serve pre-computed features online).
 * **Avoid data leakage** by generating point-in-time correct feature sets so data scientists can focus on feature engineering rather than debugging error-prone dataset joining logic. This ensure that future feature values do not leak to models during training.
-* **Decouple ML from data infrastructure** by providing a single data access layer that abstracts feature storage from feature retrieval, ensuring models remain portable as you move from training models to serving models, from batch models to real-time models, and from one data infra system to another.
+* **Decouple ML from data infrastructure** by providing a single data access layer that abstracts feature storage from feature retrieval, ensuring models remain portable as you move from training models to serving models, from batch models to realtime models, and from one data infra system to another.
 
 Please see our [documentation](https://docs.feast.dev/) for more information about the project.
 
@@ -203,7 +203,6 @@ The list below contains the functionality that contributors are planning to deve
   * [x] [Bigtable](https://docs.feast.dev/reference/online-stores/bigtable)
   * [x] [SQLite](https://docs.feast.dev/reference/online-stores/sqlite)
   * [x] [Dragonfly](https://docs.feast.dev/reference/online-stores/dragonfly)
-  * [x] [IKV - Inlined Key Value Store](https://docs.feast.dev/reference/online-stores/ikv)
   * [x] [Azure Cache for Redis (community plugin)](https://github.com/Azure/feast-azure)
   * [x] [Postgres (contrib plugin)](https://docs.feast.dev/reference/online-stores/postgres)
   * [x] [Cassandra / AstraDB (contrib plugin)](https://docs.feast.dev/reference/online-stores/cassandra)
