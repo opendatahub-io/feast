@@ -204,11 +204,13 @@ func main() {
 	} else if err == nil {
 		// CRD not found at startup (not an error, just not installed yet).
 		// During DSC deployment the Notebook CRD may be installed after the Feast
-		// operator starts. Poll in the background so the controller is registered
-		// as soon as the CRD becomes available.
+		// operator starts. Poll in the background and trigger a process restart
+		// when the CRD appears so the controller can register during normal startup.
+		// Dynamic controller registration on a running manager is not supported by
+		// controller-runtime v0.18 (cache sync fails for late-added informers).
 		setupLog.Info("Notebook CRD not found at startup, will poll for CRD availability", "GVK", notebookGVK)
 		if addErr := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-			return waitForCRDAndSetupController(ctx, mgr, notebookGVK)
+			return waitForCRDAndRestart(ctx, mgr.GetConfig(), notebookGVK)
 		})); addErr != nil {
 			setupLog.Error(addErr, "Failed to add CRD watcher runnable")
 		}
@@ -290,11 +292,12 @@ func setupNotebookController(mgr ctrl.Manager, notebookGVK schema.GroupVersionKi
 	return nil
 }
 
-// waitForCRDAndSetupController polls for the Notebook CRD and registers the
-// NotebookConfigMapReconciler once the CRD becomes available. This handles the
-// race condition where the Feast operator starts before the Notebook CRD is
-// installed (e.g. during DSC deployment).
-func waitForCRDAndSetupController(ctx context.Context, mgr ctrl.Manager, gvk schema.GroupVersionKind) error {
+// waitForCRDAndRestart polls for the Notebook CRD and exits the process when
+// it becomes available. Kubernetes will restart the pod, and on the next startup
+// the controller registers normally via the standard code path. This avoids
+// dynamically adding controllers to a running manager, which causes cache sync
+// failures in controller-runtime v0.18.
+func waitForCRDAndRestart(ctx context.Context, config *rest.Config, gvk schema.GroupVersionKind) error {
 	ticker := time.NewTicker(crdPollInterval)
 	defer ticker.Stop()
 
@@ -306,17 +309,14 @@ func waitForCRDAndSetupController(ctx context.Context, mgr ctrl.Manager, gvk sch
 			setupLog.Info("Context cancelled, stopping CRD watch", "GVK", gvk)
 			return nil
 		case <-ticker.C:
-			crdExists, err := validateNotebookCRD(mgr.GetConfig(), gvk)
+			crdExists, err := validateNotebookCRD(config, gvk)
 			if err != nil {
 				setupLog.Error(err, "Failed to check Notebook CRD availability, will retry")
 				continue
 			}
 			if crdExists {
-				setupLog.Info("Notebook CRD became available, setting up controller", "GVK", gvk)
-				if err := setupNotebookController(mgr, gvk); err != nil {
-					return fmt.Errorf("failed to setup Notebook ConfigMap controller after CRD became available: %w", err)
-				}
-				return nil
+				setupLog.Info("Notebook CRD detected, restarting operator to initialize Notebook ConfigMap controller", "GVK", gvk)
+				os.Exit(0)
 			}
 		}
 	}
