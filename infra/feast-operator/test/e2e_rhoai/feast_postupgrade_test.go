@@ -28,8 +28,8 @@ var _ = Describe("Feast PostUpgrade scenario Testing", Ordered, func() {
 	const (
 		namespace           = "test-ns-feast-upgrade"
 		testDir             = "/test/e2e_rhoai"
-		feastDeploymentName = FeastPrefix + "credit-scoring"
-		feastCRName         = "credit-scoring"
+		feastDeploymentName = FeastPrefix + "test-s3"
+		feastCRName         = "test-s3"
 	)
 
 	AfterAll(func() {
@@ -41,16 +41,16 @@ var _ = Describe("Feast PostUpgrade scenario Testing", Ordered, func() {
 		By("Verify Feature Store CR is in Ready state")
 		ValidateFeatureStoreCRStatus(namespace, feastCRName)
 
-		By("Running `feast apply` and `feast materialize-incremental` to validate registry definitions")
-		VerifyApplyFeatureStoreDefinitions(namespace, feastCRName, feastDeploymentName)
+		By("Running `feast apply` and `feast materialize-incremental` to validate registry definitions (S3 / driver_ranking)")
+		VerifyApplyFeatureStoreDefinitionsS3(namespace, feastCRName, feastDeploymentName)
 
-		By("Validating Feast entity, feature, and feature view presence")
-		VerifyFeastMethods(namespace, feastDeploymentName, testDir)
+		By("Validating Feast project list for driver_ranking")
+		VerifyFeastMethodsForDriverRanking(namespace, feastDeploymentName, testDir)
 	}
 
 	// This context verifies that a pre-created Feast FeatureStore CR continues to function as expected
 	// after an upgrade. It validates `feast apply`, registry sync, feature retrieval, and model execution.
 	Context("Feast post Upgrade Test", func() {
-		It("Should create and run a feastPostUpgrade test scenario feast apply and materialize functionality successfully", runPostUpgradeTest)
+		It("Should run a feastPostUpgrade test scenario for S3 test-s3 FeatureStore apply and materialize successfully", runPostUpgradeTest)
 	})
 })
