@@ -17,6 +17,11 @@ const (
 	FeastPrefix = "feast-"
 )
 
+// logCronJobCommands prints CronJob command list read from FeatureStore CR status.
+func logCronJobCommands(commands string) {
+	fmt.Printf("CronJob commands from CR status:\n  %s\n\n", strings.TrimSpace(commands))
+}
+
 func ListConfigMaps(namespace string) ([]string, error) {
 	cmd := exec.Command("kubectl", "get", "cm", "-n", namespace, "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
 	var out bytes.Buffer
@@ -223,6 +228,75 @@ func ApplyFeastInfraManifestsAndVerify(namespace string, testDir string) {
 	CheckDeployment(namespace, "redis")
 }
 
+// substituteFeastS3Credentials replaces ${AWS_ACCESS_KEY_ID}, ${AWS_S3_BUCKET}, etc. from process environment variables.
+// Returns an error if any required variable is unset or whitespace-only so the test fails before kubectl apply.
+func substituteFeastS3Credentials(content string) (string, error) {
+	required := []struct {
+		env, placeholder string
+	}{
+		{"AWS_ACCESS_KEY_ID", "${AWS_ACCESS_KEY_ID}"},
+		{"AWS_SECRET_ACCESS_KEY", "${AWS_SECRET_ACCESS_KEY}"},
+		{"AWS_DEFAULT_REGION", "${AWS_DEFAULT_REGION}"},
+		{"AWS_S3_BUCKET", "${AWS_S3_BUCKET}"},
+	}
+	repl := make(map[string]string, len(required))
+	var missing []string
+	for _, r := range required {
+		v := strings.TrimSpace(os.Getenv(r.env))
+		if v == "" {
+			missing = append(missing, r.env)
+			continue
+		}
+		repl[r.placeholder] = v
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf(
+			"feast S3 e2e requires non-empty environment variables: %s",
+			strings.Join(missing, ", "),
+		)
+	}
+	out := content
+	for ph, v := range repl {
+		out = strings.ReplaceAll(out, ph, v)
+	}
+	return out, nil
+}
+
+// ApplyFeastS3YamlAndVerify applies the S3-based FeatureStore manifest (no postgres/redis),
+// waits for deployment FeastPrefix+feastCRName, validates CR Ready and feature_store.yaml for S3 driver_ranking.
+// feastCRName must match FeatureStore metadata.name in the manifest (e.g. "test-s3").
+func ApplyFeastS3YamlAndVerify(namespace string, testDir string, feastS3YamlPath string, feastCRName string) {
+	By("Applying Feast S3 manifest (secrets + FeatureStore CR)")
+	data, err := os.ReadFile(feastS3YamlPath)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	rendered, err := substituteFeastS3Credentials(string(data))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	tmp, err := os.CreateTemp("", "feast-s3-rendered-*.yaml")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	tmpPath := tmp.Name()
+	defer func() {
+		if rmErr := os.Remove(tmpPath); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove temp file %s: %v\n", tmpPath, rmErr)
+		}
+	}()
+	_, err = tmp.WriteString(rendered)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	ExpectWithOffset(1, tmp.Close()).To(Succeed())
+
+	cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", tmpPath)
+	_, err = testutils.Run(cmd, testDir)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	fmt.Printf("Applied rendered Feast S3 manifest to namespace %q\n", namespace)
+
+	feastDeploymentName := FeastPrefix + feastCRName
+	CheckDeployment(namespace, feastDeploymentName)
+	ValidateFeatureStoreCRStatus(namespace, feastCRName)
+
+	By("Verifying client feature_store.yaml for S3-backed registry and driver_ranking project")
+	validateFeatureStoreYamlS3(namespace, feastDeploymentName)
+}
+
 // CheckDeployment verifies the specified deployment exists and is in the "Available" state.
 func CheckDeployment(namespace, name string) {
 	By(fmt.Sprintf("Waiting for %s deployment to become available", name))
@@ -235,30 +309,45 @@ func CheckDeployment(namespace, name string) {
 
 // validate that the status of the FeatureStore CR is "Ready".
 func ValidateFeatureStoreCRStatus(namespace, crName string) {
+	lastObservation := "no observation captured yet"
 	Eventually(func() string {
 		cmd := exec.Command("kubectl", "get", "feast", crName, "-n", namespace, "-o", "jsonpath={.status.phase}")
-		output, err := cmd.Output()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
+			lastObservation = fmt.Sprintf("kubectl get failed: %v; output: %s", err, strings.TrimSpace(string(output)))
 			return ""
 		}
-		return string(output)
-	}, "2m", "5s").Should(Equal("Ready"), "Feature Store CR did not reach 'Ready' state in time")
+		phase := strings.TrimSpace(string(output))
+		lastObservation = fmt.Sprintf("status.phase=%q", phase)
+		return phase
+	}, "5m", "5s").Should(
+		Equal("Ready"),
+		fmt.Sprintf(
+			"Feature Store CR %s/%s did not reach 'Ready' state in time; last observation: %s",
+			namespace, crName, lastObservation,
+		),
+	)
 
-	fmt.Printf("✅ Feature Store CR %s/%s is in Ready state\n", namespace, crName)
+	fmt.Printf("Feature Store CR is Ready: %s/%s\n", namespace, crName)
 }
 
-// validates the `feast apply` and `feast materialize-incremental commands were configured in the FeatureStore CR's CronJob config.
-func VerifyApplyFeatureStoreDefinitions(namespace string, feastCRName string, feastDeploymentName string) {
+// verifyApplyFeatureStoreCronJob checks CronJob commands on the FeatureStore CR and runs a one-off apply job with expected log substrings.
+func verifyApplyFeatureStoreCronJob(namespace, feastCRName, feastDeploymentName, testDir string, expectedJobLogs []string) {
 	By("Verify CronJob commands in FeatureStore CR")
 	cmd := exec.Command("kubectl", "get", "-n", namespace, "feast/"+feastCRName, "-o", "jsonpath={.status.applied.cronJob.containerConfigs.commands}")
 	output, err := cmd.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Failed to fetch CronJob commands:\n%s", output))
 	commands := string(output)
-	fmt.Println("CronJob commands:", commands)
+	logCronJobCommands(commands)
 	Expect(commands).To(ContainSubstring(`feast apply`))
 	Expect(commands).To(ContainSubstring(`feast materialize-incremental $(date -u +'%Y-%m-%dT%H:%M:%S')`))
 
-	CreateAndVerifyJobFromCron(namespace, feastDeploymentName, "feast-test-apply", "", []string{
+	CreateAndVerifyJobFromCron(namespace, feastDeploymentName, "feast-test-apply", testDir, expectedJobLogs)
+}
+
+// validates the `feast apply` and `feast materialize-incremental commands were configured in the FeatureStore CR's CronJob config.
+func VerifyApplyFeatureStoreDefinitions(namespace string, feastCRName string, feastDeploymentName string) {
+	verifyApplyFeatureStoreCronJob(namespace, feastCRName, feastDeploymentName, "", []string{
 		"No project found in the repository",
 		"Applying changes for project credit_scoring_local",
 		"Deploying infrastructure for credit_history",
@@ -270,17 +359,27 @@ func VerifyApplyFeatureStoreDefinitions(namespace string, feastCRName string, fe
 	})
 }
 
+// VerifyApplyFeatureStoreDefinitionsS3 validates the apply/materialize CronJob for the S3 + driver_ranking FeatureStore.
+func VerifyApplyFeatureStoreDefinitionsS3(namespace string, feastCRName string, feastDeploymentName string) {
+	verifyApplyFeatureStoreCronJob(namespace, feastCRName, feastDeploymentName, "", []string{
+		"Applying changes for project driver_ranking",
+		"Materializing",
+	})
+}
+
 // Create a Job and verifies its logs contain expected substrings
 func CreateAndVerifyJobFromCron(namespace, cronName, jobName, testDir string, expectedLogSubstrings []string) {
 	By(fmt.Sprintf("Creating Job %s from CronJob %s", jobName, cronName))
 	cmd := exec.Command("kubectl", "create", "job", "--from=cronjob/"+cronName, jobName, "-n", namespace)
 	_, err := testutils.Run(cmd, testDir)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	fmt.Printf("Created one-off job %q from CronJob %q\n", jobName, cronName)
 
 	By("Waiting for Job completion")
 	cmd = exec.Command("kubectl", "wait", "--for=condition=complete", "--timeout=5m", "job/"+jobName, "-n", namespace)
 	_, err = testutils.Run(cmd, testDir)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	fmt.Printf("Job %q completed successfully\n", jobName)
 
 	By("Checking logs of completed job")
 	cmd = exec.Command("kubectl", "logs", "job/"+jobName, "-n", namespace, "--all-containers=true")
@@ -290,10 +389,15 @@ func CreateAndVerifyJobFromCron(namespace, cronName, jobName, testDir string, ex
 	outputStr := string(output)
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	outputStr = ansi.ReplaceAllString(outputStr, "")
+	fmt.Printf("----- begin logs: job/%s namespace/%s -----\n%s\n----- end logs: job/%s -----\n",
+		jobName, namespace, strings.TrimRight(outputStr, "\n"), jobName)
+
 	for _, expected := range expectedLogSubstrings {
-		Expect(outputStr).To(ContainSubstring(expected))
+		ExpectWithOffset(1, outputStr).To(ContainSubstring(expected),
+			fmt.Sprintf("job %q logs should contain substring %q", jobName, expected))
 	}
-	fmt.Printf("created Job %s and Verified expected Logs ", jobName)
+	fmt.Printf("Job %q: all %d expected log substring(s) found: %v\n\n",
+		jobName, len(expectedLogSubstrings), expectedLogSubstrings)
 }
 
 // validate the feature store yaml
@@ -306,6 +410,17 @@ func validateFeatureStoreYaml(namespace, deployment string) {
 	Expect(content).To(ContainSubstring("offline_store:\n    type: duckdb"))
 	Expect(content).To(ContainSubstring("online_store:\n    type: redis"))
 	Expect(content).To(ContainSubstring("registry_type: sql"))
+}
+
+func validateFeatureStoreYamlS3(namespace, deployment string) {
+	cmd := exec.Command("kubectl", "exec", "deploy/"+deployment, "-n", namespace, "-c", "online", "--", "cat", "feature_store.yaml")
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to read feature_store.yaml")
+
+	content := string(output)
+	Expect(content).To(ContainSubstring("project: driver_ranking"))
+	Expect(content).To(ContainSubstring("s3://"))
+	fmt.Printf("feature_store.yaml in online pod: contains project driver_ranking and s3:// registry path\n")
 }
 
 // apply and verifies the Feast deployment becomes available, the CR status is "Ready
@@ -398,6 +513,18 @@ func VerifyFeastMethods(namespace string, feastDeploymentName string, testDir st
 		fmt.Printf("%s:\n%s\n", check.logPrefix, string(output))
 		VerifyOutputContains(output, check.expected)
 	}
+}
+
+// VerifyFeastMethodsForDriverRanking checks CLI output for the driver_ranking project (S3 registry).
+func VerifyFeastMethodsForDriverRanking(namespace string, feastDeploymentName string, testDir string) {
+	cmd := exec.Command("kubectl", "exec", "deploy/"+feastDeploymentName, "-n", namespace, "-c", "online", "--",
+		"feast", "projects", "list")
+	output, err := testutils.Run(cmd, testDir)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	fmt.Printf("Command: feast projects list\nOutput:\n%s\n", string(output))
+	VerifyOutputContains(output, []string{"driver_ranking"})
+	fmt.Printf("Assertion OK: output contains expected substring driver_ranking\n")
 }
 
 // ReplaceNamespaceInYaml reads a YAML file, replaces all existingNamespace with the actual namespace
