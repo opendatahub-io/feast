@@ -4,7 +4,10 @@ USER 0
 RUN microdnf install -y git gcc libpq-devel python3.12-devel && microdnf clean all
 USER 1001
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+      mv /root/.local/bin/uv /usr/local/bin/uv && \
+      chmod +x /usr/local/bin/uv
 ENV UV_CACHE_DIR=/tmp/uv-cache
 COPY requirements.txt requirements.txt
 RUN uv pip install -r requirements.txt
