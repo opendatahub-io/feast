@@ -214,6 +214,12 @@ class MaterializationConfig(BaseModel):
     """ bool: If true, feature retrieval jobs will only pull the latest feature values for each entity.
         If false, feature retrieval jobs will pull all feature values within the specified time range. """
 
+    online_write_batch_size: Optional[int] = Field(default=None, gt=0)
+    """ int: Number of rows to write to online store per batch during materialization.
+        If None (default), all rows are written in a single batch for backward compatibility.
+        Set to a positive integer (e.g., 10000) to enable batched writes.
+        Supported compute engines: local, spark, ray. """
+
 
 class OpenLineageConfig(FeastBaseModel):
     """Configuration for OpenLineage integration.
@@ -337,7 +343,7 @@ class RepoConfig(FeastBaseModel):
     """ MaterializationConfig: Configuration options for feature materialization behavior. """
 
     openlineage_config: Optional[OpenLineageConfig] = Field(None, alias="openlineage")
-    """ OpenLineageConfig: Configuration for OpenLineage data lineage integration (optional). """
+    """ Configuration for OpenLineage data lineage integration (optional). """
 
     def __init__(self, **data: Any):
         super().__init__(**data)
