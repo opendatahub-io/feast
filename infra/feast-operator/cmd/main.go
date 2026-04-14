@@ -145,7 +145,7 @@ func main() {
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/metrics/server
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -163,7 +163,7 @@ func main() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
 		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
@@ -188,9 +188,23 @@ func main() {
 		Cache: newCacheOptions(),
 		Client: client.Options{
 			Cache: &client.CacheOptions{
+				// Bypass the label-filtered informer cache for all reads so that
+				// pre-existing resources without the managed-by label are still
+				// visible to the reconciler. The ByObject cache filter above still
+				// restricts the watch to managed-by-labeled objects, limiting
+				// memory usage while avoiding upgrade deadlocks.
 				DisableFor: []client.Object{
 					&corev1.ConfigMap{},
 					&corev1.Secret{},
+					&appsv1.Deployment{},
+					&corev1.Service{},
+					&corev1.ServiceAccount{},
+					&corev1.PersistentVolumeClaim{},
+					&rbacv1.RoleBinding{},
+					&rbacv1.Role{},
+					&batchv1.CronJob{},
+					&autoscalingv2.HorizontalPodAutoscaler{},
+					&policyv1.PodDisruptionBudget{},
 				},
 			},
 		},
