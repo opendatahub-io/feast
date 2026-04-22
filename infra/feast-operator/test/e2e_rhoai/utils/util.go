@@ -153,15 +153,32 @@ func ApplyFeastPermissions(fileName string, registryFilePath string, namespace s
 	podName := pod.Name
 	fmt.Printf("Found pod: %s\n", podName)
 
+	ExpectWithOffset(1, registryFilePath).To(And(
+		Not(BeEmpty()),
+		HavePrefix("/"),
+		Not(ContainSubstring("\x00")),
+	), "registryFilePath must be a non-empty absolute container path")
+
 	cmd := exec.Command(
-		"oc", "cp",
-		fileName, // local source file
-		fmt.Sprintf("%s/%s:%s", namespace, podName, registryFilePath), // remote destination
+		"oc", "exec", "-i", podName,
+		"-n", namespace,
 		"-c", "registry",
+		"--",
+		"sh", "-c", `cat > "$1"`, "sh", registryFilePath,
 	)
 
-	_, err = testutils.Run(cmd, "/test/e2e_rhoai")
-	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	file, err := os.Open(fileName)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to open permissions file")
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			fmt.Printf("Warning: failed to close file: %v\n", cerr)
+		}
+	}()
+	cmd.Stdin = file
+
+	output, err := cmd.CombinedOutput()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+		fmt.Sprintf("Failed to copy file to pod: %s", string(output)))
 
 	fmt.Printf("Successfully copied file to pod: %s\n", podName)
 
@@ -189,7 +206,7 @@ func ApplyFeastPermissions(fileName string, registryFilePath string, namespace s
 		"feast", "permissions", "list",
 	)
 
-	output, err := testutils.Run(cmd, "/test/e2e_rhoai")
+	output, err = testutils.Run(cmd, "/test/e2e_rhoai")
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 	// Change "feast-auth" if your permission name is different
