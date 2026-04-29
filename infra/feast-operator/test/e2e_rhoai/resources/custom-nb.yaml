@@ -60,6 +60,10 @@ spec:
           value: {{.OpenAIAPIKey}}
         - name: NAMESPACE
           value: {{.Namespace}}
+{{- range $name, $value := .AdditionalEnv }}
+        - name: {{$name}}
+          value: {{$value}}
+{{- end }}
         image: {{.NotebookImage}}
         command: {{.Command}}
         imagePullPolicy: Always
