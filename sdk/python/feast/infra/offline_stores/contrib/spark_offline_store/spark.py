@@ -3,7 +3,7 @@ import tempfile
 import uuid
 import warnings
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -33,6 +33,7 @@ from pyspark import SparkConf
 from pyspark.sql import SparkSession
 
 from feast import FeatureView, OnDemandFeatureView
+from feast.batch_feature_view import BatchFeatureView
 from feast.data_source import DataSource
 from feast.dataframe import DataFrameEngine, FeastDataFrame
 from feast.errors import EntitySQLEmptyResults, InvalidEntityType
@@ -52,7 +53,7 @@ from feast.infra.registry.base_registry import BaseRegistry
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
 from feast.saved_dataset import SavedDatasetStorage
 from feast.type_map import spark_schema_to_np_dtypes
-from feast.utils import _get_fields_with_aliases
+from feast.utils import _get_fields_with_aliases, compute_non_entity_date_range
 
 # Make sure spark warning doesn't raise more than once.
 warnings.simplefilter("once", RuntimeWarning)
@@ -183,8 +184,11 @@ class SparkOfflineStore(OfflineStore):
         # This makes date-range retrievals possible without enumerating entities upfront; sources remain bounded by time.
         non_entity_mode = entity_df is None
         if non_entity_mode:
-            # Why: derive bounded time window without requiring entities; uses max TTL fallback to constrain scans.
-            start_date, end_date = _compute_non_entity_dates(feature_views, kwargs)
+            start_date, end_date = compute_non_entity_date_range(
+                feature_views,
+                start_date=kwargs.get("start_date"),
+                end_date=kwargs.get("end_date"),
+            )
             entity_df_event_timestamp_range = (start_date, end_date)
 
             # Build query contexts so we can reuse entity names and per-view table info consistently.
@@ -255,6 +259,10 @@ class SparkOfflineStore(OfflineStore):
             registry,
             project,
             entity_df_event_timestamp_range,
+        )
+
+        query_context = _apply_bfv_transformations(
+            spark_session, feature_views, query_context
         )
 
         spark_query_context = [
@@ -384,12 +392,18 @@ class SparkOfflineStore(OfflineStore):
         timestamp_fields = [timestamp_field]
         if created_timestamp_column:
             timestamp_fields.append(created_timestamp_column)
-        (fields_with_aliases, aliases) = _get_fields_with_aliases(
-            fields=join_key_columns + feature_name_columns + timestamp_fields,
-            field_mappings=data_source.field_mapping,
-        )
 
-        fields_with_alias_string = ", ".join(fields_with_aliases)
+        if feature_name_columns:
+            (fields_with_aliases, _) = _get_fields_with_aliases(
+                fields=join_key_columns + feature_name_columns + timestamp_fields,
+                field_mappings=data_source.field_mapping,
+            )
+            fields_with_alias_string = ", ".join(fields_with_aliases)
+        else:
+            # Empty feature_name_columns signals "read all source columns".
+            # Used by BatchFeatureView with TransformationMode.PYTHON/ray/pandas where
+            # the UDF computes output features from raw input — don't project upfront.
+            fields_with_alias_string = "*"
 
         from_expression = data_source.get_table_query_string()
         timestamp_filter = get_timestamp_filter_sql(
@@ -619,29 +633,6 @@ def get_spark_session_or_start_new_with_repoconfig(
     return spark_session
 
 
-def _compute_non_entity_dates(
-    feature_views: List[FeatureView], kwargs: Dict[str, Any]
-) -> Tuple[datetime, datetime]:
-    # Why: bounds the scan window when no entity_df is provided using explicit dates or max TTL fallback.
-    start_date_opt = cast(Optional[datetime], kwargs.get("start_date"))
-    end_date_opt = cast(Optional[datetime], kwargs.get("end_date"))
-    end_date: datetime = end_date_opt or datetime.now(timezone.utc)
-
-    if start_date_opt is None:
-        max_ttl_seconds = 0
-        for fv in feature_views:
-            if fv.ttl and isinstance(fv.ttl, timedelta):
-                max_ttl_seconds = max(max_ttl_seconds, int(fv.ttl.total_seconds()))
-        start_date: datetime = (
-            end_date - timedelta(seconds=max_ttl_seconds)
-            if max_ttl_seconds > 0
-            else end_date - timedelta(days=30)
-        )
-    else:
-        start_date = start_date_opt
-    return (start_date, end_date)
-
-
 def _gather_all_entities(
     fv_query_contexts: List[offline_utils.FeatureViewQueryContext],
 ) -> List[str]:
@@ -725,6 +716,62 @@ def _entity_schema_keys_from(
     return cast(
         KeysView[str], {k: None for k in (all_entities + [event_timestamp_col])}.keys()
     )
+
+
+def _apply_bfv_transformations(
+    spark_session: SparkSession,
+    feature_views: List[FeatureView],
+    query_contexts: List[offline_utils.FeatureViewQueryContext],
+) -> List[offline_utils.FeatureViewQueryContext]:
+    """
+    For BatchFeatureViews with a UDF, read the raw source into a Spark DataFrame,
+    invoke the transformation, register the result as a temp view, and replace the
+    table_subquery in the query context so the PIT join reads transformed data.
+    """
+    from dataclasses import replace
+
+    from feast.feature_view_utils import (
+        get_transformation_function,
+        has_transformation,
+        resolve_feature_view_source_with_fallback,
+    )
+
+    fv_by_name = {fv.projection.name_to_use(): fv for fv in feature_views}
+
+    updated_contexts = []
+    for ctx in query_contexts:
+        fv = fv_by_name.get(ctx.name)
+        if (
+            fv is not None
+            and isinstance(fv, BatchFeatureView)
+            and has_transformation(fv)
+        ):
+            udf = get_transformation_function(fv)
+            if udf is not None:
+                source_info = resolve_feature_view_source_with_fallback(fv)
+                source_query = source_info.data_source.get_table_query_string()
+
+                timestamp_filter = get_timestamp_filter_sql(
+                    start_date=ctx.min_event_timestamp,
+                    end_date=ctx.max_event_timestamp,
+                    timestamp_field=ctx.timestamp_field,
+                    tz=timezone.utc,
+                    quote_fields=False,
+                )
+                source_df = spark_session.sql(
+                    f"SELECT * FROM {source_query} WHERE {timestamp_filter}"
+                )
+
+                transformed_df = udf(source_df)
+
+                tmp_view_name = "feast_bfv_" + uuid.uuid4().hex
+                transformed_df.createOrReplaceTempView(tmp_view_name)
+
+                ctx = replace(ctx, table_subquery=tmp_view_name)
+
+        updated_contexts.append(ctx)
+
+    return updated_contexts
 
 
 def _get_entity_df_event_timestamp_range(

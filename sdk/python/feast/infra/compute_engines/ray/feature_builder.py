@@ -17,8 +17,10 @@ from feast.infra.compute_engines.ray.nodes import (
     RayJoinNode,
     RayReadNode,
     RayTransformationNode,
+    RayValidationNode,
     RayWriteNode,
 )
+from feast.types import PrimitiveFeastType, from_feast_to_pyarrow_type
 
 if TYPE_CHECKING:
     from feast.infra.compute_engines.ray.config import RayComputeEngineConfig
@@ -134,6 +136,7 @@ class RayFeatureBuilder(FeatureBuilder):
             name="dedup",
             column_info=column_info,
             config=self.config,
+            is_materialization=self.is_materialization,
         )
         node.add_input(input_node)
 
@@ -174,11 +177,36 @@ class RayFeatureBuilder(FeatureBuilder):
 
     def build_validation_node(self, view, input_node):
         """Build the validation node for feature validation."""
-        # TODO: Implement validation logic
-        logger.warning(
-            "Feature validation is not yet implemented for Ray compute engine."
+        expected_columns = {}
+        json_columns: set = set()
+        if hasattr(view, "features"):
+            for feature in view.features:
+                try:
+                    expected_columns[feature.name] = from_feast_to_pyarrow_type(
+                        feature.dtype
+                    )
+                except (ValueError, KeyError):
+                    logger.debug(
+                        "Could not resolve PyArrow type for feature '%s' "
+                        "(dtype=%s), skipping type check for this column.",
+                        feature.name,
+                        feature.dtype,
+                    )
+                    expected_columns[feature.name] = None
+                if (
+                    isinstance(feature.dtype, PrimitiveFeastType)
+                    and feature.dtype.name == "JSON"
+                ):
+                    json_columns.add(feature.name)
+
+        node = RayValidationNode(
+            f"{view.name}:validate",
+            expected_columns=expected_columns,
+            json_columns=json_columns,
+            inputs=[input_node],
         )
-        return input_node
+        self.nodes.append(node)
+        return node
 
     def _build(self, view, input_nodes: Optional[List[DAGNode]]) -> DAGNode:
         has_physical_source = (hasattr(view, "batch_source") and view.batch_source) or (

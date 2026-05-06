@@ -18,9 +18,11 @@ package v1
 
 import (
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 const (
@@ -50,6 +52,7 @@ const (
 	ClientFailedReason           = "ClientDeploymentFailed"
 	CronJobFailedReason          = "CronJobDeploymentFailed"
 	KubernetesAuthzFailedReason  = "KubernetesAuthorizationDeploymentFailed"
+	OidcAuthzFailedReason        = "OidcAuthorizationDeploymentFailed"
 
 	// Feast condition messages:
 	ReadyMessage                  = "FeatureStore installation complete"
@@ -60,13 +63,61 @@ const (
 	ClientReadyMessage            = "Client installation complete"
 	CronJobReadyMessage           = "CronJob installation complete"
 	KubernetesAuthzReadyMessage   = "Kubernetes authorization installation complete"
+	OidcAuthzReadyMessage         = "OIDC authorization installation complete"
 	DeploymentNotAvailableMessage = "Deployment is not available"
 
 	// entity_key_serialization_version
 	SerializationVersion = 3
 )
 
+// MaterializationConfig controls feature materialization behavior written into feature_store.yaml.
+type MaterializationConfig struct {
+	// Number of rows per batch when writing to the online store during materialization.
+	// Prevents OOM for large feature views. Supported engines: local, spark, ray.
+	// If unset, all rows are written in a single batch.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	OnlineWriteBatchSize *int32 `json:"onlineWriteBatchSize,omitempty"`
+	// ExtraConfig passes additional materialization key-value settings inline into
+	// feature_store.yaml.
+	// +optional
+	ExtraConfig map[string]string `json:"extraConfig,omitempty"`
+}
+
+// OpenLineageConfig enables OpenLineage data lineage tracking for Feast operations.
+// Lineage events are emitted during feast apply and materialization when enabled.
+type OpenLineageConfig struct {
+	// Enable OpenLineage integration.
+	Enabled bool `json:"enabled"`
+	// Transport type for lineage events.
+	// +kubebuilder:validation:Enum=http;console;file;kafka
+	// +optional
+	TransportType *string `json:"transportType,omitempty"`
+	// URL for HTTP transport (e.g. http://marquez:5000). Required when transportType is "http".
+	// +optional
+	TransportUrl *string `json:"transportUrl,omitempty"`
+	// API endpoint path appended to transportUrl. Defaults to "api/v1/lineage".
+	// +optional
+	TransportEndpoint *string `json:"transportEndpoint,omitempty"`
+	// Reference to a Secret containing the key "api_key" for lineage server authentication.
+	// +optional
+	ApiKeySecretRef *corev1.LocalObjectReference `json:"apiKeySecretRef,omitempty"`
+	// ExtraConfig holds additional OpenLineage key-value settings written inline into
+	// the openlineage block of feature_store.yaml alongside the typed fields above.
+	// Use this for non-core settings (e.g. namespace, producer, emit_on_apply,
+	// emit_on_materialize) and transport-specific options (e.g. kafka
+	// bootstrap_servers, topic; file path). Boolean values ("true"/"false") and
+	// integer values are automatically coerced to their native YAML types.
+	// Keys must be valid Feast OpenLineageConfig YAML field names.
+	// +optional
+	ExtraConfig map[string]string `json:"extraConfig,omitempty"`
+}
+
 // FeatureStoreSpec defines the desired state of FeatureStore
+// +kubebuilder:validation:XValidation:rule="self.replicas <= 1 || !has(self.services) || !has(self.services.scaling) || !has(self.services.scaling.autoscaling)",message="replicas > 1 and services.scaling.autoscaling are mutually exclusive."
+// +kubebuilder:validation:XValidation:rule="self.replicas <= 1 && (!has(self.services) || !has(self.services.scaling) || !has(self.services.scaling.autoscaling)) || (has(self.services) && has(self.services.onlineStore) && has(self.services.onlineStore.persistence) && has(self.services.onlineStore.persistence.store))",message="Scaling requires DB-backed persistence for the online store. Configure services.onlineStore.persistence.store when using replicas > 1 or autoscaling."
+// +kubebuilder:validation:XValidation:rule="self.replicas <= 1 && (!has(self.services) || !has(self.services.scaling) || !has(self.services.scaling.autoscaling)) || (!has(self.services) || !has(self.services.offlineStore) || (has(self.services.offlineStore.persistence) && has(self.services.offlineStore.persistence.store)))",message="Scaling requires DB-backed persistence for the offline store. Configure services.offlineStore.persistence.store when using replicas > 1 or autoscaling."
+// +kubebuilder:validation:XValidation:rule="self.replicas <= 1 && (!has(self.services) || !has(self.services.scaling) || !has(self.services.scaling.autoscaling)) || (has(self.services) && has(self.services.registry) && (has(self.services.registry.remote) || (has(self.services.registry.local) && has(self.services.registry.local.persistence) && (has(self.services.registry.local.persistence.store) || (has(self.services.registry.local.persistence.file) && has(self.services.registry.local.persistence.file.path) && (self.services.registry.local.persistence.file.path.startsWith('s3://') || self.services.registry.local.persistence.file.path.startsWith('gs://')))))))",message="Scaling requires DB-backed or remote registry. Configure registry.local.persistence.store or use a remote registry when using replicas > 1 or autoscaling. S3/GCS-backed registry is also allowed."
 type FeatureStoreSpec struct {
 	// +kubebuilder:validation:Pattern="^[A-Za-z0-9][A-Za-z0-9_-]*$"
 	// FeastProject is the Feast project id. This can be any alphanumeric string with underscores and hyphens, but it cannot start with an underscore or hyphen. Required.
@@ -75,6 +126,20 @@ type FeatureStoreSpec struct {
 	Services        *FeatureStoreServices `json:"services,omitempty"`
 	AuthzConfig     *AuthzConfig          `json:"authz,omitempty"`
 	CronJob         *FeastCronJob         `json:"cronJob,omitempty"`
+	BatchEngine     *BatchEngineConfig    `json:"batchEngine,omitempty"`
+	// Replicas is the desired number of pod replicas. Used by the scale sub-resource.
+	// Mutually exclusive with services.scaling.autoscaling.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	Replicas *int32 `json:"replicas,omitempty"`
+	// Materialization controls feature materialization behavior (batch size, pull strategy).
+	// Written into feature_store.yaml for all service pods.
+	// +optional
+	Materialization *MaterializationConfig `json:"materialization,omitempty"`
+	// OpenLineage enables OpenLineage data lineage tracking for Feast operations.
+	// Written into feature_store.yaml for all service pods.
+	// +optional
+	OpenLineage *OpenLineageConfig `json:"openlineage,omitempty"`
 }
 
 // FeastProjectDir defines how to create the feast project directory.
@@ -105,7 +170,7 @@ type GitCloneOptions struct {
 type FeastInitOptions struct {
 	Minimal bool `json:"minimal,omitempty"`
 	// Template for the created project
-	// +kubebuilder:validation:Enum=local;gcp;aws;snowflake;spark;postgres;hbase;cassandra;hazelcast;ikv;couchbase;clickhouse
+	// +kubebuilder:validation:Enum=local;gcp;aws;snowflake;spark;postgres;hbase;cassandra;hazelcast;couchbase;clickhouse
 	Template string `json:"template,omitempty"`
 }
 
@@ -153,6 +218,15 @@ type FeastCronJob struct {
 
 	// The number of failed finished jobs to retain. Value must be non-negative integer.
 	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
+}
+
+// BatchEngineConfig defines the batch compute engine configuration.
+type BatchEngineConfig struct {
+	// Reference to a ConfigMap containing the batch engine configuration.
+	// The ConfigMap should contain YAML-formatted config with 'type' and engine-specific fields.
+	ConfigMapRef *corev1.LocalObjectReference `json:"configMapRef,omitempty"`
+	// Key name in the ConfigMap. Defaults to "config" if not specified.
+	ConfigMapKey string `json:"configMapKey,omitempty"`
 }
 
 // JobSpec describes how the job execution will look like.
@@ -287,10 +361,75 @@ type FeatureStoreServices struct {
 	UI                 *ServerConfigs             `json:"ui,omitempty"`
 	DeploymentStrategy *appsv1.DeploymentStrategy `json:"deploymentStrategy,omitempty"`
 	SecurityContext    *corev1.PodSecurityContext `json:"securityContext,omitempty"`
+	// PodAnnotations are annotations to be applied to the Deployment's PodTemplate metadata.
+	// This enables annotation-driven integrations like OpenTelemetry auto-instrumentation,
+	// Istio sidecar injection, Vault agent injection, etc.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 	// Disable the 'feast repo initialization' initContainer
 	DisableInitContainers bool `json:"disableInitContainers,omitempty"`
+	// Runs feast apply on pod start to populate the registry. Defaults to true. Ignored when DisableInitContainers is true.
+	RunFeastApplyOnInit *bool `json:"runFeastApplyOnInit,omitempty"`
 	// Volumes specifies the volumes to mount in the FeatureStore deployment. A corresponding `VolumeMount` should be added to whichever feast service(s) require access to said volume(s).
 	Volumes []corev1.Volume `json:"volumes,omitempty"`
+	// Scaling configures horizontal scaling for the FeatureStore deployment (e.g. HPA autoscaling).
+	// For static replicas, use spec.replicas instead.
+	Scaling *ScalingConfig `json:"scaling,omitempty"`
+	// PodDisruptionBudgets configures a PodDisruptionBudget for the FeatureStore deployment.
+	// Only created when scaling is enabled (replicas > 1 or autoscaling).
+	// +optional
+	PodDisruptionBudgets *PDBConfig `json:"podDisruptionBudgets,omitempty"`
+	// TopologySpreadConstraints defines how pods are spread across topology domains.
+	// When scaling is enabled and this is not set, the operator auto-injects a soft
+	// zone-spread constraint (whenUnsatisfiable: ScheduleAnyway).
+	// Set to an empty array to disable auto-injection.
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	// Affinity defines the pod scheduling constraints for the FeatureStore deployment.
+	// When scaling is enabled and this is not set, the operator auto-injects a soft
+	// pod anti-affinity rule to prefer spreading pods across nodes.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+}
+
+// ScalingConfig configures horizontal scaling for the FeatureStore deployment.
+type ScalingConfig struct {
+	// Autoscaling configures a HorizontalPodAutoscaler for the FeatureStore deployment.
+	// Mutually exclusive with spec.replicas.
+	// +optional
+	Autoscaling *AutoscalingConfig `json:"autoscaling,omitempty"`
+}
+
+// AutoscalingConfig defines HPA settings for the FeatureStore deployment.
+type AutoscalingConfig struct {
+	// MinReplicas is the lower limit for the number of replicas. Defaults to 1.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
+	// MaxReplicas is the upper limit for the number of replicas. Required.
+	// +kubebuilder:validation:Minimum=1
+	MaxReplicas int32 `json:"maxReplicas"`
+	// Metrics contains the specifications for which to use to calculate the desired replica count.
+	// If not set, defaults to 80% CPU utilization.
+	// +optional
+	Metrics []autoscalingv2.MetricSpec `json:"metrics,omitempty"`
+	// Behavior configures the scaling behavior of the target.
+	// +optional
+	Behavior *autoscalingv2.HorizontalPodAutoscalerBehavior `json:"behavior,omitempty"`
+}
+
+// PDBConfig configures a PodDisruptionBudget for the FeatureStore deployment.
+// Exactly one of minAvailable or maxUnavailable must be set.
+// +kubebuilder:validation:XValidation:rule="[has(self.minAvailable), has(self.maxUnavailable)].exists_one(c, c)",message="Exactly one of minAvailable or maxUnavailable must be set."
+type PDBConfig struct {
+	// MinAvailable specifies the minimum number/percentage of pods that must remain available.
+	// Mutually exclusive with maxUnavailable.
+	// +optional
+	MinAvailable *intstr.IntOrString `json:"minAvailable,omitempty"`
+	// MaxUnavailable specifies the maximum number/percentage of pods that can be unavailable.
+	// Mutually exclusive with minAvailable.
+	// +optional
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }
 
 // OfflineStore configures the offline store service
@@ -323,7 +462,7 @@ var ValidOfflineStoreFilePersistenceTypes = []string{
 // OfflineStoreDBStorePersistence configures the DB store persistence for the offline store service
 type OfflineStoreDBStorePersistence struct {
 	// Type of the persistence type you want to use.
-	// +kubebuilder:validation:Enum=snowflake.offline;bigquery;redshift;spark;postgres;trino;athena;mssql;couchbase.offline;clickhouse;ray
+	// +kubebuilder:validation:Enum=snowflake.offline;bigquery;redshift;spark;postgres;trino;athena;mssql;couchbase.offline;clickhouse;ray;oracle
 	Type string `json:"type"`
 	// Data store parameters should be placed as-is from the "feature_store.yaml" under the secret key. "registry_type" & "type" fields should be removed.
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
@@ -343,6 +482,7 @@ var ValidOfflineStoreDBStorePersistenceTypes = []string{
 	"couchbase.offline",
 	"clickhouse",
 	"ray",
+	"oracle",
 }
 
 // OnlineStore configures the online store service
@@ -350,6 +490,71 @@ type OnlineStore struct {
 	// Creates a feature server container
 	Server      *ServerConfigs          `json:"server,omitempty"`
 	Persistence *OnlineStorePersistence `json:"persistence,omitempty"`
+	// Serving configures the Feast feature_server section written into feature_store.yaml for the online serve pod.
+	// Controls metrics granularity, offline push batching, and MCP.
+	// +optional
+	Serving *ServingConfig `json:"serving,omitempty"`
+}
+
+// ServingConfig configures the feature_server section of the generated feature_store.yaml.
+// When Mcp is set, the feature server type is switched to "mcp"; otherwise "local" is used.
+type ServingConfig struct {
+	// Metrics configures per-category Prometheus metrics for the feature server.
+	// Coexists with the server.metrics bool flag — both can be set simultaneously.
+	// +optional
+	Metrics *ServingMetricsConfig `json:"metrics,omitempty"`
+	// OfflinePushBatching batches writes to the offline store via the /push endpoint.
+	// +optional
+	OfflinePushBatching *OfflinePushBatchingConfig `json:"offlinePushBatching,omitempty"`
+	// Mcp enables MCP (Model Context Protocol) server support. When set, feature server type is "mcp".
+	// +optional
+	Mcp *McpConfig `json:"mcp,omitempty"`
+}
+
+// ServingMetricsConfig controls per-category Prometheus metrics for the feature server.
+// Setting Enabled to true activates the metrics HTTP server on port 8000.
+// All metric categories default to true when enabled; use Categories to selectively disable them.
+type ServingMetricsConfig struct {
+	// Enable the Prometheus metrics endpoint on port 8000.
+	Enabled bool `json:"enabled"`
+	// Categories selectively enables or disables individual Feast metric categories.
+	// Keys are Feast MetricsConfig field names (e.g. "resource", "request",
+	// "online_features", "push", "materialization", "freshness"). Omitted keys
+	// default to true when metrics is enabled.
+	// +optional
+	Categories map[string]bool `json:"categories,omitempty"`
+}
+
+// OfflinePushBatchingConfig controls batching of writes to the offline store via the /push endpoint.
+// Recommended for high-throughput push workloads (streaming pipelines, IoT) to prevent OOM.
+type OfflinePushBatchingConfig struct {
+	// Enable offline push batching.
+	Enabled bool `json:"enabled"`
+	// Maximum number of rows per offline write batch.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	BatchSize *int32 `json:"batchSize,omitempty"`
+	// Seconds between batch flushes to the offline store.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	BatchIntervalSeconds *int32 `json:"batchIntervalSeconds,omitempty"`
+}
+
+// McpConfig enables MCP (Model Context Protocol) server support in the feature server.
+// When this field is set on ServingConfig, the feature server type is switched to "mcp".
+type McpConfig struct {
+	// Enable the MCP server.
+	Enabled bool `json:"enabled"`
+	// MCP server name for identification. Defaults to "feast-mcp-server".
+	// +optional
+	ServerName *string `json:"serverName,omitempty"`
+	// MCP server version string. Defaults to "1.0.0".
+	// +optional
+	ServerVersion *string `json:"serverVersion,omitempty"`
+	// MCP transport protocol.
+	// +kubebuilder:validation:Enum=sse;http
+	// +optional
+	Transport *string `json:"transport,omitempty"`
 }
 
 // OnlineStorePersistence configures the persistence settings for the online store service
@@ -371,7 +576,7 @@ type OnlineStoreFilePersistence struct {
 // OnlineStoreDBStorePersistence configures the DB store persistence for the online store service
 type OnlineStoreDBStorePersistence struct {
 	// Type of the persistence type you want to use.
-	// +kubebuilder:validation:Enum=snowflake.online;redis;ikv;datastore;dynamodb;bigtable;postgres;cassandra;mysql;hazelcast;singlestore;hbase;elasticsearch;qdrant;couchbase.online;milvus;hybrid
+	// +kubebuilder:validation:Enum=snowflake.online;redis;datastore;dynamodb;bigtable;postgres;cassandra;mysql;hazelcast;singlestore;hbase;elasticsearch;qdrant;couchbase.online;milvus;hybrid;mongodb
 	Type string `json:"type"`
 	// Data store parameters should be placed as-is from the "feature_store.yaml" under the secret key. "registry_type" & "type" fields should be removed.
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
@@ -382,7 +587,6 @@ type OnlineStoreDBStorePersistence struct {
 var ValidOnlineStoreDBStorePersistenceTypes = []string{
 	"snowflake.online",
 	"redis",
-	"ikv",
 	"datastore",
 	"dynamodb",
 	"bigtable",
@@ -397,6 +601,7 @@ var ValidOnlineStoreDBStorePersistenceTypes = []string{
 	"couchbase.online",
 	"milvus",
 	"hybrid",
+	"mongodb",
 }
 
 // LocalRegistryConfig configures the registry service
@@ -523,6 +728,44 @@ type ServerConfigs struct {
 	// required by the Feast components. Ensure that each volume mount has a corresponding
 	// volume definition in the Volumes field.
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+	// WorkerConfigs defines the worker configuration for the Feast server.
+	// These options are primarily used for production deployments to optimize performance.
+	WorkerConfigs *WorkerConfigs `json:"workerConfigs,omitempty"`
+}
+
+// WorkerConfigs defines the worker configuration for Feast servers.
+// These settings control gunicorn worker processes for production deployments.
+type WorkerConfigs struct {
+	// Workers is the number of worker processes. Use -1 to auto-calculate based on CPU cores (2 * CPU + 1).
+	// Defaults to 1 if not specified.
+	// +kubebuilder:validation:Minimum=-1
+	// +optional
+	Workers *int32 `json:"workers,omitempty"`
+	// WorkerConnections is the maximum number of simultaneous clients per worker process.
+	// Defaults to 1000.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	WorkerConnections *int32 `json:"workerConnections,omitempty"`
+	// MaxRequests is the maximum number of requests a worker will process before restarting.
+	// This helps prevent memory leaks. Defaults to 1000.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxRequests *int32 `json:"maxRequests,omitempty"`
+	// MaxRequestsJitter is the maximum jitter to add to max-requests to prevent
+	// thundering herd effect on worker restart. Defaults to 50.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxRequestsJitter *int32 `json:"maxRequestsJitter,omitempty"`
+	// KeepAliveTimeout is the timeout for keep-alive connections in seconds.
+	// Defaults to 30.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	KeepAliveTimeout *int32 `json:"keepAliveTimeout,omitempty"`
+	// RegistryTTLSeconds is the number of seconds after which the registry is refreshed.
+	// Higher values reduce refresh overhead but increase staleness. Defaults to 60.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RegistryTTLSeconds *int32 `json:"registryTTLSeconds,omitempty"`
 }
 
 // RegistryServerConfigs creates a registry server for the feast service, with specified container configurations.
@@ -588,7 +831,34 @@ type KubernetesAuthz struct {
 // OidcAuthz defines the authorization settings for deployments using an Open ID Connect identity provider.
 // https://auth0.com/docs/authenticate/protocols/openid-connect-protocol
 type OidcAuthz struct {
-	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+	// OIDC issuer URL. The operator appends /.well-known/openid-configuration to derive the discovery endpoint.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^https://\S+$`
+	IssuerUrl string `json:"issuerUrl,omitempty"`
+	// Secret with OIDC properties (auth_discovery_url, client_id, client_secret). issuerUrl takes precedence.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+	// Key in the Secret containing all OIDC properties as a YAML value. If unset, each key is a property.
+	// +optional
+	SecretKeyName string `json:"secretKeyName,omitempty"`
+	// Env var name for client pods to read an OIDC token from. Sets token_env_var in client config.
+	// +optional
+	TokenEnvVar *string `json:"tokenEnvVar,omitempty"`
+	// Verify SSL certificates for the OIDC provider. Defaults to true.
+	// +optional
+	VerifySSL *bool `json:"verifySSL,omitempty"`
+	// ConfigMap with the CA certificate for self-signed OIDC providers. Auto-detected on RHOAI/ODH.
+	// +optional
+	CACertConfigMap *OidcCACertConfigMap `json:"caCertConfigMap,omitempty"`
+}
+
+// OidcCACertConfigMap references a ConfigMap containing a CA certificate for OIDC provider TLS.
+type OidcCACertConfigMap struct {
+	// ConfigMap name.
+	Name string `json:"name"`
+	// Key in the ConfigMap holding the PEM certificate. Defaults to "ca-bundle.crt".
+	// +optional
+	Key string `json:"key,omitempty"`
 }
 
 // TlsConfigs configures server TLS for a feast service. in an openshift cluster, this is configured by default using service serving certificates.
@@ -642,6 +912,20 @@ type FeatureStoreStatus struct {
 	FeastVersion     string             `json:"feastVersion,omitempty"`
 	Phase            string             `json:"phase,omitempty"`
 	ServiceHostnames ServiceHostnames   `json:"serviceHostnames,omitempty"`
+	// Replicas is the current number of ready pod replicas (used by the scale sub-resource).
+	Replicas int32 `json:"replicas,omitempty"`
+	// Selector is the label selector for pods managed by the FeatureStore deployment (used by the scale sub-resource).
+	Selector string `json:"selector,omitempty"`
+	// ScalingStatus reports the current scaling state of the FeatureStore deployment.
+	ScalingStatus *ScalingStatus `json:"scalingStatus,omitempty"`
+}
+
+// ScalingStatus reports the observed scaling state.
+type ScalingStatus struct {
+	// CurrentReplicas is the current number of pod replicas.
+	CurrentReplicas int32 `json:"currentReplicas,omitempty"`
+	// DesiredReplicas is the desired number of pod replicas.
+	DesiredReplicas int32 `json:"desiredReplicas,omitempty"`
 }
 
 // ServiceHostnames defines the service hostnames in the format of <domain>:<port>, e.g. example.svc.cluster.local:80
@@ -658,6 +942,7 @@ type ServiceHostnames struct {
 // +kubebuilder:resource:shortName=feast
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:storageversion
 
 // FeatureStore is the Schema for the featurestores API

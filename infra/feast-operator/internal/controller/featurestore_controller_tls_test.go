@@ -193,6 +193,16 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 			Expect(deploy.Spec.Replicas).To(Equal(int32Ptr(1)))
 			Expect(controllerutil.HasControllerReference(deploy)).To(BeTrue())
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(4))
+
+			// verify init containers have TLS volume mounts after reconciliation
+			Expect(deploy.Spec.Template.Spec.InitContainers).NotTo(BeEmpty())
+			for _, initContainer := range deploy.Spec.Template.Spec.InitContainers {
+				Expect(initContainer.VolumeMounts).To(ContainElement(SatisfyAll(
+					HaveField("MountPath", services.GetTlsPath(services.RegistryFeastType)),
+					HaveField("ReadOnly", true),
+				)), "init container %s should have registry TLS volume mount", initContainer.Name)
+			}
+
 			svc := &corev1.Service{}
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      feast.GetFeastServiceName(services.RegistryFeastType),
@@ -245,7 +255,7 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cmList.Items).To(HaveLen(1))
+			Expect(cmList.Items).To(HaveLen(2))
 
 			// check deployment
 			deploy := &appsv1.Deployment{}
@@ -257,7 +267,7 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(4))
 			registryContainer := services.GetRegistryContainer(*deploy)
-			Expect(registryContainer.Env).To(HaveLen(1))
+			Expect(registryContainer.Env).To(HaveLen(2))
 			env := getFeatureStoreYamlEnvVar(registryContainer.Env)
 			Expect(env).NotTo(BeNil())
 
@@ -278,7 +288,7 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 
 			// check offline config
 			offlineContainer := services.GetOfflineContainer(*deploy)
-			Expect(offlineContainer.Env).To(HaveLen(1))
+			Expect(offlineContainer.Env).To(HaveLen(2))
 			env = getFeatureStoreYamlEnvVar(offlineContainer.Env)
 			Expect(env).NotTo(BeNil())
 
@@ -295,7 +305,7 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 
 			// check online config
 			onlineContainer := services.GetOnlineContainer(*deploy)
-			Expect(onlineContainer.Env).To(HaveLen(1))
+			Expect(onlineContainer.Env).To(HaveLen(2))
 			env = getFeatureStoreYamlEnvVar(onlineContainer.Env)
 			Expect(env).NotTo(BeNil())
 
@@ -309,7 +319,7 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 			err = yaml.Unmarshal(envByte, repoConfigOnline)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfigOnline).To(Equal(&testConfig))
-			Expect(deploy.Spec.Template.Spec.Containers[0].Env).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Env).To(HaveLen(2))
 
 			// check client config
 			cm := &corev1.ConfigMap{}
@@ -400,6 +410,14 @@ var _ = Describe("FeatureStore Controller - Feast service TLS", func() {
 			}, deploy)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
+
+			// verify init containers have remote registry TLS volume mounts
+			for _, initContainer := range deploy.Spec.Template.Spec.InitContainers {
+				Expect(initContainer.VolumeMounts).To(ContainElement(SatisfyAll(
+					HaveField("MountPath", services.GetTlsPath(services.RegistryFeastType)),
+					HaveField("ReadOnly", true),
+				)), "init container %s should have remote registry TLS volume mount", initContainer.Name)
+			}
 
 			// check offline config
 			offlineContainer = services.GetOfflineContainer(*deploy)
@@ -530,6 +548,12 @@ var _ = Describe("Test mountCustomCABundle functionality", func() {
 				HaveField("MountPath", tlsPathCustomCABundle),
 			)))
 		}
+		for _, initContainer := range deploy.Spec.Template.Spec.InitContainers {
+			Expect(initContainer.VolumeMounts).To(ContainElement(SatisfyAll(
+				HaveField("Name", configMapName),
+				HaveField("MountPath", tlsPathCustomCABundle),
+			)), "init container %s should have CA bundle volume mount", initContainer.Name)
+		}
 	})
 
 	It("should not mount CA bundle volume or container mounts when ConfigMap is absent", func() {
@@ -569,6 +593,11 @@ var _ = Describe("Test mountCustomCABundle functionality", func() {
 		Expect(deploy.Spec.Template.Spec.Volumes).NotTo(ContainElement(HaveField("Name", configMapName)))
 		for _, container := range deploy.Spec.Template.Spec.Containers {
 			Expect(container.VolumeMounts).NotTo(ContainElement(HaveField("Name", configMapName)))
+		}
+		for _, initContainer := range deploy.Spec.Template.Spec.InitContainers {
+			Expect(initContainer.VolumeMounts).NotTo(ContainElement(
+				HaveField("Name", configMapName),
+			), "init container %s should not have CA bundle mount when ConfigMap is absent", initContainer.Name)
 		}
 	})
 })

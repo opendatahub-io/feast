@@ -23,24 +23,33 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -65,6 +74,29 @@ func init() {
 	utilruntime.Must(feastdevv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(feastdevv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+func newCacheOptions() cache.Options {
+	managedBySelector := labels.SelectorFromSet(labels.Set{
+		services.ManagedByLabelKey: services.ManagedByLabelValue,
+	})
+	managedByFilter := cache.ByObject{Label: managedBySelector}
+
+	return cache.Options{
+		DefaultTransform: cache.TransformStripManagedFields(),
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.ConfigMap{}:                      managedByFilter,
+			&appsv1.Deployment{}:                     managedByFilter,
+			&corev1.Service{}:                        managedByFilter,
+			&corev1.ServiceAccount{}:                 managedByFilter,
+			&corev1.PersistentVolumeClaim{}:          managedByFilter,
+			&rbacv1.RoleBinding{}:                    managedByFilter,
+			&rbacv1.Role{}:                           managedByFilter,
+			&batchv1.CronJob{}:                       managedByFilter,
+			&autoscalingv2.HorizontalPodAutoscaler{}: managedByFilter,
+			&policyv1.PodDisruptionBudget{}:          managedByFilter,
+		},
+	}
 }
 
 func main() {
@@ -113,7 +145,7 @@ func main() {
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/metrics/server
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -131,7 +163,7 @@ func main() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
 		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.4/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
@@ -153,11 +185,26 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
+		Cache: newCacheOptions(),
 		Client: client.Options{
 			Cache: &client.CacheOptions{
+				// Bypass the label-filtered informer cache for all reads so that
+				// pre-existing resources without the managed-by label are still
+				// visible to the reconciler. The ByObject cache filter above still
+				// restricts the watch to managed-by-labeled objects, limiting
+				// memory usage while avoiding upgrade deadlocks.
 				DisableFor: []client.Object{
 					&corev1.ConfigMap{},
 					&corev1.Secret{},
+					&appsv1.Deployment{},
+					&corev1.Service{},
+					&corev1.ServiceAccount{},
+					&corev1.PersistentVolumeClaim{},
+					&rbacv1.RoleBinding{},
+					&rbacv1.Role{},
+					&batchv1.CronJob{},
+					&autoscalingv2.HorizontalPodAutoscaler{},
+					&policyv1.PodDisruptionBudget{},
 				},
 			},
 		},
@@ -185,11 +232,9 @@ func main() {
 		Kind:    "Notebook",
 	}
 	// Validate Notebook CRD availability and skip controller setup if CRD is missing
-	crdExists, err := validateNotebookCRD(mgr.GetConfig(), notebookGVK)
+	crdExists, err := validateNotebookCRD(context.Background(), mgr.GetConfig(), notebookGVK)
 	if err != nil {
 		setupLog.Error(err, "Notebook CRD validation failed for feast specific configmap", "GVK", notebookGVK)
-		// If we can't verify (e.g., permission denied), set up controller anyway
-		// If CRD is confirmed missing, skip controller setup
 		if !crdExists {
 			setupLog.Info("Skipping Notebook ConfigMap controller setup - Notebook CRD not found")
 		} else {
@@ -197,15 +242,23 @@ func main() {
 		}
 	}
 	if crdExists {
-		if err = (&controller.NotebookConfigMapReconciler{
-			Client:      mgr.GetClient(),
-			Scheme:      mgr.GetScheme(),
-			NotebookGVK: notebookGVK,
-		}).SetupWithManager(mgr); err != nil {
+		if err = setupNotebookController(mgr, notebookGVK); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "NotebookConfigMap")
 			os.Exit(1)
 		}
-		setupLog.Info("Notebook ConfigMap controller setup completed successfully")
+	} else {
+		// CRD not found at startup (not an error, just not installed yet).
+		// During DSC deployment the Notebook CRD may be installed after the Feast
+		// operator starts. Poll in the background and trigger a process restart
+		// when the CRD appears so the controller can register during normal startup.
+		// Dynamic controller registration on a running manager is not supported by
+		// controller-runtime v0.18 (cache sync fails for late-added informers).
+		setupLog.Info("Notebook CRD not found at startup, will poll for CRD availability", "GVK", notebookGVK)
+		if addErr := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return waitForCRDAndRestart(ctx, mgr.GetConfig(), notebookGVK)
+		})); addErr != nil {
+			setupLog.Error(addErr, "Failed to add CRD watcher runnable")
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
@@ -227,7 +280,7 @@ func main() {
 
 // validateNotebookCRD checks if the Notebook CRD exists in the cluster
 // Returns (crdExists bool, error) where crdExists is true if CRD exists, false if not found or unknown
-func validateNotebookCRD(config *rest.Config, gvk schema.GroupVersionKind) (bool, error) {
+func validateNotebookCRD(ctx context.Context, config *rest.Config, gvk schema.GroupVersionKind) (bool, error) {
 	apiextensionsClientset, err := apiextensionsclient.NewForConfig(config)
 	if err != nil {
 		return false, fmt.Errorf("failed to create apiextensions client: %w", err)
@@ -240,7 +293,7 @@ func validateNotebookCRD(config *rest.Config, gvk schema.GroupVersionKind) (bool
 	crdName := plural + "." + gvk.Group
 
 	_, err = apiextensionsClientset.ApiextensionsV1().CustomResourceDefinitions().Get(
-		context.Background(),
+		ctx,
 		crdName,
 		metav1.GetOptions{},
 	)
@@ -268,4 +321,48 @@ func validateNotebookCRD(config *rest.Config, gvk schema.GroupVersionKind) (bool
 
 	setupLog.Info("Notebook CRD validated successfully", "CRD", crdName, "GVK", gvk)
 	return true, nil
+}
+
+const crdPollInterval = 5 * time.Second
+
+func setupNotebookController(mgr ctrl.Manager, notebookGVK schema.GroupVersionKind) error {
+	if err := (&controller.NotebookConfigMapReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		NotebookGVK: notebookGVK,
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
+	setupLog.Info("Notebook ConfigMap controller setup completed successfully")
+	return nil
+}
+
+// waitForCRDAndRestart polls for the Notebook CRD and exits the process when
+// it becomes available. Kubernetes will restart the pod, and on the next startup
+// the controller registers normally via the standard code path. This avoids
+// dynamically adding controllers to a running manager, which causes cache sync
+// failures in controller-runtime v0.18.
+func waitForCRDAndRestart(ctx context.Context, config *rest.Config, gvk schema.GroupVersionKind) error {
+	ticker := time.NewTicker(crdPollInterval)
+	defer ticker.Stop()
+
+	setupLog.Info("Waiting for Notebook CRD to become available...", "GVK", gvk)
+
+	for {
+		select {
+		case <-ctx.Done():
+			setupLog.Info("Context cancelled, stopping CRD watch", "GVK", gvk)
+			return nil
+		case <-ticker.C:
+			crdExists, err := validateNotebookCRD(ctx, config, gvk)
+			if err != nil {
+				setupLog.Error(err, "Failed to check Notebook CRD availability, will retry")
+				continue
+			}
+			if crdExists {
+				setupLog.Info("Notebook CRD detected, restarting operator to initialize Notebook ConfigMap controller", "GVK", gvk)
+				os.Exit(0)
+			}
+		}
+	}
 }

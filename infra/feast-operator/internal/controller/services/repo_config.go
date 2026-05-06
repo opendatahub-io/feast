@@ -19,12 +19,15 @@ package services
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"gopkg.in/yaml.v3"
 )
+
+const oidcIssuerUrlEnvVar = "OIDC_ISSUER_URL"
 
 // GetServiceFeatureStoreYamlBase64 returns a base64 encoded feature_store.yaml config for the feast service
 func (feast *FeastServices) GetServiceFeatureStoreYamlBase64() (string, error) {
@@ -44,13 +47,16 @@ func (feast *FeastServices) getServiceFeatureStoreYaml() ([]byte, error) {
 }
 
 func (feast *FeastServices) getServiceRepoConfig() (RepoConfig, error) {
-	return getServiceRepoConfig(feast.Handler.FeatureStore, feast.extractConfigFromSecret)
+	odhCaBundleExists := feast.GetCustomCertificatesBundle().IsDefined
+	return getServiceRepoConfig(feast.Handler.FeatureStore, feast.extractConfigFromSecret, feast.extractConfigFromConfigMap, odhCaBundleExists)
 }
 
 func getServiceRepoConfig(
 	featureStore *feastdevv1.FeatureStore,
-	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error)) (RepoConfig, error) {
-	repoConfig, err := getBaseServiceRepoConfig(featureStore, secretExtractionFunc)
+	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error),
+	configMapExtractionFunc func(configMapRef string, configMapKey string) (map[string]interface{}, error),
+	odhCaBundleExists bool) (RepoConfig, error) {
+	repoConfig, err := getBaseServiceRepoConfig(featureStore, secretExtractionFunc, odhCaBundleExists)
 	if err != nil {
 		return repoConfig, err
 	}
@@ -78,42 +84,116 @@ func getServiceRepoConfig(
 		}
 	}
 
+	if appliedSpec.BatchEngine != nil {
+		err := setRepoConfigBatchEngine(appliedSpec.BatchEngine, configMapExtractionFunc, &repoConfig)
+		if err != nil {
+			return repoConfig, err
+		}
+	}
+
+	if appliedSpec.Services != nil && appliedSpec.Services.OnlineStore != nil &&
+		appliedSpec.Services.OnlineStore.Serving != nil {
+		setRepoConfigFeatureServer(appliedSpec.Services.OnlineStore.Serving, &repoConfig)
+	}
+
+	if appliedSpec.Materialization != nil {
+		setRepoConfigMaterialization(appliedSpec.Materialization, &repoConfig)
+	}
+
+	if appliedSpec.OpenLineage != nil {
+		if err := setRepoConfigOpenLineage(appliedSpec.OpenLineage, secretExtractionFunc, &repoConfig); err != nil {
+			return repoConfig, err
+		}
+	}
+
 	return repoConfig, nil
 }
 
 func getBaseServiceRepoConfig(
 	featureStore *feastdevv1.FeatureStore,
-	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error)) (RepoConfig, error) {
+	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error),
+	odhCaBundleExists bool) (RepoConfig, error) {
 
 	repoConfig := defaultRepoConfig(featureStore)
-	clientRepoConfig, err := getClientRepoConfig(featureStore, secretExtractionFunc, nil)
-	if err != nil {
-		return repoConfig, err
-	}
+	clientRepoConfig := getClientRepoConfig(featureStore, nil)
 	if isRemoteRegistry(featureStore) {
 		repoConfig.Registry = clientRepoConfig.Registry
 	}
-	repoConfig.AuthzConfig = clientRepoConfig.AuthzConfig
-
 	appliedSpec := featureStore.Status.Applied
 	if appliedSpec.AuthzConfig != nil && appliedSpec.AuthzConfig.OidcAuthz != nil {
-		propertiesMap, authSecretErr := secretExtractionFunc("", appliedSpec.AuthzConfig.OidcAuthz.SecretRef.Name, "")
-		if authSecretErr != nil {
-			return repoConfig, authSecretErr
-		}
-
+		repoConfig.AuthzConfig = AuthzConfig{Type: OidcAuthType}
+		oidcAuthz := appliedSpec.AuthzConfig.OidcAuthz
 		oidcParameters := map[string]interface{}{}
-		for _, oidcProperty := range OidcProperties {
-			if val, exists := propertiesMap[string(oidcProperty)]; exists {
-				oidcParameters[string(oidcProperty)] = val
-			} else {
-				return repoConfig, missingOidcSecretProperty(oidcProperty)
+
+		var secretProperties map[string]interface{}
+		if oidcAuthz.SecretRef != nil {
+			var err error
+			secretProperties, err = secretExtractionFunc("", oidcAuthz.SecretRef.Name, oidcAuthz.SecretKeyName)
+			if err != nil {
+				return repoConfig, err
+			}
+			for _, prop := range OidcOptionalSecretProperties {
+				if val, exists := secretProperties[string(prop)]; exists {
+					oidcParameters[string(prop)] = val
+				}
 			}
 		}
+
+		discoveryUrl, err := resolveAuthDiscoveryUrl(oidcAuthz, secretProperties)
+		if err != nil {
+			return repoConfig, err
+		}
+		oidcParameters[string(OidcAuthDiscoveryUrl)] = discoveryUrl
+
+		if oidcAuthz.VerifySSL != nil {
+			oidcParameters[string(OidcVerifySsl)] = *oidcAuthz.VerifySSL
+		}
+		if caCertPath := resolveOidcCACertPath(oidcAuthz, odhCaBundleExists); caCertPath != "" {
+			oidcParameters[string(OidcCaCertPath)] = caCertPath
+		}
 		repoConfig.AuthzConfig.OidcParameters = oidcParameters
+	} else {
+		repoConfig.AuthzConfig = clientRepoConfig.AuthzConfig
 	}
 
 	return repoConfig, nil
+}
+
+// resolveAuthDiscoveryUrl determines the OIDC discovery URL from the first available source.
+// Priority: CR issuerUrl > Secret auth_discovery_url > OIDC_ISSUER_URL env var.
+func resolveAuthDiscoveryUrl(oidcAuthz *feastdevv1.OidcAuthz, secretProperties map[string]interface{}) (string, error) {
+	if oidcAuthz.IssuerUrl != "" {
+		return issuerToDiscoveryUrl(oidcAuthz.IssuerUrl), nil
+	}
+
+	if val, ok := secretProperties[string(OidcAuthDiscoveryUrl)]; ok {
+		if s, ok := val.(string); ok && s != "" {
+			return s, nil
+		}
+	}
+
+	if envIssuer := os.Getenv(oidcIssuerUrlEnvVar); envIssuer != "" {
+		return issuerToDiscoveryUrl(envIssuer), nil
+	}
+
+	return "", fmt.Errorf("no OIDC discovery URL configured: set issuerUrl on the OidcAuthz CR, "+
+		"include auth_discovery_url in the referenced Secret, or ensure the %s environment variable is set on the operator pod", oidcIssuerUrlEnvVar)
+}
+
+func issuerToDiscoveryUrl(issuerUrl string) string {
+	return strings.TrimRight(issuerUrl, "/") + "/.well-known/openid-configuration"
+}
+
+// resolveOidcCACertPath determines the CA cert file path for OIDC provider TLS verification.
+// Priority: explicit CRD caCertConfigMap > ODH auto-detected bundle > empty (system CA fallback).
+func resolveOidcCACertPath(oidcAuthz *feastdevv1.OidcAuthz, odhCaBundleExists bool) string {
+	if oidcAuthz.CACertConfigMap != nil {
+		return tlsPathOidcCA
+	}
+	if odhCaBundleExists {
+		return tlsPathOdhCABundle
+	}
+	return ""
 }
 
 func setRepoConfigRegistry(services *feastdevv1.FeatureStoreServices, secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error), repoConfig *RepoConfig) error {
@@ -248,24 +328,166 @@ func setRepoConfigOffline(services *feastdevv1.FeatureStoreServices, secretExtra
 	return nil
 }
 
-func (feast *FeastServices) getClientFeatureStoreYaml(secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error)) ([]byte, error) {
-	clientRepo, err := getClientRepoConfig(feast.Handler.FeatureStore, secretExtractionFunc, feast)
-	if err != nil {
-		return []byte{}, err
+func setRepoConfigBatchEngine(
+	batchEngineConfig *feastdevv1.BatchEngineConfig,
+	configMapExtractionFunc func(configMapRef string, configMapKey string) (map[string]interface{}, error),
+	repoConfig *RepoConfig) error {
+	if batchEngineConfig.ConfigMapRef == nil {
+		return nil
 	}
+	configMapKey := batchEngineConfig.ConfigMapKey
+	if configMapKey == "" {
+		configMapKey = "config"
+	}
+	config, err := configMapExtractionFunc(batchEngineConfig.ConfigMapRef.Name, configMapKey)
+	if err != nil {
+		return err
+	}
+	// Extract type from config
+	engineType, ok := config["type"].(string)
+	if !ok {
+		return fmt.Errorf("batch engine config must contain 'type' field")
+	}
+	delete(config, "type")
+	repoConfig.BatchEngine = &ComputeEngineConfig{
+		Type:       engineType,
+		Parameters: config,
+	}
+	return nil
+}
+
+// setRepoConfigFeatureServer maps the CRD ServingConfig into the feature_server YAML block.
+// Type is set to "mcp" only when fs.Mcp is non-nil and fs.Mcp.Enabled is true; otherwise "local".
+func setRepoConfigFeatureServer(fs *feastdevv1.ServingConfig, repoConfig *RepoConfig) {
+	serverType := "local"
+	if fs.Mcp != nil && fs.Mcp.Enabled {
+		serverType = "mcp"
+	}
+
+	yamlCfg := &FeatureServerYamlConfig{
+		Type: serverType,
+	}
+
+	if fs.Metrics != nil {
+		m := &MetricsYamlConfig{
+			Enabled: fs.Metrics.Enabled,
+		}
+		if len(fs.Metrics.Categories) > 0 {
+			m.Categories = make(map[string]interface{}, len(fs.Metrics.Categories))
+			for k, v := range fs.Metrics.Categories {
+				m.Categories[k] = v
+			}
+		}
+		yamlCfg.Metrics = m
+	}
+
+	if fs.OfflinePushBatching != nil {
+		enabled := fs.OfflinePushBatching.Enabled
+		yamlCfg.OfflinePushBatchingEnabled = &enabled
+		yamlCfg.OfflinePushBatchingBatchSize = fs.OfflinePushBatching.BatchSize
+		yamlCfg.OfflinePushBatchingBatchIntervalSeconds = fs.OfflinePushBatching.BatchIntervalSeconds
+	}
+
+	if fs.Mcp != nil && fs.Mcp.Enabled {
+		enabled := fs.Mcp.Enabled
+		yamlCfg.McpEnabled = &enabled
+		yamlCfg.McpServerName = fs.Mcp.ServerName
+		yamlCfg.McpServerVersion = fs.Mcp.ServerVersion
+		yamlCfg.McpTransport = fs.Mcp.Transport
+	}
+
+	repoConfig.FeatureServer = yamlCfg
+}
+
+// setRepoConfigMaterialization maps the CRD MaterializationConfig into the materialization YAML block.
+func setRepoConfigMaterialization(mat *feastdevv1.MaterializationConfig, repoConfig *RepoConfig) {
+	yamlCfg := &MaterializationYamlConfig{
+		OnlineWriteBatchSize: mat.OnlineWriteBatchSize,
+	}
+	if len(mat.ExtraConfig) > 0 {
+		ec := make(map[string]interface{}, len(mat.ExtraConfig))
+		for k, v := range mat.ExtraConfig {
+			ec[k] = coerceStringToYamlType(v)
+		}
+		yamlCfg.ExtraConfig = ec
+	}
+	repoConfig.Materialization = yamlCfg
+}
+
+// setRepoConfigOpenLineage maps the CRD OpenLineageConfig into the openlineage YAML block.
+// When ApiKeySecretRef is set, the api_key value is resolved from the referenced Secret.
+// ExtraConfig string values are coerced to native YAML types (bool/int) so that Feast's
+// StrictBool/StrictInt Pydantic validators accept them correctly.
+func setRepoConfigOpenLineage(
+	ol *feastdevv1.OpenLineageConfig,
+	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error),
+	repoConfig *RepoConfig) error {
+
+	yamlCfg := &OpenLineageYamlConfig{
+		Enabled:           ol.Enabled,
+		TransportType:     ol.TransportType,
+		TransportUrl:      ol.TransportUrl,
+		TransportEndpoint: ol.TransportEndpoint,
+	}
+	if len(ol.ExtraConfig) > 0 {
+		ec := make(map[string]interface{}, len(ol.ExtraConfig))
+		for k, v := range ol.ExtraConfig {
+			ec[k] = coerceStringToYamlType(v)
+		}
+		yamlCfg.ExtraConfig = ec
+	}
+
+	if ol.ApiKeySecretRef != nil {
+		params, err := secretExtractionFunc("", ol.ApiKeySecretRef.Name, "")
+		if err != nil {
+			return fmt.Errorf("failed to read OpenLineage API key from secret %s: %w", ol.ApiKeySecretRef.Name, err)
+		}
+		apiKey, exists := params["api_key"]
+		if !exists {
+			return fmt.Errorf("secret %q does not contain the required key \"api_key\"", ol.ApiKeySecretRef.Name)
+		}
+		apiKeyStr, ok := apiKey.(string)
+		if !ok {
+			return fmt.Errorf("key \"api_key\" in secret %q must be a string, got %T", ol.ApiKeySecretRef.Name, apiKey)
+		}
+		yamlCfg.ApiKey = &apiKeyStr
+	}
+
+	repoConfig.OpenLineage = yamlCfg
+	return nil
+}
+
+// coerceStringToYamlType converts "true"/"false" strings to native Go booleans
+// so the YAML marshaler emits an unquoted boolean rather than a quoted string.
+// This is required because CRD map[string]string fields can only hold strings,
+// but Feast Pydantic StrictBool fields reject string inputs.
+//
+// Integer coercion is intentionally omitted: some ExtraConfig target fields are
+// typed as StrictStr (e.g. OpenLineageConfig.namespace, .producer), and coercing
+// a numeric string like "123" to int64 would cause a Pydantic validation failure
+// at runtime. Fields that genuinely require integers should be exposed as typed
+// CRD fields rather than going through ExtraConfig.
+func coerceStringToYamlType(v string) interface{} {
+	switch v {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return v
+}
+
+func (feast *FeastServices) getClientFeatureStoreYaml() ([]byte, error) {
+	clientRepo := getClientRepoConfig(feast.Handler.FeatureStore, feast)
 	return yaml.Marshal(clientRepo)
 }
 
 func getClientRepoConfig(
 	featureStore *feastdevv1.FeatureStore,
-	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error),
-	feast *FeastServices) (RepoConfig, error) {
+	feast *FeastServices) RepoConfig {
 	status := featureStore.Status
 	appliedServices := status.Applied.Services
-	clientRepoConfig, err := getRepoConfig(featureStore, secretExtractionFunc)
-	if err != nil {
-		return clientRepoConfig, err
-	}
+	clientRepoConfig := getRepoConfig(featureStore)
 	if len(status.ServiceHostnames.OfflineStore) > 0 {
 		clientRepoConfig.OfflineStore = OfflineStoreConfig{
 			Type: OfflineRemoteConfigType,
@@ -303,12 +525,10 @@ func getClientRepoConfig(
 		}
 	}
 
-	return clientRepoConfig, nil
+	return clientRepoConfig
 }
 
-func getRepoConfig(
-	featureStore *feastdevv1.FeatureStore,
-	secretExtractionFunc func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error)) (RepoConfig, error) {
+func getRepoConfig(featureStore *feastdevv1.FeatureStore) RepoConfig {
 	status := featureStore.Status
 	repoConfig := initRepoConfig(status.Applied.FeastProject)
 	if status.Applied.AuthzConfig != nil {
@@ -320,24 +540,16 @@ func getRepoConfig(
 			repoConfig.AuthzConfig = AuthzConfig{
 				Type: OidcAuthType,
 			}
-
-			propertiesMap, err := secretExtractionFunc("", status.Applied.AuthzConfig.OidcAuthz.SecretRef.Name, "")
-			if err != nil {
-				return repoConfig, err
-			}
-
 			oidcClientProperties := map[string]interface{}{}
-			for _, oidcProperty := range OidcProperties {
-				if val, exists := propertiesMap[string(oidcProperty)]; exists {
-					oidcClientProperties[string(oidcProperty)] = val
-				} else {
-					return repoConfig, missingOidcSecretProperty(oidcProperty)
-				}
+			if status.Applied.AuthzConfig.OidcAuthz.TokenEnvVar != nil {
+				oidcClientProperties[string(OidcTokenEnvVar)] = *status.Applied.AuthzConfig.OidcAuthz.TokenEnvVar
 			}
-			repoConfig.AuthzConfig.OidcParameters = oidcClientProperties
+			if len(oidcClientProperties) > 0 {
+				repoConfig.AuthzConfig.OidcParameters = oidcClientProperties
+			}
 		}
 	}
-	return repoConfig, nil
+	return repoConfig
 }
 
 func getActualPath(filePath string, pvcConfig *feastdevv1.PvcConfig) string {
@@ -386,6 +598,26 @@ func (feast *FeastServices) extractConfigFromSecret(storeType string, secretRef 
 	}
 
 	return parameters, nil
+}
+
+func (feast *FeastServices) extractConfigFromConfigMap(configMapRef string, configMapKey string) (map[string]interface{}, error) {
+	configMap, err := feast.getConfigMap(configMapRef)
+	if err != nil {
+		return nil, err
+	}
+	if configMapKey == "" {
+		configMapKey = "config"
+	}
+	val, exists := configMap.Data[configMapKey]
+	if !exists {
+		return nil, fmt.Errorf("configmap key %s doesn't exist in configmap %s", configMapKey, configMapRef)
+	}
+	var config map[string]interface{}
+	err = yaml.Unmarshal([]byte(val), &config)
+	if err != nil {
+		return nil, fmt.Errorf("configmap %s contains invalid YAML in key %s", configMapRef, configMapKey)
+	}
+	return config, nil
 }
 
 func mergeStructWithDBParametersMap(parametersMap *map[string]interface{}, s interface{}) error {

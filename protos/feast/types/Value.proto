@@ -45,6 +45,29 @@ message ValueType {
     NULL = 19;
     MAP = 20;
     MAP_LIST = 21;
+    BYTES_SET = 22;
+    STRING_SET = 23;
+    INT32_SET = 24;
+    INT64_SET = 25;
+    DOUBLE_SET = 26;
+    FLOAT_SET = 27;
+    BOOL_SET = 28;
+    UNIX_TIMESTAMP_SET = 29;
+    JSON = 32;
+    JSON_LIST = 33;
+    STRUCT = 34;
+    STRUCT_LIST = 35;
+    UUID = 36;
+    TIME_UUID = 37;
+    UUID_LIST = 38;
+    TIME_UUID_LIST = 39;
+    UUID_SET = 40;
+    TIME_UUID_SET = 41;
+    VALUE_LIST = 42;
+    VALUE_SET = 43;
+    DECIMAL = 44;
+    DECIMAL_LIST = 45;
+    DECIMAL_SET = 46;
   }
 }
 
@@ -72,6 +95,29 @@ message Value {
     Null null_val = 19;
     Map map_val = 20;
     MapList map_list_val = 21;
+    BytesSet bytes_set_val = 22;
+    StringSet string_set_val = 23;
+    Int32Set int32_set_val = 24;
+    Int64Set int64_set_val = 25;
+    DoubleSet double_set_val = 26;
+    FloatSet float_set_val = 27;
+    BoolSet bool_set_val = 28;
+    Int64Set unix_timestamp_set_val = 29;
+    string json_val = 32;
+    StringList json_list_val = 33;
+    Map struct_val = 34;
+    MapList struct_list_val = 35;
+    string uuid_val = 36;
+    string time_uuid_val = 37;
+    StringList uuid_list_val = 38;
+    StringList time_uuid_list_val = 39;
+    StringSet uuid_set_val = 40;
+    StringSet time_uuid_set_val = 41;
+    RepeatedValue list_val = 42;
+    RepeatedValue set_val = 43;
+    string decimal_val = 44;
+    StringList decimal_list_val = 45;
+    StringSet decimal_set_val = 46;
   }
 }
 
@@ -104,6 +150,34 @@ message FloatList {
 }
 
 message BoolList {
+  repeated bool val = 1;
+}
+
+message BytesSet {
+  repeated bytes val = 1;
+}
+
+message StringSet {
+  repeated string val = 1;
+}
+
+message Int32Set {
+  repeated int32 val = 1;
+}
+
+message Int64Set {
+  repeated int64 val = 1;
+}
+
+message DoubleSet {
+  repeated double val = 1;
+}
+
+message FloatSet {
+  repeated float val = 1;
+}
+
+message BoolSet {
   repeated bool val = 1;
 }
 

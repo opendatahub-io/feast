@@ -77,7 +77,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			if err != nil && errors.IsNotFound(err) {
 				resource := createFeatureStoreResource(resourceName, image, pullPolicy, &[]corev1.EnvVar{}, withEnvFrom())
 				resource.Spec.AuthzConfig = &feastdevv1.AuthzConfig{OidcAuthz: &feastdevv1.OidcAuthz{
-					SecretRef: corev1.LocalObjectReference{
+					SecretRef: &corev1.LocalObjectReference{
 						Name: oidcSecretName,
 					},
 				}}
@@ -134,7 +134,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			Expect(resource.Status.Applied.FeastProject).To(Equal(resource.Spec.FeastProject))
 			expectedAuthzConfig := &feastdevv1.AuthzConfig{
 				OidcAuthz: &feastdevv1.OidcAuthz{
-					SecretRef: corev1.LocalObjectReference{
+					SecretRef: &corev1.LocalObjectReference{
 						Name: oidcSecretName,
 					},
 				},
@@ -179,7 +179,10 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			Expect(cond.Message).To(Equal(feastdevv1.DeploymentNotAvailableMessage))
 
 			cond = apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.AuthorizationReadyType)
-			Expect(cond).To(BeNil())
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(feastdevv1.ReadyReason))
+			Expect(cond.Message).To(Equal(feastdevv1.OidcAuthzReadyMessage))
 
 			cond = apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.RegistryReadyType)
 			Expect(cond).ToNot(BeNil())
@@ -221,7 +224,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deploy.Spec.Replicas).To(Equal(int32Ptr(1)))
 			Expect(controllerutil.HasControllerReference(deploy)).To(BeTrue())
-			Expect(deploy.Spec.Template.Spec.InitContainers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.InitContainers).To(HaveLen(2))
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(4))
 			Expect(deploy.Spec.Template.Spec.Volumes).To(HaveLen(1))
 			Expect(services.GetOfflineContainer(*deploy).VolumeMounts).To(HaveLen(1))
@@ -319,7 +322,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cmList.Items).To(HaveLen(1))
+			Expect(cmList.Items).To(HaveLen(2))
 
 			feast := services.FeastServices{
 				Handler: handler.FeastHandler{
@@ -476,7 +479,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal(feastdevv1.FailedReason))
 			Expect(cond.Type).To(Equal(feastdevv1.ReadyType))
-			Expect(cond.Message).To(ContainSubstring("missing OIDC"))
+			Expect(cond.Message).To(ContainSubstring("OIDC discovery URL"))
 		})
 	})
 })
@@ -496,12 +499,6 @@ func expectedServerOidcAuthorizConfig() services.AuthzConfig {
 func expectedClientOidcAuthorizConfig() services.AuthzConfig {
 	return services.AuthzConfig{
 		Type: services.OidcAuthType,
-		OidcParameters: map[string]interface{}{
-			string(services.OidcClientId):         "client-id",
-			string(services.OidcAuthDiscoveryUrl): "auth-discovery-url",
-			string(services.OidcClientSecret):     "client-secret",
-			string(services.OidcUsername):         "username",
-			string(services.OidcPassword):         "password"},
 	}
 }
 
@@ -529,7 +526,7 @@ func createValidOidcSecret(secretName string) *corev1.Secret {
 
 func createInvalidOidcSecret(secretName string) *corev1.Secret {
 	oidcProperties := validOidcSecretMap()
-	delete(oidcProperties, string(services.OidcClientId))
+	delete(oidcProperties, string(services.OidcAuthDiscoveryUrl))
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,

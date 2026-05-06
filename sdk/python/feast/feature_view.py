@@ -26,6 +26,11 @@ from feast.data_source import DataSource, KafkaSource, KinesisSource, PushSource
 from feast.entity import Entity
 from feast.feature_view_projection import FeatureViewProjection
 from feast.field import Field
+from feast.proto_utils import (
+    mode_to_string,
+    serialize_data_source,
+    transformation_to_proto,
+)
 from feast.protos.feast.core.FeatureView_pb2 import FeatureView as FeatureViewProto
 from feast.protos.feast.core.FeatureView_pb2 import (
     FeatureViewMeta as FeatureViewMetaProto,
@@ -36,12 +41,10 @@ from feast.protos.feast.core.FeatureView_pb2 import (
 from feast.protos.feast.core.FeatureView_pb2 import (
     MaterializationInterval as MaterializationIntervalProto,
 )
-from feast.protos.feast.core.Transformation_pb2 import (
-    FeatureTransformationV2 as FeatureTransformationProto,
-)
 from feast.transformation.mode import TransformationMode
 from feast.types import from_value_type
 from feast.value_type import ValueType
+from feast.version_utils import normalize_version_string
 
 warnings.simplefilter("once", DeprecationWarning)
 
@@ -71,9 +74,8 @@ class FeatureView(BaseFeatureView):
         ttl: The amount of time this group of features lives. A ttl of 0 indicates that
             this group of features lives forever. Note that large ttl's or a ttl of 0
             can result in extremely computationally intensive queries.
-        batch_source: The batch source of data where this group of features
-            is stored. This is optional ONLY if a push source is specified as the
-            stream_source, since push sources contain their own batch sources.
+        batch_source: Optional batch source of data where this group of features
+            is stored. If no source is provided, this will be None.
         stream_source: The stream source of data where this group of features is stored.
         schema: The schema of the feature view, including feature, timestamp, and entity
             columns. If not specified, can be inferred from the underlying data source.
@@ -87,6 +89,8 @@ class FeatureView(BaseFeatureView):
         tags: A dictionary of key-value pairs to store arbitrary metadata.
         owner: The owner of the feature view, typically the email of the primary
             maintainer.
+        org: The organizational unit that owns this feature view (e.g. "ads", "search").
+            Defaults to empty string.
         mode: The transformation mode for feature transformations. Only meaningful when
             transformations are applied. Choose from TransformationMode enum values
             (e.g., PYTHON, PANDAS, RAY, SQL, SPARK, SUBSTRAIT).
@@ -95,7 +99,7 @@ class FeatureView(BaseFeatureView):
     name: str
     entities: List[str]
     ttl: Optional[timedelta]
-    batch_source: DataSource
+    batch_source: Optional[DataSource]
     stream_source: Optional[DataSource]
     source_views: Optional[List["FeatureView"]]
     entity_columns: List[Field]
@@ -105,14 +109,16 @@ class FeatureView(BaseFeatureView):
     description: str
     tags: Dict[str, str]
     owner: str
+    org: str
     materialization_intervals: List[Tuple[datetime, datetime]]
     mode: Optional[Union["TransformationMode", str]]
+    enable_validation: bool
 
     def __init__(
         self,
         *,
         name: str,
-        source: Union[DataSource, "FeatureView", List["FeatureView"]],
+        source: Optional[Union[DataSource, "FeatureView", List["FeatureView"]]] = None,
         sink_source: Optional[DataSource] = None,
         schema: Optional[List[Field]] = None,
         entities: Optional[List[Entity]] = None,
@@ -122,15 +128,19 @@ class FeatureView(BaseFeatureView):
         description: str = "",
         tags: Optional[Dict[str, str]] = None,
         owner: str = "",
+        org: str = "",
         mode: Optional[Union["TransformationMode", str]] = None,
+        enable_validation: bool = False,
+        version: str = "latest",
     ):
         """
         Creates a FeatureView object.
 
         Args:
             name: The unique name of the feature view.
-            source: The source of data for this group of features. May be a stream source, or a batch source.
-                If a stream source, the source should contain a batch_source for backfills & batch materialization.
+            source (optional): The source of data for this group of features. May be a stream source,
+                a batch source, a FeatureView, or a list of FeatureViews. If None, the feature view
+                has no associated data source.
             schema (optional): The schema of the feature view, including feature, timestamp,
                 and entity columns.
             # TODO: clarify that schema is only useful here...
@@ -146,13 +156,23 @@ class FeatureView(BaseFeatureView):
             tags (optional): A dictionary of key-value pairs to store arbitrary metadata.
             owner (optional): The owner of the feature view, typically the email of the
                 primary maintainer.
+            org (optional): The organizational unit that owns this feature view
+                (e.g. "ads", "search").
             mode (optional): The transformation mode for feature transformations. Only meaningful
                 when transformations are applied. Choose from TransformationMode enum values.
+            enable_validation (optional): If True, enables schema validation during materialization
+                to check that data conforms to the declared feature types. Default is False.
+            version (optional): Version string for definition management. Controls which historical
+                snapshot is active after ``feast apply``. Only one version can be active per feature
+                view name per project. For concurrent multi-version testing, use separate projects
+                or distinct feature view names. Default is "latest".
 
         Raises:
             ValueError: A field mapping conflicts with an Entity or a Feature.
         """
         self.name = name
+        self.version = version
+        self.enable_validation = enable_validation
         self.entities = [e.name for e in entities] if entities else [DUMMY_ENTITY_NAME]
         self.ttl = ttl
         schema = schema or []
@@ -163,7 +183,9 @@ class FeatureView(BaseFeatureView):
         self.data_source: Optional[DataSource] = None
         self.source_views: List[FeatureView] = []
 
-        if isinstance(source, DataSource):
+        if source is None:
+            pass  # data_source remains None, source_views remains []
+        elif isinstance(source, DataSource):
             self.data_source = source
         elif isinstance(source, FeatureView):
             self.source_views = [source]
@@ -192,11 +214,14 @@ class FeatureView(BaseFeatureView):
         elif self.data_source:
             # Batch source definition
             self.batch_source = self.data_source
-        else:
+        elif self.source_views:
             # Derived view source definition
             if not sink_source:
                 raise ValueError("Derived FeatureView must specify `sink_source`.")
             self.batch_source = sink_source
+        else:
+            # source=None - no batch source
+            self.batch_source = None
 
         # Initialize features and entity columns.
         features: List[Field] = []
@@ -259,6 +284,7 @@ class FeatureView(BaseFeatureView):
             owner=owner,
             source=self.batch_source,
         )
+        self.org = org
         self.online = online
         self.offline = offline
         self.mode = mode
@@ -279,6 +305,11 @@ class FeatureView(BaseFeatureView):
             online=self.online,
             offline=self.offline,
             sink_source=self.batch_source if self.source_views else None,
+            enable_validation=self.enable_validation,
+            version=self.version,
+            description=self.description,
+            owner=self.owner,
+            org=self.org,
         )
 
         # This is deliberately set outside of the FV initialization as we do not have the Entity objects.
@@ -287,6 +318,28 @@ class FeatureView(BaseFeatureView):
         fv.entity_columns = copy.copy(self.entity_columns)
         fv.projection = copy.copy(self.projection)
         return fv
+
+    def _schema_or_udf_changed(self, other: "BaseFeatureView") -> bool:
+        """Check for FeatureView schema/UDF changes."""
+        if super()._schema_or_udf_changed(other):
+            return True
+
+        if not isinstance(other, FeatureView):
+            return True
+
+        # Schema-related fields
+        if sorted(self.entities) != sorted(other.entities):
+            return True
+        if sorted(self.entity_columns) != sorted(other.entity_columns):
+            return True
+        if self.source_views != other.source_views:
+            return True
+
+        # Skip UDF-related data source fields: batch_source, stream_source
+        # (treat as deployment configuration, not schema changes)
+        # Skip configuration: ttl, online, offline, enable_validation
+        # Skip metadata: materialization_intervals (excluded in current equality)
+        return False
 
     def __eq__(self, other):
         if not isinstance(other, FeatureView):
@@ -307,6 +360,10 @@ class FeatureView(BaseFeatureView):
             or sorted(self.entity_columns) != sorted(other.entity_columns)
             or self.source_views != other.source_views
             or self.materialization_intervals != other.materialization_intervals
+            or self.enable_validation != other.enable_validation
+            or normalize_version_string(self.version)
+            != normalize_version_string(other.version)
+            or self.org != other.org
         ):
             return False
 
@@ -414,15 +471,9 @@ class FeatureView(BaseFeatureView):
     ) -> FeatureViewSpecProto:
         ttl_duration = self.get_ttl_duration()
 
-        batch_source_proto = None
-        if self.batch_source:
-            batch_source_proto = self.batch_source.to_proto()
-            batch_source_proto.data_source_class_type = f"{self.batch_source.__class__.__module__}.{self.batch_source.__class__.__name__}"
+        batch_source_proto = serialize_data_source(self.batch_source)
+        stream_source_proto = serialize_data_source(self.stream_source)
 
-        stream_source_proto = None
-        if self.stream_source:
-            stream_source_proto = self.stream_source.to_proto()
-            stream_source_proto.data_source_class_type = f"{self.stream_source.__class__.__module__}.{self.stream_source.__class__.__name__}"
         source_view_protos = None
         if self.source_views:
             source_view_protos = [
@@ -431,30 +482,8 @@ class FeatureView(BaseFeatureView):
 
         feature_transformation_proto = None
         if hasattr(self, "feature_transformation") and self.feature_transformation:
-            from feast.protos.feast.core.Transformation_pb2 import (
-                SubstraitTransformationV2 as SubstraitTransformationProto,
-            )
-            from feast.protos.feast.core.Transformation_pb2 import (
-                UserDefinedFunctionV2 as UserDefinedFunctionProto,
-            )
-
-            transformation_proto = self.feature_transformation.to_proto()
-
-            if isinstance(transformation_proto, UserDefinedFunctionProto):
-                feature_transformation_proto = FeatureTransformationProto(
-                    user_defined_function=transformation_proto,
-                )
-            elif isinstance(transformation_proto, SubstraitTransformationProto):
-                feature_transformation_proto = FeatureTransformationProto(
-                    substrait_transformation=transformation_proto,
-                )
-
-        mode_str = ""
-        if self.mode:
-            mode_str = (
-                self.mode.value
-                if isinstance(self.mode, TransformationMode)
-                else self.mode
+            feature_transformation_proto = transformation_to_proto(
+                self.feature_transformation
             )
 
         return FeatureViewSpecProto(
@@ -465,6 +494,7 @@ class FeatureView(BaseFeatureView):
             description=self.description,
             tags=self.tags,
             owner=self.owner,
+            org=self.org,
             ttl=(ttl_duration if ttl_duration is not None else None),
             online=self.online,
             offline=self.offline,
@@ -472,7 +502,9 @@ class FeatureView(BaseFeatureView):
             stream_source=stream_source_proto,
             source_views=source_view_protos,
             feature_transformation=feature_transformation_proto,
-            mode=mode_str,
+            mode=mode_to_string(self.mode),
+            enable_validation=self.enable_validation,
+            version=self.version,
         )
 
     def to_proto_meta(self):
@@ -486,6 +518,8 @@ class FeatureView(BaseFeatureView):
             interval_proto.start_time.FromDatetime(interval[0])
             interval_proto.end_time.FromDatetime(interval[1])
             meta.materialization_intervals.append(interval_proto)
+        if self.current_version_number is not None:
+            meta.current_version_number = self.current_version_number
         return meta
 
     def get_ttl_duration(self):
@@ -496,14 +530,17 @@ class FeatureView(BaseFeatureView):
         return ttl_duration
 
     @classmethod
-    def from_proto(cls, feature_view_proto: FeatureViewProto) -> "FeatureView":
-        return cls._from_proto_internal(feature_view_proto, seen={})
+    def from_proto(
+        cls, feature_view_proto: FeatureViewProto, skip_udf: bool = False
+    ) -> "FeatureView":
+        return cls._from_proto_internal(feature_view_proto, seen={}, skip_udf=skip_udf)
 
     @classmethod
     def _from_proto_internal(
         cls,
         feature_view_proto: FeatureViewProto,
         seen: Dict[str, Union[None, "FeatureView"]],
+        skip_udf: bool = False,
     ) -> "FeatureView":
         """
         Creates a feature view from a protobuf representation of a feature view.
@@ -537,7 +574,7 @@ class FeatureView(BaseFeatureView):
         )
         source_views = [
             FeatureView._from_proto_internal(
-                FeatureViewProto(spec=view_spec, meta=None), seen
+                FeatureViewProto(spec=view_spec, meta=None), seen, skip_udf=skip_udf
             )
             for view_spec in feature_view_proto.spec.source_views
         ]
@@ -557,22 +594,23 @@ class FeatureView(BaseFeatureView):
             )
             transformation = None
 
-            if feature_transformation_proto.HasField("user_defined_function"):
-                udf_proto = feature_transformation_proto.user_defined_function
-                if udf_proto.mode:
-                    try:
-                        transformation_class = get_transformation_class_from_type(
-                            udf_proto.mode
-                        )
-                        transformation = transformation_class.from_proto(udf_proto)
-                    except (ValueError, KeyError):
+            if not skip_udf:
+                if feature_transformation_proto.HasField("user_defined_function"):
+                    udf_proto = feature_transformation_proto.user_defined_function
+                    if udf_proto.mode:
+                        try:
+                            transformation_class = get_transformation_class_from_type(
+                                udf_proto.mode
+                            )
+                            transformation = transformation_class.from_proto(udf_proto)
+                        except (ValueError, KeyError):
+                            transformation = PythonTransformation.from_proto(udf_proto)
+                    else:
                         transformation = PythonTransformation.from_proto(udf_proto)
-                else:
-                    transformation = PythonTransformation.from_proto(udf_proto)
-            elif feature_transformation_proto.HasField("substrait_transformation"):
-                transformation = SubstraitTransformation.from_proto(
-                    feature_transformation_proto.substrait_transformation
-                )
+                elif feature_transformation_proto.HasField("substrait_transformation"):
+                    transformation = SubstraitTransformation.from_proto(
+                        feature_transformation_proto.substrait_transformation
+                    )
 
             mode: Union[TransformationMode, str]
             if feature_view_proto.spec.mode:
@@ -587,6 +625,7 @@ class FeatureView(BaseFeatureView):
                 description=feature_view_proto.spec.description,
                 tags=dict(feature_view_proto.spec.tags),
                 owner=feature_view_proto.spec.owner,
+                org=feature_view_proto.spec.org,
                 online=feature_view_proto.spec.online,
                 offline=feature_view_proto.spec.offline,
                 ttl=(
@@ -609,6 +648,7 @@ class FeatureView(BaseFeatureView):
                 description=feature_view_proto.spec.description,
                 tags=dict(feature_view_proto.spec.tags),
                 owner=feature_view_proto.spec.owner,
+                org=feature_view_proto.spec.org,
                 online=feature_view_proto.spec.online,
                 offline=feature_view_proto.spec.offline,
                 ttl=(
@@ -641,6 +681,20 @@ class FeatureView(BaseFeatureView):
                 f"There are some mismatches in your feature view: {feature_view.name} registered entities. Please check if you have applied your entities correctly."
                 f"Entities: {feature_view.entities} vs Entity Columns: {feature_view.entity_columns}"
             )
+
+        # Restore enable_validation from proto field.
+        feature_view.enable_validation = feature_view_proto.spec.enable_validation
+
+        # Restore version fields.
+        spec_version = feature_view_proto.spec.version
+        feature_view.version = spec_version or "latest"
+        cvn = feature_view_proto.meta.current_version_number
+        if cvn > 0:
+            feature_view.current_version_number = cvn
+        elif cvn == 0 and spec_version and spec_version.lower() != "latest":
+            feature_view.current_version_number = 0
+        else:
+            feature_view.current_version_number = None
 
         # FeatureViewProjections are not saved in the FeatureView proto.
         # Create the default projection.

@@ -185,7 +185,7 @@ var _ = Describe("FeatureStore Controller-Ephemeral services", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deploy.Spec.Replicas).To(Equal(int32Ptr(1)))
 			Expect(controllerutil.HasControllerReference(deploy)).To(BeTrue())
-			Expect(deploy.Spec.Template.Spec.InitContainers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.InitContainers).To(HaveLen(2))
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
 			Expect(services.GetRegistryContainer(*deploy)).NotTo(BeNil())
 			Expect(services.GetOnlineContainer(*deploy)).NotTo(BeNil())
@@ -260,7 +260,7 @@ var _ = Describe("FeatureStore Controller-Ephemeral services", func() {
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cmList.Items).To(HaveLen(1))
+			Expect(cmList.Items).To(HaveLen(2))
 
 			feast := services.FeastServices{
 				Handler: handler.FeastHandler{
@@ -287,7 +287,7 @@ var _ = Describe("FeatureStore Controller-Ephemeral services", func() {
 			Expect(services.GetOfflineContainer(*deploy)).To(BeNil())
 			Expect(deploy.Spec.Template.Spec.Volumes).To(HaveLen(1))
 			Expect(deploy.Spec.Template.Spec.Containers[0].VolumeMounts).To(HaveLen(1))
-			Expect(deploy.Spec.Template.Spec.Containers[0].Env).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Env).To(HaveLen(2))
 			env := getFeatureStoreYamlEnvVar(deploy.Spec.Template.Spec.Containers[0].Env)
 			Expect(env).NotTo(BeNil())
 

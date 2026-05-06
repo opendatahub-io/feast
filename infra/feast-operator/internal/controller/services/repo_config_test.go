@@ -30,6 +30,8 @@ import (
 
 var projectName = "test-project"
 
+const marquezUrl = "http://marquez:5000"
+
 var _ = Describe("Repo Config", func() {
 	Context("When creating the RepoConfig of a FeatureStore", func() {
 		It("should successfully create the repo configs", func() {
@@ -46,7 +48,7 @@ var _ = Describe("Repo Config", func() {
 				Path: EphemeralPath + "/" + DefaultOnlineStorePath,
 			}
 
-			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret)
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(NoAuthAuthType))
 			Expect(repoConfig.OfflineStore).To(Equal(emptyOfflineStoreConfig))
@@ -74,7 +76,7 @@ var _ = Describe("Repo Config", func() {
 				Path:         testPath,
 			}
 
-			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(NoAuthAuthType))
 			Expect(repoConfig.OfflineStore).To(Equal(emptyOfflineStoreConfig))
@@ -96,7 +98,7 @@ var _ = Describe("Repo Config", func() {
 			Expect(appliedServices.OnlineStore).NotTo(BeNil())
 			Expect(appliedServices.Registry.Local).NotTo(BeNil())
 
-			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.OfflineStore).To(Equal(defaultOfflineStoreConfig))
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(NoAuthAuthType))
@@ -115,7 +117,7 @@ var _ = Describe("Repo Config", func() {
 				},
 			}
 			ApplyDefaultsToStatus(featureStore)
-			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(NoAuthAuthType))
 			Expect(repoConfig.OfflineStore).To(Equal(emptyOfflineStoreConfig))
@@ -163,7 +165,7 @@ var _ = Describe("Repo Config", func() {
 				Path: "/data/online.db",
 			}
 
-			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(NoAuthAuthType))
 			Expect(repoConfig.OfflineStore).To(Equal(expectedOfflineConfig))
@@ -188,17 +190,17 @@ var _ = Describe("Repo Config", func() {
 				Type: "dask",
 			}
 
-			repoConfig, err = getServiceRepoConfig(featureStore, mockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, mockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(KubernetesAuthType))
 			Expect(repoConfig.OfflineStore).To(Equal(expectedOfflineConfig))
 			Expect(repoConfig.OnlineStore).To(Equal(defaultOnlineStoreConfig(featureStore)))
 			Expect(repoConfig.Registry).To(Equal(defaultRegistryConfig(featureStore)))
 
-			By("Having oidc authorization")
+			By("Having oidc authorization with Secret")
 			featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
 				OidcAuthz: &feastdevv1.OidcAuthz{
-					SecretRef: corev1.LocalObjectReference{
+					SecretRef: &corev1.LocalObjectReference{
 						Name: "oidc-secret",
 					},
 				},
@@ -211,7 +213,7 @@ var _ = Describe("Repo Config", func() {
 				string(OidcClientSecret):     "client-secret",
 				string(OidcUsername):         "username",
 				string(OidcPassword):         "password"})
-			repoConfig, err = getServiceRepoConfig(featureStore, secretExtractionFunc)
+			repoConfig, err = getServiceRepoConfig(featureStore, secretExtractionFunc, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(OidcAuthType))
 			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveLen(5))
@@ -224,15 +226,35 @@ var _ = Describe("Repo Config", func() {
 			Expect(repoConfig.OnlineStore).To(Equal(defaultOnlineStoreConfig(featureStore)))
 			Expect(repoConfig.Registry).To(Equal(defaultRegistryConfig(featureStore)))
 
-			repoConfig, err = getClientRepoConfig(featureStore, secretExtractionFunc, nil)
+			repoConfig = getClientRepoConfig(featureStore, nil)
+			Expect(repoConfig.AuthzConfig.Type).To(Equal(OidcAuthType))
+
+			By("Having oidc authorization with issuerUrl only (no Secret)")
+			featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
+				OidcAuthz: &feastdevv1.OidcAuthz{
+					IssuerUrl: "https://keycloak.example.com/realms/test",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+			repoConfig, err = getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(repoConfig.AuthzConfig.Type).To(Equal(OidcAuthType))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveLen(5))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveKey(string(OidcClientId)))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveKey(string(OidcAuthDiscoveryUrl)))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveKey(string(OidcClientSecret)))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveKey(string(OidcUsername)))
-			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveKey(string(OidcPassword)))
+			Expect(repoConfig.AuthzConfig.OidcParameters).To(HaveLen(1))
+			Expect(repoConfig.AuthzConfig.OidcParameters[string(OidcAuthDiscoveryUrl)]).To(Equal("https://keycloak.example.com/realms/test/.well-known/openid-configuration"))
+
+			By("Having oidc with issuerUrl on CR and auth_discovery_url in Secret — CR wins")
+			featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
+				OidcAuthz: &feastdevv1.OidcAuthz{
+					IssuerUrl: "https://keycloak.example.com/realms/cr-wins",
+					SecretRef: &corev1.LocalObjectReference{
+						Name: "oidc-secret",
+					},
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+			repoConfig, err = getServiceRepoConfig(featureStore, secretExtractionFunc, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.AuthzConfig.OidcParameters[string(OidcAuthDiscoveryUrl)]).To(Equal("https://keycloak.example.com/realms/cr-wins/.well-known/openid-configuration"))
 
 			By("Having the all the db services")
 			featureStore = minimalFeatureStore()
@@ -275,7 +297,7 @@ var _ = Describe("Repo Config", func() {
 			featureStore.Spec.Services.OfflineStore.Persistence.FilePersistence = nil
 			featureStore.Spec.Services.OnlineStore.Persistence.FilePersistence = nil
 			featureStore.Spec.Services.Registry.Local.Persistence.FilePersistence = nil
-			repoConfig, err = getServiceRepoConfig(featureStore, mockExtractConfigFromSecret)
+			repoConfig, err = getServiceRepoConfig(featureStore, mockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
 			Expect(err).NotTo(HaveOccurred())
 			newMap := CopyMap(parameterMap)
 			port := parameterMap["port"].(int)
@@ -297,14 +319,294 @@ var _ = Describe("Repo Config", func() {
 			Expect(repoConfig.OnlineStore).To(Equal(expectedOnlineConfig))
 			Expect(repoConfig.Registry).To(Equal(expectedRegistryConfig))
 		})
+
+		It("should set feature_server block with type local and all options", func() {
+			featureStore := minimalFeatureStore()
+			batchSize := int32(500)
+			batchInterval := int32(15)
+
+			featureStore.Spec.Services = &feastdevv1.FeatureStoreServices{
+				OnlineStore: &feastdevv1.OnlineStore{
+					Serving: &feastdevv1.ServingConfig{
+						Metrics: &feastdevv1.ServingMetricsConfig{
+							Enabled: true,
+							Categories: map[string]bool{
+								"resource":      true,
+								"freshness":     false,
+								"registry_sync": false,
+							},
+						},
+						OfflinePushBatching: &feastdevv1.OfflinePushBatchingConfig{
+							Enabled:              true,
+							BatchSize:            &batchSize,
+							BatchIntervalSeconds: &batchInterval,
+						},
+					},
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.FeatureServer).NotTo(BeNil())
+			Expect(repoConfig.FeatureServer.Type).To(Equal("local"))
+
+			Expect(repoConfig.FeatureServer.Metrics).NotTo(BeNil())
+			Expect(repoConfig.FeatureServer.Metrics.Enabled).To(BeTrue())
+			Expect(repoConfig.FeatureServer.Metrics.Categories).To(HaveKeyWithValue("resource", true))
+			Expect(repoConfig.FeatureServer.Metrics.Categories).To(HaveKeyWithValue("freshness", false))
+			Expect(repoConfig.FeatureServer.Metrics.Categories).To(HaveKeyWithValue("registry_sync", false))
+
+			Expect(repoConfig.FeatureServer.OfflinePushBatchingEnabled).NotTo(BeNil())
+			Expect(*repoConfig.FeatureServer.OfflinePushBatchingEnabled).To(BeTrue())
+			Expect(repoConfig.FeatureServer.OfflinePushBatchingBatchSize).To(Equal(&batchSize))
+			Expect(repoConfig.FeatureServer.OfflinePushBatchingBatchIntervalSeconds).To(Equal(&batchInterval))
+
+			Expect(repoConfig.FeatureServer.McpEnabled).To(BeNil())
+		})
+
+		It("should set feature_server block with type mcp", func() {
+			featureStore := minimalFeatureStore()
+			serverName := "my-mcp-server"
+			serverVersion := "2.0.0"
+			transport := HttpScheme
+
+			featureStore.Spec.Services = &feastdevv1.FeatureStoreServices{
+				OnlineStore: &feastdevv1.OnlineStore{
+					Serving: &feastdevv1.ServingConfig{
+						Mcp: &feastdevv1.McpConfig{
+							Enabled:       true,
+							ServerName:    &serverName,
+							ServerVersion: &serverVersion,
+							Transport:     &transport,
+						},
+					},
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.FeatureServer).NotTo(BeNil())
+			Expect(repoConfig.FeatureServer.Type).To(Equal("mcp"))
+			Expect(repoConfig.FeatureServer.McpEnabled).NotTo(BeNil())
+			Expect(*repoConfig.FeatureServer.McpEnabled).To(BeTrue())
+			Expect(repoConfig.FeatureServer.McpServerName).To(Equal(&serverName))
+			Expect(repoConfig.FeatureServer.McpServerVersion).To(Equal(&serverVersion))
+			Expect(repoConfig.FeatureServer.McpTransport).To(Equal(&transport))
+		})
+
+		It("should use type local when Mcp is present but Enabled is false", func() {
+			featureStore := minimalFeatureStore()
+
+			featureStore.Spec.Services = &feastdevv1.FeatureStoreServices{
+				OnlineStore: &feastdevv1.OnlineStore{
+					Serving: &feastdevv1.ServingConfig{
+						Mcp: &feastdevv1.McpConfig{
+							Enabled: false,
+						},
+					},
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.FeatureServer).NotTo(BeNil())
+			Expect(repoConfig.FeatureServer.Type).To(Equal("local"))
+			Expect(repoConfig.FeatureServer.McpEnabled).To(BeNil())
+		})
+
+		It("should set materialization block", func() {
+			featureStore := minimalFeatureStore()
+			batchSize := int32(10000)
+
+			featureStore.Spec.Materialization = &feastdevv1.MaterializationConfig{
+				OnlineWriteBatchSize: &batchSize,
+				ExtraConfig: map[string]string{
+					"pull_latest_features": "false",
+					"max_workers":          "4",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.Materialization).NotTo(BeNil())
+			Expect(repoConfig.Materialization.OnlineWriteBatchSize).To(Equal(&batchSize))
+			// "true"/"false" strings are coerced to native booleans; other strings pass through unchanged.
+			Expect(repoConfig.Materialization.ExtraConfig).To(HaveKeyWithValue("pull_latest_features", false))
+			Expect(repoConfig.Materialization.ExtraConfig).To(HaveKeyWithValue("max_workers", "4"))
+		})
+
+		It("should set openlineage block without api_key secret", func() {
+			featureStore := minimalFeatureStore()
+			transportType := HttpScheme
+			transportUrl := marquezUrl
+			endpoint := "api/v1/lineage"
+
+			featureStore.Spec.OpenLineage = &feastdevv1.OpenLineageConfig{
+				Enabled:           true,
+				TransportType:     &transportType,
+				TransportUrl:      &transportUrl,
+				TransportEndpoint: &endpoint,
+				ExtraConfig: map[string]string{
+					"namespace":           "my-feast",
+					"producer":            "feast-operator",
+					"emit_on_apply":       "true",
+					"emit_on_materialize": "false",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.OpenLineage).NotTo(BeNil())
+			Expect(repoConfig.OpenLineage.Enabled).To(BeTrue())
+			Expect(repoConfig.OpenLineage.TransportType).To(Equal(&transportType))
+			Expect(repoConfig.OpenLineage.TransportUrl).To(Equal(&transportUrl))
+			Expect(repoConfig.OpenLineage.TransportEndpoint).To(Equal(&endpoint))
+			Expect(repoConfig.OpenLineage.ApiKey).To(BeNil())
+			// ExtraConfig: "true"/"false" strings coerced to booleans; other strings unchanged.
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("namespace", "my-feast"))
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("producer", "feast-operator"))
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("emit_on_apply", true))
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("emit_on_materialize", false))
+		})
+
+		It("should set openlineage block with kafka extraConfig", func() {
+			featureStore := minimalFeatureStore()
+			transportType := "kafka"
+
+			featureStore.Spec.OpenLineage = &feastdevv1.OpenLineageConfig{
+				Enabled:       true,
+				TransportType: &transportType,
+				ExtraConfig: map[string]string{
+					"bootstrap_servers": "kafka.svc:9092",
+					"topic":             "openlineage",
+					"sasl_mechanism":    "PLAIN",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.OpenLineage).NotTo(BeNil())
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("bootstrap_servers", "kafka.svc:9092"))
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("topic", "openlineage"))
+			Expect(repoConfig.OpenLineage.ExtraConfig).To(HaveKeyWithValue("sasl_mechanism", "PLAIN"))
+		})
+
+		It("should resolve api_key from secret for openlineage", func() {
+			featureStore := minimalFeatureStore()
+			transportType := HttpScheme
+			transportUrl := marquezUrl
+
+			featureStore.Spec.OpenLineage = &feastdevv1.OpenLineageConfig{
+				Enabled:       true,
+				TransportType: &transportType,
+				TransportUrl:  &transportUrl,
+				ApiKeySecretRef: &corev1.LocalObjectReference{
+					Name: "lineage-secret",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			apiKeyMockExtract := func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error) {
+				return map[string]interface{}{
+					"api_key": "my-secret-key",
+				}, nil
+			}
+
+			repoConfig, err := getServiceRepoConfig(featureStore, apiKeyMockExtract, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.OpenLineage).NotTo(BeNil())
+			Expect(repoConfig.OpenLineage.ApiKey).NotTo(BeNil())
+			Expect(*repoConfig.OpenLineage.ApiKey).To(Equal("my-secret-key"))
+		})
+
+		It("should return error when apiKeySecretRef Secret is missing the api_key key", func() {
+			featureStore := minimalFeatureStore()
+			transportType := HttpScheme
+			transportUrl := marquezUrl
+
+			featureStore.Spec.OpenLineage = &feastdevv1.OpenLineageConfig{
+				Enabled:       true,
+				TransportType: &transportType,
+				TransportUrl:  &transportUrl,
+				ApiKeySecretRef: &corev1.LocalObjectReference{
+					Name: "lineage-secret",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			missingKeyMock := func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error) {
+				return map[string]interface{}{
+					"wrong_key": "some-value",
+				}, nil
+			}
+
+			_, err := getServiceRepoConfig(featureStore, missingKeyMock, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("api_key"))
+			Expect(err.Error()).To(ContainSubstring("lineage-secret"))
+		})
+
+		It("should return error when apiKeySecretRef api_key value is not a string", func() {
+			featureStore := minimalFeatureStore()
+			transportType := HttpScheme
+			transportUrl := marquezUrl
+
+			featureStore.Spec.OpenLineage = &feastdevv1.OpenLineageConfig{
+				Enabled:       true,
+				TransportType: &transportType,
+				TransportUrl:  &transportUrl,
+				ApiKeySecretRef: &corev1.LocalObjectReference{
+					Name: "lineage-secret",
+				},
+			}
+			ApplyDefaultsToStatus(featureStore)
+
+			nonStringMock := func(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error) {
+				return map[string]interface{}{
+					"api_key": 12345, // integer, not a string
+				}, nil
+			}
+
+			_, err := getServiceRepoConfig(featureStore, nonStringMock, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("api_key"))
+			Expect(err.Error()).To(ContainSubstring("lineage-secret"))
+		})
+
+		It("should not set feature_server block when serving is nil", func() {
+			featureStore := minimalFeatureStore()
+			ApplyDefaultsToStatus(featureStore)
+
+			repoConfig, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(repoConfig.FeatureServer).To(BeNil())
+			Expect(repoConfig.Materialization).To(BeNil())
+			Expect(repoConfig.OpenLineage).To(BeNil())
+		})
 	})
 	It("should fail to create the repo configs", func() {
 		featureStore := minimalFeatureStore()
 
-		By("Having invalid server oidc authorization")
+		By("Having oidc with no issuerUrl, no Secret, no env var — should fail")
+		featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
+			OidcAuthz: &feastdevv1.OidcAuthz{},
+		}
+		ApplyDefaultsToStatus(featureStore)
+
+		_, err := getServiceRepoConfig(featureStore, emptyMockExtractConfigFromSecret, emptyMockExtractConfigFromConfigMap, false)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no OIDC discovery URL configured"))
+
+		By("Having oidc with Secret missing auth_discovery_url and no issuerUrl — should fail")
 		featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
 			OidcAuthz: &feastdevv1.OidcAuthz{
-				SecretRef: corev1.LocalObjectReference{
+				SecretRef: &corev1.LocalObjectReference{
 					Name: "oidc-secret",
 				},
 			},
@@ -316,17 +618,14 @@ var _ = Describe("Repo Config", func() {
 			string(OidcClientSecret): "client-secret",
 			string(OidcUsername):     "username",
 			string(OidcPassword):     "password"})
-		_, err := getServiceRepoConfig(featureStore, secretExtractionFunc)
+		_, err = getServiceRepoConfig(featureStore, secretExtractionFunc, emptyMockExtractConfigFromConfigMap, false)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("missing OIDC secret"))
-		_, err = getClientRepoConfig(featureStore, secretExtractionFunc, nil)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("missing OIDC secret"))
+		Expect(err.Error()).To(ContainSubstring("no OIDC discovery URL configured"))
 
 		By("Having invalid client oidc authorization")
 		featureStore.Spec.AuthzConfig = &feastdevv1.AuthzConfig{
 			OidcAuthz: &feastdevv1.OidcAuthz{
-				SecretRef: corev1.LocalObjectReference{
+				SecretRef: &corev1.LocalObjectReference{
 					Name: "oidc-secret",
 				},
 			},
@@ -338,12 +637,9 @@ var _ = Describe("Repo Config", func() {
 			string(OidcClientId):         "client-id",
 			string(OidcUsername):         "username",
 			string(OidcPassword):         "password"})
-		_, err = getServiceRepoConfig(featureStore, secretExtractionFunc)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("missing OIDC secret"))
-		_, err = getClientRepoConfig(featureStore, secretExtractionFunc, nil)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("missing OIDC secret"))
+		_, err = getServiceRepoConfig(featureStore, secretExtractionFunc, emptyMockExtractConfigFromConfigMap, false)
+		Expect(err).NotTo(HaveOccurred())
+		getClientRepoConfig(featureStore, nil)
 	})
 })
 
@@ -377,6 +673,10 @@ func minimalFeatureStoreWithAllServers() *feastdevv1.FeatureStore {
 }
 
 func emptyMockExtractConfigFromSecret(storeType string, secretRef string, secretKeyName string) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
+func emptyMockExtractConfigFromConfigMap(configMapRef string, configMapKey string) (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
 }
 
@@ -515,8 +815,7 @@ var _ = Describe("TLS Certificate Path Configuration", func() {
 			}
 
 			// Test with nil feast parameter (no custom CA bundle)
-			repoConfig, err := getClientRepoConfig(featureStore, emptyMockExtractConfigFromSecret, nil)
-			Expect(err).NotTo(HaveOccurred())
+			repoConfig := getClientRepoConfig(featureStore, nil)
 
 			// Verify individual service certificate paths are used
 			Expect(repoConfig.OfflineStore.Cert).To(Equal("/tls/offline/tls.crt"))
@@ -585,8 +884,7 @@ var _ = Describe("TLS Certificate Path Configuration", func() {
 			}
 
 			// Test with nil feast parameter (no custom CA bundle available)
-			repoConfig, err := getClientRepoConfig(featureStore, emptyMockExtractConfigFromSecret, nil)
-			Expect(err).NotTo(HaveOccurred())
+			repoConfig := getClientRepoConfig(featureStore, nil)
 			Expect(repoConfig.OfflineStore.Cert).To(Equal("/tls/offline/tls.crt"))
 		})
 	})
