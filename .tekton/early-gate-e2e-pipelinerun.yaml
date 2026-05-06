@@ -18,6 +18,8 @@ metadata:
   namespace: open-data-hub-tenant
 spec:
   params:
+  - name: group-components
+    value: '{ "odh-feast-operator-ci": "opendatahub/feast-operator", "odh-feature-server-ci": "opendatahub/feature-server" }'
   - name: operator-git-url
     value: '{{source_url}}'
   - name: operator-revision
