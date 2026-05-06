@@ -176,6 +176,7 @@ func applyRegistryDefaults(cr *feastdevv1.FeatureStore, services *feastdevv1.Fea
 		if services.Registry.Remote.FeastRef != nil && len(services.Registry.Remote.FeastRef.Namespace) == 0 {
 			services.Registry.Remote.FeastRef.Namespace = cr.Namespace
 		}
+		services.Registry.Local = nil
 		return
 	}
 	// remote registry not set, proceed w/ local registry defaults
