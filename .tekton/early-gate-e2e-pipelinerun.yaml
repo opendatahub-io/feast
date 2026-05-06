@@ -63,7 +63,7 @@ spec:
     - name: pathInRepo
       value: e2e-early-gate/early-gate-e2e-pipeline.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-odh-early-gate
+    serviceAccountName: konflux-integration-runner
   workspaces:
   - name: git-auth
     secret:
