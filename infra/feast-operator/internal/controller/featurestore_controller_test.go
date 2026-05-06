@@ -119,7 +119,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(1))
+			Expect(svcList.Items).To(HaveLen(3))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -163,16 +163,16 @@ var _ = Describe("FeatureStore Controller", func() {
 			Expect(resource.Status.FeastVersion).To(Equal(feastversion.FeastVersion))
 			Expect(resource.Status.ClientConfigMap).To(Equal(feast.GetFeastServiceName(services.ClientFeastType)))
 			Expect(resource.Status.ServiceHostnames.OfflineStore).To(BeEmpty())
-			Expect(resource.Status.ServiceHostnames.Registry).To(BeEmpty())
+			Expect(resource.Status.ServiceHostnames.Registry).To(Equal(feast.GetFeastServiceName(services.RegistryFeastType) + "." + resource.Namespace + ".svc.cluster.local:80"))
 			Expect(resource.Status.ServiceHostnames.UI).To(BeEmpty())
 			Expect(resource.Status.ServiceHostnames.OnlineStore).To(Equal(feast.GetFeastServiceName(services.OnlineFeastType) + "." + resource.Namespace + ".svc.cluster.local:80"))
 			Expect(resource.Status.Applied.FeastProject).To(Equal(resource.Spec.FeastProject))
 			Expect(resource.Status.Applied.AuthzConfig).To(BeNil())
 			Expect(resource.Status.Applied.Services).NotTo(BeNil())
 			Expect(resource.Status.Applied.Services.OfflineStore).To(BeNil())
-			Expect(resource.Status.Applied.Services.Registry).To(BeNil())
+			Expect(resource.Status.Applied.Services.Registry).NotTo(BeNil())
 			Expect(resource.Status.Applied.Services.UI).To(BeNil())
-			Expect(resource.Status.Applied.Services.Registry).To(BeNil())
+			Expect(resource.Status.Applied.Services.Registry.Local).NotTo(BeNil())
 			Expect(resource.Status.Applied.Services.OnlineStore).NotTo(BeNil())
 
 			Expect(resource.Status.Conditions).NotTo(BeEmpty())
@@ -191,6 +191,13 @@ var _ = Describe("FeatureStore Controller", func() {
 			Expect(cond.Reason).To(Equal(feastdevv1.ReadyReason))
 			Expect(cond.Type).To(Equal(feastdevv1.OnlineStoreReadyType))
 			Expect(cond.Message).To(Equal(feastdevv1.OnlineStoreReadyMessage))
+
+			cond = apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.RegistryReadyType)
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(feastdevv1.ReadyReason))
+			Expect(cond.Type).To(Equal(feastdevv1.RegistryReadyType))
+			Expect(cond.Message).To(Equal(feastdevv1.RegistryReadyMessage))
 
 			cond = apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.ClientReadyType)
 			Expect(cond).ToNot(BeNil())
@@ -215,7 +222,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			Expect(deploy.Spec.Template.Spec.InitContainers[0].Args[0]).To(ContainSubstring("feast init"))
 			Expect(deploy.Spec.Template.Spec.InitContainers[1].Name).To(Equal("feast-apply"))
 			Expect(deploy.Spec.Template.Spec.InitContainers[1].Command).To(Equal([]string{"feast", "apply"}))
-			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
 
 			deploy.Spec.Replicas = int32Ptr(3)
 			err = k8sClient.Update(ctx, deploy)
@@ -335,7 +342,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(deploy.Name))
 			Expect(deploy.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
-			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
 			Expect(deploy.Spec.Template.Spec.Containers[0].Env).To(HaveLen(2))
 			env := getFeatureStoreYamlEnvVar(deploy.Spec.Template.Spec.Containers[0].Env)
 			Expect(env).NotTo(BeNil())
@@ -368,6 +375,10 @@ var _ = Describe("FeatureStore Controller", func() {
 			clientConfig.OnlineStore = services.OnlineStoreConfig{
 				Type: services.OnlineRemoteConfigType,
 				Path: "http://feast-test-resource-online.default.svc.cluster.local:80",
+			}
+			clientConfig.Registry = services.RegistryConfig{
+				RegistryType: services.RegistryRemoteConfigType,
+				Path:         "feast-test-resource-registry.default.svc.cluster.local:80",
 			}
 			Expect(repoConfigClient).To(Equal(&clientConfig))
 
@@ -715,7 +726,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(4))
+			Expect(svcList.Items).To(HaveLen(5))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -909,7 +920,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(4))
+			Expect(svcList.Items).To(HaveLen(5))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -996,7 +1007,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(4))
+			Expect(svcList.Items).To(HaveLen(5))
 
 			// disable the UI Store service
 			resource.Spec.Services.UI = nil
@@ -1014,7 +1025,7 @@ var _ = Describe("FeatureStore Controller", func() {
 
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(3))
+			Expect(svcList.Items).To(HaveLen(4))
 
 			err = k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -1035,7 +1046,7 @@ var _ = Describe("FeatureStore Controller", func() {
 
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(2))
+			Expect(svcList.Items).To(HaveLen(3))
 		})
 
 		It("should handle remote registry references", func() {

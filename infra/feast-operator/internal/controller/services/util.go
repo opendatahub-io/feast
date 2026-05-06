@@ -104,6 +104,14 @@ func ApplyDefaultsToStatus(cr *feastdevv1.FeatureStore) {
 		services.RunFeastApplyOnInit = boolPtr(true)
 	}
 
+	// default to registry service deployment so clients always have a registry block
+	if services.Registry == nil {
+		services.Registry = &feastdevv1.Registry{
+			Local: &feastdevv1.LocalRegistryConfig{
+				Server: &feastdevv1.RegistryServerConfigs{},
+			},
+		}
+	}
 	if services.Registry != nil {
 		// if remote registry not set, proceed w/ local registry defaults
 		if services.Registry.Remote == nil {
@@ -133,6 +141,11 @@ func ApplyDefaultsToStatus(cr *feastdevv1.FeatureStore) {
 				if services.Registry.Local.Server.GRPC == nil {
 					defaultGRPC := true
 					services.Registry.Local.Server.GRPC = &defaultGRPC
+				}
+				// Set default for RestAPI: true if nil
+				if services.Registry.Local.Server.RestAPI == nil {
+					defaultRestAPI := true
+					services.Registry.Local.Server.RestAPI = &defaultRestAPI
 				}
 
 			}
