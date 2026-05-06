@@ -104,55 +104,7 @@ func ApplyDefaultsToStatus(cr *feastdevv1.FeatureStore) {
 		services.RunFeastApplyOnInit = boolPtr(true)
 	}
 
-	// default to registry service deployment so clients always have a registry block
-	if services.Registry == nil {
-		services.Registry = &feastdevv1.Registry{
-			Local: &feastdevv1.LocalRegistryConfig{
-				Server: &feastdevv1.RegistryServerConfigs{},
-			},
-		}
-	}
-	if services.Registry != nil {
-		// if remote registry not set, proceed w/ local registry defaults
-		if services.Registry.Remote == nil {
-			// if local registry not set, apply an empty pointer struct
-			if services.Registry.Local == nil {
-				services.Registry.Local = &feastdevv1.LocalRegistryConfig{}
-			}
-			if services.Registry.Local.Persistence == nil {
-				services.Registry.Local.Persistence = &feastdevv1.RegistryPersistence{}
-			}
-
-			if services.Registry.Local.Persistence.DBPersistence == nil {
-				if services.Registry.Local.Persistence.FilePersistence == nil {
-					services.Registry.Local.Persistence.FilePersistence = &feastdevv1.RegistryFilePersistence{}
-				}
-
-				if len(services.Registry.Local.Persistence.FilePersistence.Path) == 0 {
-					services.Registry.Local.Persistence.FilePersistence.Path = defaultRegistryPath(cr)
-				}
-
-				ensurePVCDefaults(services.Registry.Local.Persistence.FilePersistence.PvcConfig, RegistryFeastType)
-			}
-
-			if services.Registry.Local.Server != nil {
-				setDefaultCtrConfigs(&services.Registry.Local.Server.ContainerConfigs.DefaultCtrConfigs)
-				// Set default for GRPC: true if nil
-				if services.Registry.Local.Server.GRPC == nil {
-					defaultGRPC := true
-					services.Registry.Local.Server.GRPC = &defaultGRPC
-				}
-				// Set default for RestAPI: true if nil
-				if services.Registry.Local.Server.RestAPI == nil {
-					defaultRestAPI := true
-					services.Registry.Local.Server.RestAPI = &defaultRestAPI
-				}
-
-			}
-		} else if services.Registry.Remote.FeastRef != nil && len(services.Registry.Remote.FeastRef.Namespace) == 0 {
-			services.Registry.Remote.FeastRef.Namespace = cr.Namespace
-		}
-	}
+	applyRegistryDefaults(cr, services)
 
 	if services.OfflineStore != nil {
 		if services.OfflineStore.Persistence == nil {
@@ -209,6 +161,54 @@ func ApplyDefaultsToStatus(cr *feastdevv1.FeatureStore) {
 		applied.CronJob = &feastdevv1.FeastCronJob{}
 	}
 	setDefaultCronJobConfigs(applied.CronJob)
+}
+
+func applyRegistryDefaults(cr *feastdevv1.FeatureStore, services *feastdevv1.FeatureStoreServices) {
+	// default to registry service deployment so clients always have a registry block
+	if services.Registry == nil {
+		services.Registry = &feastdevv1.Registry{
+			Local: &feastdevv1.LocalRegistryConfig{
+				Server: &feastdevv1.RegistryServerConfigs{},
+			},
+		}
+	}
+	if services.Registry.Remote != nil {
+		if services.Registry.Remote.FeastRef != nil && len(services.Registry.Remote.FeastRef.Namespace) == 0 {
+			services.Registry.Remote.FeastRef.Namespace = cr.Namespace
+		}
+		return
+	}
+	// remote registry not set, proceed w/ local registry defaults
+	if services.Registry.Local == nil {
+		services.Registry.Local = &feastdevv1.LocalRegistryConfig{}
+	}
+	if services.Registry.Local.Persistence == nil {
+		services.Registry.Local.Persistence = &feastdevv1.RegistryPersistence{}
+	}
+
+	if services.Registry.Local.Persistence.DBPersistence == nil {
+		if services.Registry.Local.Persistence.FilePersistence == nil {
+			services.Registry.Local.Persistence.FilePersistence = &feastdevv1.RegistryFilePersistence{}
+		}
+
+		if len(services.Registry.Local.Persistence.FilePersistence.Path) == 0 {
+			services.Registry.Local.Persistence.FilePersistence.Path = defaultRegistryPath(cr)
+		}
+
+		ensurePVCDefaults(services.Registry.Local.Persistence.FilePersistence.PvcConfig, RegistryFeastType)
+	}
+
+	if services.Registry.Local.Server != nil {
+		setDefaultCtrConfigs(&services.Registry.Local.Server.ContainerConfigs.DefaultCtrConfigs)
+		if services.Registry.Local.Server.GRPC == nil {
+			defaultGRPC := true
+			services.Registry.Local.Server.GRPC = &defaultGRPC
+		}
+		if services.Registry.Local.Server.RestAPI == nil {
+			defaultRestAPI := true
+			services.Registry.Local.Server.RestAPI = &defaultRestAPI
+		}
+	}
 }
 
 func setDefaultCtrConfigs(defaultConfigs *feastdevv1.DefaultCtrConfigs) {
