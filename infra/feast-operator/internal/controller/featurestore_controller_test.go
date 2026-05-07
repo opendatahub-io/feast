@@ -165,7 +165,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			Expect(resource.Status.ServiceHostnames.OfflineStore).To(BeEmpty())
 			Expect(resource.Status.ServiceHostnames.Registry).To(Equal(feast.GetFeastServiceName(services.RegistryFeastType) + "." + resource.Namespace + domain))
 			Expect(resource.Status.ServiceHostnames.UI).To(BeEmpty())
-			Expect(resource.Status.ServiceHostnames.OnlineStore).To(Equal(feast.GetFeastServiceName(services.OnlineFeastType) + "." + resource.Namespace + ".svc.cluster.local:80"))
+			Expect(resource.Status.ServiceHostnames.OnlineStore).To(Equal(feast.GetFeastServiceName(services.OnlineFeastType) + "." + resource.Namespace + domain))
 			Expect(resource.Status.Applied.FeastProject).To(Equal(resource.Spec.FeastProject))
 			Expect(resource.Status.Applied.AuthzConfig).To(BeNil())
 			Expect(resource.Status.Applied.Services).NotTo(BeNil())
@@ -374,11 +374,11 @@ var _ = Describe("FeatureStore Controller", func() {
 			clientConfig := feast.GetInitRepoConfig()
 			clientConfig.OnlineStore = services.OnlineStoreConfig{
 				Type: services.OnlineRemoteConfigType,
-				Path: "http://feast-test-resource-online.default.svc.cluster.local:80",
+				Path: services.HttpScheme + "://" + feast.GetFeastServiceName(services.OnlineFeastType) + "." + resource.Namespace + domain,
 			}
 			clientConfig.Registry = services.RegistryConfig{
 				RegistryType: services.RegistryRemoteConfigType,
-				Path:         "feast-test-resource-registry.default.svc.cluster.local:80",
+				Path:         feast.GetFeastServiceName(services.RegistryFeastType) + "." + resource.Namespace + domain,
 			}
 			Expect(repoConfigClient).To(Equal(&clientConfig))
 
