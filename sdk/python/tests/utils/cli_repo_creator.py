@@ -80,7 +80,7 @@ class CliRunner:
         # This matters when feast prints an error and then hangs in the Dask atexit
         # handler — the error text is already in the pipe buffer and can be read after
         # the process is killed.
-        timeout = 120 if is_teardown else 60
+        timeout = 120
 
         proc = subprocess.Popen(
             [sys.executable, "-u", cli.__file__] + args,
