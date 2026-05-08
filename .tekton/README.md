@@ -18,8 +18,8 @@ PR opened / updated
   ├─ odh-feast-operator-pull-request    → quay.io/opendatahub/feast-operator:odh-pr-<sha>
   └─ odh-feature-server-pull-request   → quay.io/opendatahub/feature-server:odh-pr-<sha>
         │
-        ├─ /group-test or group-test event  → feast-group-test   (tests PR images)
-        └─ /pr-e2etest comment              → feast-pr-test      (tests PR images)
+        ├─ /group-test or group-test event auto triggered  → feast-group-test   (tests PR images)
+        └─ /pr-e2etest comment for retest           → feast-pr-test      (tests PR images)
 
 Merge to master
   ├─ odh-feast-operator-push            → quay.io/opendatahub/feast-operator:odh-master
@@ -158,7 +158,7 @@ Use this when changes may affect both the Feast operator and the feature server
 
 | | |
 |---|---|
-| **Trigger** | `group-test` event (from Konflux App Studio group-test workflow) |
+| **Trigger** | Automatic — fires when both `odh-feast-operator-pull-request` and `odh-feature-server-pull-request` complete successfully on a PR.
 | **Trigger (manual)** | Comment `/group-test` on a pull request |
 | **Images tested** | PR-built images resolved by the `generate-snapshot` task (`odh-pr-<sha>`) |
 | **Source cloned** | `opendatahub-io/feast` at the PR commit |
@@ -170,8 +170,9 @@ Use this when changes may affect both the Feast operator and the feature server
 1. When a PR is opened or updated, `odh-feast-operator-pull-request` and
    `odh-feature-server-pull-request` build and push images tagged
    `odh-pr-<sha>` and `odh-pr-<pr-number>`.
-2. When `/group-test` is triggered, the `generate-snapshot` task finds those
-   PR images by component name, assembles a snapshot JSON with their digests
+2. Once both build pipelines succeed, `feast-group-test` is automatically
+   triggered. The `generate-snapshot` task finds those PR images by component
+   name, assembles a snapshot JSON with their digests
    and git metadata, and passes it to `deploy-and-test`.
 
 Both the images and the source checkout use the same PR commit, so the code
