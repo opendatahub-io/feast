@@ -9,7 +9,6 @@
 #
 # Triggers:
 #   - Cron: daily at 8 AM UTC
-#   - Comment: /nightly-test on a pull request
 #
 # Pipeline definition: odh-konflux-central/integration-tests/feast/nightly-testing-pipeline.yaml
 #
@@ -23,8 +22,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cron: "0 8 * * *"
-    pipelinesascode.tekton.dev/on-target-branch: "[master]"
-    pipelinesascode.tekton.dev/on-comment: "^/nightly-test"
+    pipelinesascode.tekton.dev/on-target-branch: "master"
   name: feast-nightly-test
   namespace: open-data-hub-tenant
   labels:
