@@ -317,7 +317,7 @@ var _ = Describe("FeatureStore Controller-OIDC authorization", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(5))
+			Expect(svcList.Items).To(HaveLen(4))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)

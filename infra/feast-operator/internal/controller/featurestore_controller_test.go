@@ -119,7 +119,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(3))
+			Expect(svcList.Items).To(HaveLen(2))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -733,7 +733,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(5))
+			Expect(svcList.Items).To(HaveLen(4))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -927,7 +927,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(5))
+			Expect(svcList.Items).To(HaveLen(4))
 
 			cmList := corev1.ConfigMapList{}
 			err = k8sClient.List(ctx, &cmList, listOpts)
@@ -1014,7 +1014,7 @@ var _ = Describe("FeatureStore Controller", func() {
 			svcList := corev1.ServiceList{}
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(5))
+			Expect(svcList.Items).To(HaveLen(4))
 
 			// disable the UI Store service
 			resource.Spec.Services.UI = nil
@@ -1032,7 +1032,7 @@ var _ = Describe("FeatureStore Controller", func() {
 
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(4))
+			Expect(svcList.Items).To(HaveLen(3))
 
 			err = k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -1053,7 +1053,7 @@ var _ = Describe("FeatureStore Controller", func() {
 
 			err = k8sClient.List(ctx, &svcList, listOpts)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(svcList.Items).To(HaveLen(3))
+			Expect(svcList.Items).To(HaveLen(2))
 		})
 
 		It("should handle remote registry references", func() {

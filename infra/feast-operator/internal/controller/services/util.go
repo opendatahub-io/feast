@@ -205,10 +205,6 @@ func applyRegistryDefaults(cr *feastdevv1.FeatureStore, services *feastdevv1.Fea
 			defaultGRPC := true
 			services.Registry.Local.Server.GRPC = &defaultGRPC
 		}
-		if services.Registry.Local.Server.RestAPI == nil {
-			defaultRestAPI := true
-			services.Registry.Local.Server.RestAPI = &defaultRestAPI
-		}
 	}
 }
 
