@@ -523,7 +523,7 @@ func getClientRepoConfig(
 		} else if remoteRegistryTls(featureStore) {
 			clientRepoConfig.Registry.Cert = getCertificatePath(feast, RegistryFeastType, appliedServices.Registry.Remote.TLS.CertName)
 		}
-	} else {
+	} else if !isRemoteRegistry(featureStore) {
 		clientRepoConfig.Registry = defaultRegistryConfig(featureStore)
 	}
 
