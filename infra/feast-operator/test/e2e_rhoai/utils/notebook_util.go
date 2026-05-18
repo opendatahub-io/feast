@@ -31,6 +31,7 @@ type NotebookTemplateParams struct {
 	FeastVersion          string
 	OpenAIAPIKey          string
 	FeastProject          string
+	AdditionalEnv         map[string]string
 }
 
 // CreateNotebook renders a notebook manifest from a template and applies it using kubectl.
@@ -317,6 +318,7 @@ func GetNotebookParams(namespace, configMapName, notebookPVC, notebookName, test
 		FeastVersion:          getEnv("FEAST_VERSION"),
 		OpenAIAPIKey:          getEnv("OPENAI_API_KEY"),
 		FeastProject:          feastProject,
+		AdditionalEnv:         map[string]string{},
 	}
 }
 
@@ -346,11 +348,8 @@ func SetupNotebookEnvironment(namespace, configMapName, notebookFile, featureRep
 	return nil
 }
 
-// CreateNotebookTest performs all the setup steps and creates a notebook.
-// This function handles namespace context, ConfigMap, PVC, rolebinding, and notebook creation.
-// feastProject is optional - if provided, it will be set in the notebook annotation, otherwise it will be empty
-func CreateNotebookTest(namespace, configMapName, notebookFile, featureRepoPath, pvcFile, rolebindingName, notebookPVC, notebookName, testDir string, feastProject string) {
-	// Execute common setup steps
+// prepareNotebookTestResources sets namespace context, ConfigMap, PVC, and rolebinding for notebook E2E tests.
+func prepareNotebookTestResources(namespace, configMapName, notebookFile, featureRepoPath, pvcFile, rolebindingName, notebookPVC, testDir string) {
 	By(fmt.Sprintf("Setting namespace context to : %s", namespace))
 	Expect(SetNamespaceContext(namespace, testDir)).To(Succeed())
 	fmt.Printf("Successfully set namespace context to: %s\n", namespace)
@@ -366,8 +365,14 @@ func CreateNotebookTest(namespace, configMapName, notebookFile, featureRepoPath,
 	By(fmt.Sprintf("Creating rolebinding %s for the user", rolebindingName))
 	Expect(CreateNotebookRoleBinding(namespace, rolebindingName, GetOCUser(testDir), testDir)).To(Succeed())
 	fmt.Printf("Created rolebinding %s successfully\n", rolebindingName)
+}
 
-	// Build notebook parameters and create notebook
+// CreateNotebookTest performs all the setup steps and creates a notebook.
+// This function handles namespace context, ConfigMap, PVC, rolebinding, and notebook creation.
+// feastProject is optional - if provided, it will be set in the notebook annotation, otherwise it will be empty
+func CreateNotebookTest(namespace, configMapName, notebookFile, featureRepoPath, pvcFile, rolebindingName, notebookPVC, notebookName, testDir string, feastProject string) {
+	prepareNotebookTestResources(namespace, configMapName, notebookFile, featureRepoPath, pvcFile, rolebindingName, notebookPVC, testDir)
+
 	nbParams := GetNotebookParams(namespace, configMapName, notebookPVC, notebookName, testDir, feastProject)
 	By("Creating Jupyter Notebook")
 	Expect(CreateNotebook(nbParams)).To(Succeed(), "Failed to create notebook")
