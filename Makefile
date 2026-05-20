@@ -106,13 +106,16 @@ install-python-dependencies-minimal: ## Install minimal Python dependencies usin
 install-python-dependencies-ci: ## Install Python CI dependencies using uv pip sync
 	# Create virtualenv if it doesn't exist
 	uv venv .venv
-	# Install CPU-only torch first to prevent CUDA dependency issues (Linux only)
+	# Install all dependencies from PyPI first, then replace torch with CPU-only
+	# builds on Linux. This avoids querying the PyTorch index for non-torch
+	# packages, which can fail with 503 errors.
+	uv pip sync sdk/python/requirements/py$(PYTHON_VERSION)-ci-requirements.txt
 	@if [ "$$(uname -s)" = "Linux" ]; then \
-		echo "Installing dependencies with torch CPU index for Linux..."; \
-		uv pip sync --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match sdk/python/requirements/py$(PYTHON_VERSION)-ci-requirements.txt; \
-	else \
-		echo "Installing dependencies from PyPI for macOS..."; \
-		uv pip sync sdk/python/requirements/py$(PYTHON_VERSION)-ci-requirements.txt; \
+		echo "Replacing torch with CPU-only version for Linux..."; \
+		uv pip install --no-deps --reinstall \
+			--index-url https://download.pytorch.org/whl/cpu \
+			-c sdk/python/requirements/py$(PYTHON_VERSION)-ci-requirements.txt \
+			torch torchvision; \
 	fi
 	uv pip install --no-deps -e .
 
