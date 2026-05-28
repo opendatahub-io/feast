@@ -5,14 +5,11 @@ Values are serialized as native Python types (not wrapped dicts).
 """
 
 import base64
-import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from feast.protos.feast.serving.ServingService_pb2 import GetOnlineFeaturesResponse
 from feast.protos.feast.types.Value_pb2 import Value
-
-logger = logging.getLogger(__name__)
 
 # FieldStatus enum mapping (protos/feast/serving/ServingService.proto)
 _STATUS_NAMES: Dict[int, str] = {
