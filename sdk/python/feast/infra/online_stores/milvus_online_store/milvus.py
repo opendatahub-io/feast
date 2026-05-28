@@ -115,6 +115,7 @@ class MilvusOnlineStoreConfig(FeastConfigBaseModel, VectorStoreConfig):
     nlist: Optional[int] = 128
     username: Optional[StrictStr] = ""
     password: Optional[StrictStr] = ""
+    varchar_max_length: Optional[int] = 65535
 
 
 class MilvusOnlineStore(OnlineStore):
@@ -172,11 +173,12 @@ class MilvusOnlineStore(OnlineStore):
             # Create a composite key by combining entity fields
             composite_key_name = _get_composite_key_name(table)
 
+            varchar_max_length = config.online_store.varchar_max_length
             fields = [
                 FieldSchema(
                     name=composite_key_name,
                     dtype=DataType.VARCHAR,
-                    max_length=512,
+                    max_length=varchar_max_length,
                     is_primary=True,
                 ),
                 FieldSchema(name="event_ts", dtype=DataType.INT64),
@@ -207,7 +209,7 @@ class MilvusOnlineStore(OnlineStore):
                             FieldSchema(
                                 name=field.name,
                                 dtype=DataType.VARCHAR,
-                                max_length=512,
+                                max_length=varchar_max_length,
                             )
                         )
 
