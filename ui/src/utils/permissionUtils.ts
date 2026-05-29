@@ -1,6 +1,117 @@
 import { FEAST_FCO_TYPES } from "../parsers/types";
 import { feast } from "../protos";
 
+const MAX_PATTERN_LENGTH = 1000;
+
+const isQuantifierChar = (ch: string | undefined): boolean =>
+  ch === "+" || ch === "*" || ch === "?";
+
+const startsRepetition = (pattern: string, pos: number): boolean => {
+  const ch = pattern[pos];
+  return (
+    isQuantifierChar(ch) ||
+    (ch === "{" && /^\{[^}]+\}/.test(pattern.slice(pos)))
+  );
+};
+
+interface GroupState {
+  hasQuantifier: boolean;
+  hasAlternation: boolean;
+}
+
+const hasUnsafeConstruct = (pattern: string): boolean => {
+  const stack: GroupState[] = [];
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\") {
+      const next = pattern[i + 1];
+      if (
+        next &&
+        next >= "1" &&
+        next <= "9" &&
+        startsRepetition(pattern, i + 2)
+      ) {
+        return true;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "(") {
+      stack.push({ hasQuantifier: false, hasAlternation: false });
+      // Skip non-capturing/lookahead/lookbehind group syntax so the '?'
+      // is not mistaken for a quantifier character.
+      if (pattern[i + 1] === "?") {
+        const two = pattern.slice(i + 1, i + 4);
+        if (
+          two.startsWith("?:") ||
+          two.startsWith("?=") ||
+          two.startsWith("?!") ||
+          two.startsWith("?<=") ||
+          two.startsWith("?<!")
+        ) {
+          // Advance past the group-syntax characters
+          i += two.startsWith("?<") ? 3 : 2;
+        }
+      }
+      continue;
+    }
+    if (ch === ")") {
+      const inner = stack.pop() ?? {
+        hasQuantifier: false,
+        hasAlternation: false,
+      };
+      const outerQ = startsRepetition(pattern, i + 1);
+      if (inner.hasQuantifier && outerQ) return true;
+      if (inner.hasAlternation && outerQ) return true;
+      if (stack.length > 0) {
+        const parent = stack[stack.length - 1];
+        if (inner.hasQuantifier || outerQ) parent.hasQuantifier = true;
+        if (inner.hasAlternation) parent.hasAlternation = true;
+      }
+      continue;
+    }
+    if (ch === "|") {
+      if (stack.length > 0) {
+        stack[stack.length - 1].hasAlternation = true;
+      }
+      continue;
+    }
+    if (
+      isQuantifierChar(ch) ||
+      (ch === "{" && /^\{[^}]+\}/.test(pattern.slice(i)))
+    ) {
+      if (stack.length > 0) {
+        stack[stack.length - 1].hasQuantifier = true;
+      }
+    }
+  }
+  return false;
+};
+
+export const isSafeRegexPattern = (pattern: unknown): boolean => {
+  if (typeof pattern !== "string") return false;
+  if (pattern.length > MAX_PATTERN_LENGTH) return false;
+  if (hasUnsafeConstruct(pattern)) return false;
+  return true;
+};
+
+export const safeRegexTest = (
+  pattern: string,
+  value: string,
+): boolean | null => {
+  if (!isSafeRegexPattern(pattern)) {
+    console.warn(`Rejected unsafe regex pattern: ${pattern.slice(0, 80)}`);
+    return null;
+  }
+  try {
+    const regex = new RegExp(pattern);
+    return regex.test(value);
+  } catch {
+    console.warn(`Invalid regex syntax in pattern: ${pattern.slice(0, 80)}`);
+    return null;
+  }
+};
+
 /**
  * Get permissions for a specific entity
  * @param permissions List of all permissions
@@ -42,14 +153,18 @@ export const getEntityPermissions = (
     ) {
       matchesName = true; // If no name patterns, matches all names
     } else {
-      matchesName = permission.spec?.name_patterns?.some((pattern: string) => {
-        try {
-          const regex = new RegExp(pattern);
-          return regex.test(entityName);
-        } catch (e) {
-          return pattern === entityName;
-        }
-      });
+      matchesName = permission.spec?.name_patterns?.some(
+        (rawPattern: unknown) => {
+          if (typeof rawPattern !== "string") {
+            console.warn(
+              `Skipping non-string name_pattern (type=${typeof rawPattern}) in permission "${permission.spec?.name}"`,
+            );
+            return false;
+          }
+          const result = safeRegexTest(rawPattern, entityName);
+          return result ?? false;
+        },
+      );
     }
 
     return matchesType && matchesName;
