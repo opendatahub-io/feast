@@ -5,14 +5,11 @@ Values are serialized as native Python types (not wrapped dicts).
 """
 
 import base64
-import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from feast.protos.feast.serving.ServingService_pb2 import GetOnlineFeaturesResponse
 from feast.protos.feast.types.Value_pb2 import Value
-
-logger = logging.getLogger(__name__)
 
 # FieldStatus enum mapping (protos/feast/serving/ServingService.proto)
 _STATUS_NAMES: Dict[int, str] = {
@@ -92,13 +89,10 @@ def _value_to_native(v: Value) -> Optional[Any]:
             {k: _value_to_native(vv) for k, vv in m.val.items()}
             for m in getattr(v, which).val
         ]
-    # scalar_map_val has non-string keys; full conversion requires extra work and
-    # this type is not returned by standard get_online_features paths today.
     elif which == "scalar_map_val":
-        logger.warning(
-            "scalar_map_val is not yet supported by convert_response_to_dict; value will be None"
+        raise NotImplementedError(
+            "scalar_map_val is not supported by convert_response_to_dict"
         )
-        return None
     # bytes_list_val / bytes_set_val — base64-encode each element
     elif which in ("bytes_list_val", "bytes_set_val"):
         return [base64.b64encode(b).decode("ascii") for b in getattr(v, which).val]
@@ -138,4 +132,9 @@ def _metadata_to_dict(metadata) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     if metadata.HasField("feature_names"):
         result["feature_names"] = list(metadata.feature_names.val)
+    if metadata.feature_view_metadata:
+        result["feature_view_metadata"] = [
+            {"name": m.name, "version": m.version}
+            for m in metadata.feature_view_metadata
+        ]
     return result
