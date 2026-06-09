@@ -60,14 +60,14 @@ class CliRunner:
 
         try:
             return subprocess.run(
-                [sys.executable, cli.__file__] + args,
+                [sys.executable, "-u", cli.__file__] + args,
                 cwd=cwd,
                 capture_output=True,
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(
-                args=[sys.executable, cli.__file__] + args,
+                args=[sys.executable, "-u", cli.__file__] + args,
                 returncode=-1,
                 stdout=b"",
                 stderr=f"Command timed out after {timeout}s: {args}".encode(),
@@ -80,10 +80,10 @@ class CliRunner:
         # This matters when feast prints an error and then hangs in the Dask atexit
         # handler — the error text is already in the pipe buffer and can be read after
         # the process is killed.
-        timeout = 120 if is_teardown else 60
+        timeout = 120
 
         proc = subprocess.Popen(
-            [sys.executable, cli.__file__] + args,
+            [sys.executable, "-u", cli.__file__] + args,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

@@ -369,6 +369,10 @@ var _ = Describe("FeatureStore Controller", func() {
 				Type: services.OnlineRemoteConfigType,
 				Path: "http://feast-test-resource-online.default.svc.cluster.local:80",
 			}
+			clientConfig.Registry = services.RegistryConfig{
+				RegistryType: services.RegistryFileConfigType,
+				Path:         services.EphemeralPath + "/" + services.DefaultRegistryPath,
+			}
 			Expect(repoConfigClient).To(Equal(&clientConfig))
 
 			// change feast project and reconcile
