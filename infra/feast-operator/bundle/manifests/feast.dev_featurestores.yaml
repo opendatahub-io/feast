@@ -3342,7 +3342,7 @@ spec:
                       rule: '[has(self.local), has(self.remote)].exists_one(c, c)'
                   runFeastApplyOnInit:
                     description: Runs feast apply on pod start to populate the registry.
-                      Defaults to true. Ignored when DisableInitContainers is true.
+                      Defaults to false. Ignored when DisableInitContainers is true.
                     type: boolean
                   scaling:
                     description: Scaling configures horizontal scaling for the FeatureStore
@@ -9348,7 +9348,7 @@ spec:
                             c)'
                       runFeastApplyOnInit:
                         description: Runs feast apply on pod start to populate the
-                          registry. Defaults to true. Ignored when DisableInitContainers
+                          registry. Defaults to false. Ignored when DisableInitContainers
                           is true.
                         type: boolean
                       scaling:
@@ -14462,7 +14462,7 @@ spec:
                       rule: '[has(self.local), has(self.remote)].exists_one(c, c)'
                   runFeastApplyOnInit:
                     description: Runs feast apply on pod start to populate the registry.
-                      Defaults to true. Ignored when DisableInitContainers is true.
+                      Defaults to false. Ignored when DisableInitContainers is true.
                     type: boolean
                   securityContext:
                     description: PodSecurityContext holds pod-level security attributes
@@ -18763,7 +18763,7 @@ spec:
                             c)'
                       runFeastApplyOnInit:
                         description: Runs feast apply on pod start to populate the
-                          registry. Defaults to true. Ignored when DisableInitContainers
+                          registry. Defaults to false. Ignored when DisableInitContainers
                           is true.
                         type: boolean
                       securityContext:
