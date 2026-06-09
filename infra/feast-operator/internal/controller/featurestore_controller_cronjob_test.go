@@ -99,7 +99,7 @@ var _ = Describe("FeatureStore Controller - Feast CronJob", func() {
 			Expect(resource.Status.CronJob).To(Equal(objMeta.Name))
 			Expect(resource.Status.Applied.CronJob.Schedule).NotTo(BeEmpty())
 			Expect(resource.Status.Applied.Services.RunFeastApplyOnInit).NotTo(BeNil())
-			Expect(*resource.Status.Applied.Services.RunFeastApplyOnInit).To(BeTrue())
+			Expect(*resource.Status.Applied.Services.RunFeastApplyOnInit).To(BeFalse())
 
 			Expect(resource.Status.Conditions).NotTo(BeEmpty())
 			cond := apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.CronJobReadyType)
