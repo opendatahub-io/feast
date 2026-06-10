@@ -161,8 +161,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -209,6 +210,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -286,7 +316,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -471,7 +501,6 @@ spec:
                                           type.
                                         type: string
                                     required:
-                                    - status
                                     - type
                                     type: object
                                   type: array
@@ -564,8 +593,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -612,6 +642,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -689,7 +748,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -1761,8 +1820,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -1809,6 +1869,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -1887,7 +1977,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -2274,8 +2364,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -2322,6 +2413,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -2400,7 +2521,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -2904,8 +3025,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -2953,6 +3075,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -3033,8 +3185,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -4209,8 +4360,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -4257,6 +4409,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -4334,7 +4515,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -5228,9 +5409,8 @@ spec:
                             host that shares a pod's lifetime.
                           properties:
                             endpoints:
-                              description: |-
-                                endpoints is the endpoint name that details Glusterfs topology.
-                                More info: https://examples.k8s.
+                              description: endpoints is the endpoint name that details
+                                Glusterfs topology.
                               type: string
                             path:
                               description: |-
@@ -5642,6 +5822,52 @@ spec:
                                           type: object
                                         type: array
                                         x-kubernetes-list-type: atomic
+                                    type: object
+                                  podCertificate:
+                                    description: |-
+                                      Projects an auto-rotating credential bundle (private key and certificate
+                                      chain) that the pod can use either as a TLS...
+                                    properties:
+                                      certificateChainPath:
+                                        description: |-
+                                          Write the certificate chain at this path in the projected volume.
+
+                                          Most applications should use credentialBundlePath.
+                                        type: string
+                                      credentialBundlePath:
+                                        description: Write the credential bundle at
+                                          this path in the projected volume.
+                                        type: string
+                                      keyPath:
+                                        description: |-
+                                          Write the key at this path in the projected volume.
+
+                                          Most applications should use credentialBundlePath.
+                                        type: string
+                                      keyType:
+                                        description: The type of keypair Kubelet will
+                                          generate for the pod.
+                                        type: string
+                                      maxExpirationSeconds:
+                                        description: |-
+                                          maxExpirationSeconds is the maximum lifetime permitted for the
+                                          certificate.
+                                        format: int32
+                                        type: integer
+                                      signerName:
+                                        description: Kubelet's generated CSRs will
+                                          be addressed to this signer.
+                                        type: string
+                                      userAnnotations:
+                                        additionalProperties:
+                                          type: string
+                                        description: |-
+                                          userAnnotations allow pod authors to pass additional information to
+                                          the signer implementation.
+                                        type: object
+                                    required:
+                                    - keyType
+                                    - signerName
                                     type: object
                                   secret:
                                     description: secret information about the secret
@@ -6160,8 +6386,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -6208,6 +6435,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -6286,7 +6543,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -6473,7 +6730,6 @@ spec:
                                               condition type.
                                             type: string
                                         required:
-                                        - status
                                         - type
                                         type: object
                                       type: array
@@ -6568,8 +6824,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -6616,6 +6873,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -6694,7 +6981,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -7778,8 +8065,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -7827,6 +8115,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -7907,8 +8225,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -8300,8 +8617,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -8349,6 +8667,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -8429,8 +8777,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -8945,8 +9292,9 @@ spec:
                                         variable present in a Container.
                                       properties:
                                         name:
-                                          description: Name of the environment variable.
-                                            Must be a C_IDENTIFIER.
+                                          description: |-
+                                            Name of the environment variable.
+                                            May consist of any printable ASCII characters except '='.
                                           type: string
                                         value:
                                           description: |-
@@ -8995,6 +9343,36 @@ spec:
                                                   type: string
                                               required:
                                               - fieldPath
+                                              type: object
+                                              x-kubernetes-map-type: atomic
+                                            fileKeyRef:
+                                              description: |-
+                                                FileKeyRef selects a key of the env file.
+                                                Requires the EnvFiles feature gate to be enabled.
+                                              properties:
+                                                key:
+                                                  description: The key within the
+                                                    env file. An invalid key will
+                                                    prevent the pod from starting.
+                                                  type: string
+                                                optional:
+                                                  default: false
+                                                  description: Specify whether the
+                                                    file or its key must be defined.
+                                                  type: boolean
+                                                path:
+                                                  description: |-
+                                                    The path within the volume from which to select the file.
+                                                    Must be relative and may not contain the '..
+                                                  type: string
+                                                volumeName:
+                                                  description: The name of the volume
+                                                    mount containing the env file.
+                                                  type: string
+                                              required:
+                                              - key
+                                              - path
+                                              - volumeName
                                               type: object
                                               x-kubernetes-map-type: atomic
                                             resourceFieldRef:
@@ -9077,7 +9455,6 @@ spec:
                                         prefix:
                                           description: Optional text to prepend to
                                             the name of each environment variable.
-                                            Must be a C_IDENTIFIER.
                                           type: string
                                         secretRef:
                                           description: The Secret to select from
@@ -10268,8 +10645,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -10316,6 +10694,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -10394,7 +10802,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -11296,9 +11704,8 @@ spec:
                                 on the host that shares a pod's lifetime.
                               properties:
                                 endpoints:
-                                  description: |-
-                                    endpoints is the endpoint name that details Glusterfs topology.
-                                    More info: https://examples.k8s.
+                                  description: endpoints is the endpoint name that
+                                    details Glusterfs topology.
                                   type: string
                                 path:
                                   description: |-
@@ -11714,6 +12121,52 @@ spec:
                                               type: object
                                             type: array
                                             x-kubernetes-list-type: atomic
+                                        type: object
+                                      podCertificate:
+                                        description: |-
+                                          Projects an auto-rotating credential bundle (private key and certificate
+                                          chain) that the pod can use either as a TLS...
+                                        properties:
+                                          certificateChainPath:
+                                            description: |-
+                                              Write the certificate chain at this path in the projected volume.
+
+                                              Most applications should use credentialBundlePath.
+                                            type: string
+                                          credentialBundlePath:
+                                            description: Write the credential bundle
+                                              at this path in the projected volume.
+                                            type: string
+                                          keyPath:
+                                            description: |-
+                                              Write the key at this path in the projected volume.
+
+                                              Most applications should use credentialBundlePath.
+                                            type: string
+                                          keyType:
+                                            description: The type of keypair Kubelet
+                                              will generate for the pod.
+                                            type: string
+                                          maxExpirationSeconds:
+                                            description: |-
+                                              maxExpirationSeconds is the maximum lifetime permitted for the
+                                              certificate.
+                                            format: int32
+                                            type: integer
+                                          signerName:
+                                            description: Kubelet's generated CSRs
+                                              will be addressed to this signer.
+                                            type: string
+                                          userAnnotations:
+                                            additionalProperties:
+                                              type: string
+                                            description: |-
+                                              userAnnotations allow pod authors to pass additional information to
+                                              the signer implementation.
+                                            type: object
+                                        required:
+                                        - keyType
+                                        - signerName
                                         type: object
                                       secret:
                                         description: secret information about the
@@ -12313,8 +12766,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -12361,6 +12815,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -12438,7 +12921,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -12623,7 +13106,6 @@ spec:
                                           type.
                                         type: string
                                     required:
-                                    - status
                                     - type
                                     type: object
                                   type: array
@@ -12706,8 +13188,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -12754,6 +13237,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -12831,7 +13343,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -13083,8 +13595,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -13131,6 +13644,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -13209,7 +13752,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -13596,8 +14139,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -13644,6 +14188,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -13722,7 +14296,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -14127,8 +14701,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -14176,6 +14751,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -14256,8 +14861,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -14701,8 +15305,9 @@ spec:
                             in a Container.
                           properties:
                             name:
-                              description: Name of the environment variable. Must
-                                be a C_IDENTIFIER.
+                              description: |-
+                                Name of the environment variable.
+                                May consist of any printable ASCII characters except '='.
                               type: string
                             value:
                               description: |-
@@ -14749,6 +15354,35 @@ spec:
                                       type: string
                                   required:
                                   - fieldPath
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                                fileKeyRef:
+                                  description: |-
+                                    FileKeyRef selects a key of the env file.
+                                    Requires the EnvFiles feature gate to be enabled.
+                                  properties:
+                                    key:
+                                      description: The key within the env file. An
+                                        invalid key will prevent the pod from starting.
+                                      type: string
+                                    optional:
+                                      default: false
+                                      description: Specify whether the file or its
+                                        key must be defined.
+                                      type: boolean
+                                    path:
+                                      description: |-
+                                        The path within the volume from which to select the file.
+                                        Must be relative and may not contain the '..
+                                      type: string
+                                    volumeName:
+                                      description: The name of the volume mount containing
+                                        the env file.
+                                      type: string
+                                  required:
+                                  - key
+                                  - path
+                                  - volumeName
                                   type: object
                                   x-kubernetes-map-type: atomic
                                 resourceFieldRef:
@@ -14826,7 +15460,7 @@ spec:
                               x-kubernetes-map-type: atomic
                             prefix:
                               description: Optional text to prepend to the name of
-                                each environment variable. Must be a C_IDENTIFIER.
+                                each environment variable.
                               type: string
                             secretRef:
                               description: The Secret to select from
@@ -15720,9 +16354,8 @@ spec:
                             host that shares a pod's lifetime.
                           properties:
                             endpoints:
-                              description: |-
-                                endpoints is the endpoint name that details Glusterfs topology.
-                                More info: https://examples.k8s.
+                              description: endpoints is the endpoint name that details
+                                Glusterfs topology.
                               type: string
                             path:
                               description: |-
@@ -16134,6 +16767,52 @@ spec:
                                           type: object
                                         type: array
                                         x-kubernetes-list-type: atomic
+                                    type: object
+                                  podCertificate:
+                                    description: |-
+                                      Projects an auto-rotating credential bundle (private key and certificate
+                                      chain) that the pod can use either as a TLS...
+                                    properties:
+                                      certificateChainPath:
+                                        description: |-
+                                          Write the certificate chain at this path in the projected volume.
+
+                                          Most applications should use credentialBundlePath.
+                                        type: string
+                                      credentialBundlePath:
+                                        description: Write the credential bundle at
+                                          this path in the projected volume.
+                                        type: string
+                                      keyPath:
+                                        description: |-
+                                          Write the key at this path in the projected volume.
+
+                                          Most applications should use credentialBundlePath.
+                                        type: string
+                                      keyType:
+                                        description: The type of keypair Kubelet will
+                                          generate for the pod.
+                                        type: string
+                                      maxExpirationSeconds:
+                                        description: |-
+                                          maxExpirationSeconds is the maximum lifetime permitted for the
+                                          certificate.
+                                        format: int32
+                                        type: integer
+                                      signerName:
+                                        description: Kubelet's generated CSRs will
+                                          be addressed to this signer.
+                                        type: string
+                                      userAnnotations:
+                                        additionalProperties:
+                                          type: string
+                                        description: |-
+                                          userAnnotations allow pod authors to pass additional information to
+                                          the signer implementation.
+                                        type: object
+                                    required:
+                                    - keyType
+                                    - signerName
                                     type: object
                                   secret:
                                     description: secret information about the secret
@@ -16573,8 +17252,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -16621,6 +17301,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -16699,7 +17409,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -16886,7 +17596,6 @@ spec:
                                               condition type.
                                             type: string
                                         required:
-                                        - status
                                         - type
                                         type: object
                                       type: array
@@ -16971,8 +17680,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -17019,6 +17729,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -17097,7 +17837,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -17353,8 +18093,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -17402,6 +18143,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -17482,8 +18253,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -17875,8 +18645,9 @@ spec:
                                     present in a Container.
                                   properties:
                                     name:
-                                      description: Name of the environment variable.
-                                        Must be a C_IDENTIFIER.
+                                      description: |-
+                                        Name of the environment variable.
+                                        May consist of any printable ASCII characters except '='.
                                       type: string
                                     value:
                                       description: |-
@@ -17924,6 +18695,36 @@ spec:
                                               type: string
                                           required:
                                           - fieldPath
+                                          type: object
+                                          x-kubernetes-map-type: atomic
+                                        fileKeyRef:
+                                          description: |-
+                                            FileKeyRef selects a key of the env file.
+                                            Requires the EnvFiles feature gate to be enabled.
+                                          properties:
+                                            key:
+                                              description: The key within the env
+                                                file. An invalid key will prevent
+                                                the pod from starting.
+                                              type: string
+                                            optional:
+                                              default: false
+                                              description: Specify whether the file
+                                                or its key must be defined.
+                                              type: boolean
+                                            path:
+                                              description: |-
+                                                The path within the volume from which to select the file.
+                                                Must be relative and may not contain the '..
+                                              type: string
+                                            volumeName:
+                                              description: The name of the volume
+                                                mount containing the env file.
+                                              type: string
+                                          required:
+                                          - key
+                                          - path
+                                          - volumeName
                                           type: object
                                           x-kubernetes-map-type: atomic
                                         resourceFieldRef:
@@ -18004,8 +18805,7 @@ spec:
                                       x-kubernetes-map-type: atomic
                                     prefix:
                                       description: Optional text to prepend to the
-                                        name of each environment variable. Must be
-                                        a C_IDENTIFIER.
+                                        name of each environment variable.
                                       type: string
                                     secretRef:
                                       description: The Secret to select from
@@ -18419,8 +19219,9 @@ spec:
                                         variable present in a Container.
                                       properties:
                                         name:
-                                          description: Name of the environment variable.
-                                            Must be a C_IDENTIFIER.
+                                          description: |-
+                                            Name of the environment variable.
+                                            May consist of any printable ASCII characters except '='.
                                           type: string
                                         value:
                                           description: |-
@@ -18469,6 +19270,36 @@ spec:
                                                   type: string
                                               required:
                                               - fieldPath
+                                              type: object
+                                              x-kubernetes-map-type: atomic
+                                            fileKeyRef:
+                                              description: |-
+                                                FileKeyRef selects a key of the env file.
+                                                Requires the EnvFiles feature gate to be enabled.
+                                              properties:
+                                                key:
+                                                  description: The key within the
+                                                    env file. An invalid key will
+                                                    prevent the pod from starting.
+                                                  type: string
+                                                optional:
+                                                  default: false
+                                                  description: Specify whether the
+                                                    file or its key must be defined.
+                                                  type: boolean
+                                                path:
+                                                  description: |-
+                                                    The path within the volume from which to select the file.
+                                                    Must be relative and may not contain the '..
+                                                  type: string
+                                                volumeName:
+                                                  description: The name of the volume
+                                                    mount containing the env file.
+                                                  type: string
+                                              required:
+                                              - key
+                                              - path
+                                              - volumeName
                                               type: object
                                               x-kubernetes-map-type: atomic
                                             resourceFieldRef:
@@ -18551,7 +19382,6 @@ spec:
                                         prefix:
                                           description: Optional text to prepend to
                                             the name of each environment variable.
-                                            Must be a C_IDENTIFIER.
                                           type: string
                                         secretRef:
                                           description: The Secret to select from
@@ -19006,8 +19836,9 @@ spec:
                                 present in a Container.
                               properties:
                                 name:
-                                  description: Name of the environment variable. Must
-                                    be a C_IDENTIFIER.
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
                                   type: string
                                 value:
                                   description: |-
@@ -19054,6 +19885,36 @@ spec:
                                           type: string
                                       required:
                                       - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: The key within the env file.
+                                            An invalid key will prevent the pod from
+                                            starting.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: Specify whether the file or
+                                            its key must be defined.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
                                       type: object
                                       x-kubernetes-map-type: atomic
                                     resourceFieldRef:
@@ -19132,7 +19993,7 @@ spec:
                                   x-kubernetes-map-type: atomic
                                 prefix:
                                   description: Optional text to prepend to the name
-                                    of each environment variable. Must be a C_IDENTIFIER.
+                                    of each environment variable.
                                   type: string
                                 secretRef:
                                   description: The Secret to select from
@@ -20034,9 +20895,8 @@ spec:
                                 on the host that shares a pod's lifetime.
                               properties:
                                 endpoints:
-                                  description: |-
-                                    endpoints is the endpoint name that details Glusterfs topology.
-                                    More info: https://examples.k8s.
+                                  description: endpoints is the endpoint name that
+                                    details Glusterfs topology.
                                   type: string
                                 path:
                                   description: |-
@@ -20452,6 +21312,52 @@ spec:
                                               type: object
                                             type: array
                                             x-kubernetes-list-type: atomic
+                                        type: object
+                                      podCertificate:
+                                        description: |-
+                                          Projects an auto-rotating credential bundle (private key and certificate
+                                          chain) that the pod can use either as a TLS...
+                                        properties:
+                                          certificateChainPath:
+                                            description: |-
+                                              Write the certificate chain at this path in the projected volume.
+
+                                              Most applications should use credentialBundlePath.
+                                            type: string
+                                          credentialBundlePath:
+                                            description: Write the credential bundle
+                                              at this path in the projected volume.
+                                            type: string
+                                          keyPath:
+                                            description: |-
+                                              Write the key at this path in the projected volume.
+
+                                              Most applications should use credentialBundlePath.
+                                            type: string
+                                          keyType:
+                                            description: The type of keypair Kubelet
+                                              will generate for the pod.
+                                            type: string
+                                          maxExpirationSeconds:
+                                            description: |-
+                                              maxExpirationSeconds is the maximum lifetime permitted for the
+                                              certificate.
+                                            format: int32
+                                            type: integer
+                                          signerName:
+                                            description: Kubelet's generated CSRs
+                                              will be addressed to this signer.
+                                            type: string
+                                          userAnnotations:
+                                            additionalProperties:
+                                              type: string
+                                            description: |-
+                                              userAnnotations allow pod authors to pass additional information to
+                                              the signer implementation.
+                                            type: object
+                                        required:
+                                        - keyType
+                                        - signerName
                                         type: object
                                       secret:
                                         description: secret information about the
