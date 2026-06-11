@@ -166,7 +166,6 @@ rules:
   - clusterroles
   - rolebindings
   - roles
-  - subjectaccessreviews
   verbs:
   - create
   - delete
@@ -174,6 +173,12 @@ rules:
   - list
   - update
   - watch
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
 - apiGroups:
   - route.openshift.io
   resources:
