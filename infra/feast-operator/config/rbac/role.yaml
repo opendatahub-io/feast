@@ -79,6 +79,12 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
   - autoscaling
   resources:
   - horizontalpodautoscalers
@@ -173,12 +179,6 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - authorization.k8s.io
-  resources:
-  - subjectaccessreviews
-  verbs:
-  - create
 - apiGroups:
   - route.openshift.io
   resources:
