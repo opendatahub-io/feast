@@ -5,7 +5,7 @@ A module with utility functions to support authorizing the REST servers using th
 from typing import Any
 
 from fastapi import HTTPException
-from fastapi.requests import Request
+from starlette.requests import HTTPConnection
 
 from feast.permissions.auth.auth_manager import (
     get_auth_manager,
@@ -13,7 +13,7 @@ from feast.permissions.auth.auth_manager import (
 from feast.permissions.security_manager import get_security_manager
 
 
-async def inject_user_details(request: Request) -> Any:
+async def inject_user_details(request: HTTPConnection) -> Any:
     """
     A function to extract the authorization token from a user request, extract the user details and propagate them to the
     current security manager, if any.

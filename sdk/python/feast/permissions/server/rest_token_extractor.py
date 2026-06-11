@@ -1,7 +1,7 @@
-from fastapi.requests import Request
 from starlette.authentication import (
     AuthenticationError,
 )
+from starlette.requests import HTTPConnection
 
 from feast.permissions.auth.token_extractor import TokenExtractor
 
@@ -9,9 +9,10 @@ from feast.permissions.auth.token_extractor import TokenExtractor
 class RestTokenExtractor(TokenExtractor):
     def extract_access_token(self, **kwargs) -> str:
         """
-        Token extractor for REST requests.
+        Token extractor for REST and WebSocket requests.
 
-        Requires a keyword argument called `request` of type `Request`
+        Requires a keyword argument called `request` of type `HTTPConnection`
+        (the common base class of both ``Request`` and ``WebSocket``).
 
         Returns:
             The extracted access token.
@@ -19,14 +20,14 @@ class RestTokenExtractor(TokenExtractor):
 
         if "request" not in kwargs:
             raise ValueError("Missing keywork argument 'request'")
-        if not isinstance(kwargs["request"], Request):
+        if not isinstance(kwargs["request"], HTTPConnection):
             raise ValueError(
-                f"The keywork argument 'request' is not of the expected type {Request.__name__}"
+                f"The keywork argument 'request' is not of the expected type {HTTPConnection.__name__}"
             )
 
         access_token = None
         request = kwargs["request"]
-        if isinstance(request, Request):
+        if isinstance(request, HTTPConnection):
             headers = request.headers
             for header in headers:
                 if header.lower() == "authorization":
