@@ -532,18 +532,6 @@ func VerifyFeastMethods(namespace string, feastDeploymentName string, testDir st
 	}
 }
 
-// VerifyFeastMethodsForDriverRanking checks CLI output for the driver_ranking project (S3 registry).
-func VerifyFeastMethodsForDriverRanking(namespace string, feastDeploymentName string, testDir string) {
-	cmd := exec.Command("kubectl", "exec", "deploy/"+feastDeploymentName, "-n", namespace, "-c", "online", "--",
-		"feast", "projects", "list")
-	output, err := testutils.Run(cmd, testDir)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-
-	fmt.Printf("Command: feast projects list\nOutput:\n%s\n", string(output))
-	VerifyOutputContains(output, []string{"driver_ranking"})
-	fmt.Printf("Assertion OK: output contains expected substring driver_ranking\n")
-}
-
 // ReplaceNamespaceInYaml reads a YAML file, replaces all existingNamespace with the actual namespace
 func ReplaceNamespaceInYamlFilesInPlace(filePaths []string, existingNamespace string, actualNamespace string) error {
 	for _, filePath := range filePaths {
@@ -567,4 +555,183 @@ func VerifyOutputContains(output []byte, expectedSubstrings []string) {
 	for _, expected := range expectedSubstrings {
 		Expect(outputStr).To(ContainSubstring(expected), fmt.Sprintf("Expected output to contain: %s", expected))
 	}
+}
+
+func ValidateFeatureStoreYamlS3(namespace, deployment string) {
+	cmd := exec.Command("kubectl", "exec", "deploy/"+deployment, "-n", namespace, "-c", "online", "--", "cat", "feature_store.yaml")
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "Failed to read feature_store.yaml")
+
+	content := string(output)
+	Expect(content).To(ContainSubstring("project: driver_ranking"))
+	Expect(content).To(ContainSubstring("s3://"))
+	fmt.Printf("feature_store.yaml in online pod: contains project driver_ranking and s3:// registry path\n")
+}
+
+// ValidateMaterializationIntervals verifies that two properties survived the operator upgrade:
+//
+//  1. The K8s CronJob that drives feast materialize-incremental still has a non-empty
+//     schedule — a schedule wipe would silently stop all future materialization.
+//
+//  2. The per-feature-view materialization bookmark (materializationIntervals in the S3 registry)
+//     is intact. feast materialize-incremental uses the most recent interval endTime as its
+//     start window; if the bookmark is wiped, the next run re-materializes from epoch (full scan).
+//     If the bookmark was never written pre-upgrade (CronJob had not yet fired), the
+//     materializationIntervals list is empty and this check is skipped with a warning.
+func ValidateMaterializationIntervals(namespace string, feastDeploymentName string, testDir string) {
+	By("Asserting CronJob schedule was not wiped by the upgrade")
+	cmd := exec.Command("kubectl", "get", "cronjob", feastDeploymentName,
+		"-n", namespace, "-o", "jsonpath={.spec.schedule}")
+	output, err := testutils.Run(cmd, testDir)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+		fmt.Sprintf("CronJob %s not found in namespace %s — upgrade may have deleted it", feastDeploymentName, namespace))
+	schedule := strings.TrimSpace(string(output))
+	ExpectWithOffset(1, schedule).NotTo(BeEmpty(),
+		"CronJob schedule is empty — upgrade reset the materialization schedule")
+	fmt.Printf("CronJob %s schedule: %q (preserved)\n", feastDeploymentName, schedule)
+
+	for _, fv := range []string{"driver_hourly_stats", "driver_hourly_stats_fresh"} {
+		By(fmt.Sprintf("Asserting materialization bookmark for feature view %s", fv))
+		cmd = exec.Command(
+			"kubectl", "exec", "deploy/"+feastDeploymentName,
+			"-n", namespace, "-c", "online", "--",
+			"feast", "feature-views", "describe", fv,
+		)
+		output, err = testutils.Run(cmd, testDir)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+			fmt.Sprintf("feast feature-views describe %s failed — S3 registry may be inaccessible", fv))
+
+		described := string(output)
+		fmt.Printf("feast feature-views describe %s:\n%s\n", fv, described)
+
+		ExpectWithOffset(1, described).To(ContainSubstring("materializationIntervals"),
+			fmt.Sprintf("feature view %s: materializationIntervals field missing — "+
+				"registry entry may have been reset by the upgrade", fv))
+
+		if strings.Contains(described, "startTime") {
+			ExpectWithOffset(1, described).NotTo(ContainSubstring("1970-01-01"),
+				fmt.Sprintf("feature view %s: materializationIntervals contain epoch timestamp (1970-01-01) — "+
+					"bookmark was reset by the upgrade; next incremental job will re-materialize from epoch", fv))
+			fmt.Printf("Feature view %s: materialization bookmark intact (non-epoch startTime present)\n", fv)
+		} else {
+			fmt.Printf("NOTICE: feature view %s has no materializationIntervals — "+
+				"CronJob may not have fired before the upgrade; bookmark check skipped\n", fv)
+		}
+	}
+}
+
+func ValidateRegistryIntact(namespace string, feastDeploymentName string, testDir string) {
+	type feastCheck struct {
+		command   []string
+		expected  []string
+		logPrefix string
+	}
+
+	checks := []feastCheck{
+		{
+			command:   []string{"feast", "projects", "list"},
+			expected:  []string{"driver_ranking"},
+			logPrefix: "Projects List",
+		},
+		{
+			command:   []string{"feast", "feature-views", "list"},
+			expected:  []string{"driver_hourly_stats", "driver_hourly_stats_fresh", "transformed_conv_rate", "transformed_conv_rate_fresh"},
+			logPrefix: "Feature Views List",
+		},
+		{
+			command:   []string{"feast", "entities", "list"},
+			expected:  []string{"driver"},
+			logPrefix: "Entities List",
+		},
+		{
+			command:   []string{"feast", "data-sources", "list"},
+			expected:  []string{"driver_hourly_stats_source", "vals_to_add", "driver_stats_push_source"},
+			logPrefix: "Data Sources List",
+		},
+		{
+			command: []string{"feast", "features", "list"},
+			expected: []string{
+				"conv_rate", "acc_rate", "avg_daily_trips",
+				"driver_metadata", "driver_config", "driver_profile",
+				"conv_rate_plus_val1", "conv_rate_plus_val2",
+			},
+			logPrefix: "Features List",
+		},
+		{
+			command:   []string{"feast", "feature-services", "list"},
+			expected:  []string{"driver_activity_v1", "driver_activity_v2"},
+			logPrefix: "Feature Services List",
+		},
+	}
+
+	for _, check := range checks {
+		cmd := exec.Command("kubectl", "exec", "deploy/"+feastDeploymentName, "-n", namespace, "-c", "online", "--")
+		cmd.Args = append(cmd.Args, check.command...)
+		output, err := testutils.Run(cmd, testDir)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+			fmt.Sprintf("feast %s list failed — registry may be inaccessible or objects wiped by upgrade", check.logPrefix))
+
+		fmt.Printf("%s:\n%s\n", check.logPrefix, string(output))
+		for _, expected := range check.expected {
+			ExpectWithOffset(1, string(output)).To(ContainSubstring(expected),
+				fmt.Sprintf("registry intact check: %s list missing %q — was the S3 registry wiped by the upgrade?", check.logPrefix, expected))
+		}
+	}
+	fmt.Printf("Registry intact: all pre-upgrade objects present in S3 registry\n")
+}
+
+// VerifyFeastMethodsForDriverRanking confirms the driver_ranking project is listed post-apply.
+// Unlike ValidateRegistryIntact it runs after feast apply and serves as a write-path smoke test.
+func VerifyFeastMethodsForDriverRanking(namespace string, feastDeploymentName string, testDir string) {
+	cmd := exec.Command("kubectl", "exec", "deploy/"+feastDeploymentName, "-n", namespace, "-c", "online", "--",
+		"feast", "projects", "list")
+	output, err := testutils.Run(cmd, testDir)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	fmt.Printf("Command: feast projects list\nOutput:\n%s\n", string(output))
+	VerifyOutputContains(output, []string{"driver_ranking"})
+	fmt.Printf("Assertion OK: output contains expected substring driver_ranking\n")
+}
+
+func VerifyOnlineFeatureServing(namespace string, feastDeploymentName string, testDir string) {
+	var output []byte
+	var err error
+
+	// Retry up to 3 times — the online store may take a moment to become ready
+	// after the deployment rolls out during an upgrade.
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := exec.Command(
+			"kubectl", "exec", "deploy/"+feastDeploymentName,
+			"-n", namespace, "-c", "online", "--",
+			"feast", "get-online-features",
+			"-e", "driver_id=1001",
+			"-e", "driver_id=1002",
+			"-f", "driver_hourly_stats:conv_rate",
+			"-f", "driver_hourly_stats:acc_rate",
+			"-f", "driver_hourly_stats:avg_daily_trips",
+		)
+		output, err = testutils.Run(cmd, testDir)
+		if err == nil {
+			break
+		}
+		if attempt < 3 {
+			fmt.Printf("feast get-online-features attempt %d/3 failed: %v — retrying\n", attempt, err)
+			cmd2 := exec.Command("sleep", "5")
+			_, _ = testutils.Run(cmd2, testDir)
+		}
+	}
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+		fmt.Sprintf("feast get-online-features failed after 3 attempts — "+
+			"online store may be inaccessible post-upgrade:\n%s", string(output)))
+
+	response := string(output)
+	fmt.Printf("feast get-online-features response:\n%s\n", response)
+
+	for _, feature := range []string{"conv_rate", "acc_rate", "avg_daily_trips", "driver_id"} {
+		ExpectWithOffset(1, response).To(ContainSubstring(feature),
+			fmt.Sprintf("%q missing from get-online-features output — "+
+				"online store schema may have changed or materialization did not write data", feature))
+	}
+
+	fmt.Printf("VerifyOnlineFeatureServing: online feature serving verified via feast get-online-features\n")
 }
