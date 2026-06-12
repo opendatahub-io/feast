@@ -51,10 +51,12 @@ def mock_fs_factory():
         # Provide a feature view with a matching PushSource so that the
         # /push endpoint's guard clause does not reject unknown sources.
         from feast.data_source import PushSource
+        from feast.infra.offline_stores.file_source import FileSource
 
         mock_fv = MagicMock()
         mock_fv.stream_source = PushSource(
-            name="driver_locations_push", batch_source=MagicMock()
+            name="driver_locations_push",
+            batch_source=FileSource(path="dummy"),
         )
         fs.list_feature_views.return_value = [mock_fv]
         fs.list_stream_feature_views.return_value = []
