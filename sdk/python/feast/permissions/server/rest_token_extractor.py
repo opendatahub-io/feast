@@ -25,15 +25,10 @@ class RestTokenExtractor(TokenExtractor):
                 f"The keywork argument 'request' is not of the expected type {HTTPConnection.__name__}"
             )
 
-        access_token = None
         request = kwargs["request"]
-        if isinstance(request, HTTPConnection):
-            headers = request.headers
-            for header in headers:
-                if header.lower() == "authorization":
-                    return self._extract_bearer_token(headers[header])
+        headers = request.headers
+        for header in headers:
+            if header.lower() == "authorization":
+                return self._extract_bearer_token(headers[header])
 
-        if access_token is None:
-            raise AuthenticationError("Missing authorization header")
-
-        return access_token
+        raise AuthenticationError("Missing authorization header")

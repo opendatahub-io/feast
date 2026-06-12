@@ -37,7 +37,7 @@ class TokenExtractor(ABC):
         """
         pattern = r"(?i)Bearer .+"
         if not bool(re.match(pattern, auth_header)):
-            raise AuthenticationError(f"Expected Bearer schema, found {auth_header}")
+            raise AuthenticationError("Expected Bearer authentication scheme")
         _, access_token = auth_header.split()
         return access_token
 

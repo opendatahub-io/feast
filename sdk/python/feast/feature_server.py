@@ -17,7 +17,6 @@ import os
 import sys
 import threading
 import time
-import traceback
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -711,7 +710,7 @@ def get_app(
     @app.exception_handler(Exception)
     async def rest_exception_handler(request: Request, exc: Exception):
         # Print the original exception on the server side
-        logger.exception(traceback.format_exc())
+        logger.exception("Unhandled exception")
 
         if isinstance(exc, FeastError):
             return JSONResponse(
