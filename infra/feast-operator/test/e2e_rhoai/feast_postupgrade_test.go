@@ -38,14 +38,31 @@ var _ = Describe("Feast PostUpgrade scenario Testing", Ordered, func() {
 		fmt.Printf("Namespace %s deleted successfully\n", namespace)
 	})
 	runPostUpgradeTest := func() {
+
+		By("Checking if the Feast deployment is available after upgrade")
+		CheckDeployment(namespace, feastDeploymentName)
+
 		By("Verify Feature Store CR is in Ready state")
 		ValidateFeatureStoreCRStatus(namespace, feastCRName)
+
+		By("Validating feature_store.yaml contains S3 registry path and driver_ranking project")
+		ValidateFeatureStoreYamlS3(namespace, feastDeploymentName)
+
+		By("Validating pre-upgrade registry objects are intact in S3 (before feast apply)")
+		ValidateRegistryIntact(namespace, feastDeploymentName, testDir)
+
+		By("Validating materialization intervals (last_updated_timestamp) are preserved post-upgrade")
+		ValidateMaterializationIntervals(namespace, feastDeploymentName, testDir)
 
 		By("Running `feast apply` and `feast materialize-incremental` to validate registry definitions (S3 / driver_ranking)")
 		VerifyApplyFeatureStoreDefinitionsS3(namespace, feastCRName, feastDeploymentName)
 
 		By("Validating Feast project list for driver_ranking")
 		VerifyFeastMethodsForDriverRanking(namespace, feastDeploymentName, testDir)
+
+		By("Verifying online feature serving is queryable post-upgrade and post-materialization")
+		VerifyOnlineFeatureServing(namespace, feastDeploymentName, testDir)
+
 	}
 
 	// This context verifies that a pre-created Feast FeatureStore CR continues to function as expected
