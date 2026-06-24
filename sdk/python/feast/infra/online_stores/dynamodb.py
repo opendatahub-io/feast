@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
+import re
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -46,6 +47,15 @@ except ImportError as e:
 
 
 logger = logging.getLogger(__name__)
+
+# DynamoDB tag values allow Unicode letters, digits, whitespace, and: _ . / = + - : @
+# Characters outside this set (e.g. commas in label-values tags) must be replaced.
+_DYNAMO_TAG_INVALID_RE = re.compile(r"[^\w\s+\-=./:@]", re.UNICODE)
+
+
+def _sanitize_dynamo_tag_value(value: str) -> str:
+    sanitized = _DYNAMO_TAG_INVALID_RE.sub("_", value)
+    return sanitized[:256]
 
 
 class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
@@ -223,11 +233,16 @@ class DynamoDBOnlineStore(OnlineStore):
         online_tags = online_config.tags or {}
 
         common_tags = [
-            {"Key": key, "Value": table_instance_tags.get(key) or value}
+            {
+                "Key": key,
+                "Value": _sanitize_dynamo_tag_value(
+                    table_instance_tags.get(key) or value
+                ),
+            }
             for key, value in online_tags.items()
         ]
         table_tags = [
-            {"Key": key, "Value": value}
+            {"Key": key, "Value": _sanitize_dynamo_tag_value(value)}
             for key, value in table_instance_tags.items()
             if key not in online_tags
         ]
