@@ -48,14 +48,20 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-# DynamoDB tag values allow Unicode letters, digits, whitespace, and: _ . / = + - : @
+# DynamoDB tag keys and values allow Unicode letters, digits, spaces, and: _ . / = + - : @
 # Characters outside this set (e.g. commas in label-values tags) must be replaced.
-_DYNAMO_TAG_INVALID_RE = re.compile(r"[^\w\s+\-=./:@]", re.UNICODE)
+# Note: only literal spaces are allowed, not other whitespace (tabs, newlines, etc.).
+_DYNAMO_TAG_INVALID_RE = re.compile(r"[^\w +\-=./:@]", re.UNICODE)
 
 
 def _sanitize_dynamo_tag_value(value: str) -> str:
     sanitized = _DYNAMO_TAG_INVALID_RE.sub("_", value)
     return sanitized[:256]
+
+
+def _sanitize_dynamo_tag_key(key: str) -> str:
+    sanitized = _DYNAMO_TAG_INVALID_RE.sub("_", key)
+    return sanitized[:128]
 
 
 class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
@@ -234,7 +240,7 @@ class DynamoDBOnlineStore(OnlineStore):
 
         common_tags = [
             {
-                "Key": key,
+                "Key": _sanitize_dynamo_tag_key(key),
                 "Value": _sanitize_dynamo_tag_value(
                     table_instance_tags.get(key) or value
                 ),
@@ -242,7 +248,10 @@ class DynamoDBOnlineStore(OnlineStore):
             for key, value in online_tags.items()
         ]
         table_tags = [
-            {"Key": key, "Value": _sanitize_dynamo_tag_value(value)}
+            {
+                "Key": _sanitize_dynamo_tag_key(key),
+                "Value": _sanitize_dynamo_tag_value(value),
+            }
             for key, value in table_instance_tags.items()
             if key not in online_tags
         ]

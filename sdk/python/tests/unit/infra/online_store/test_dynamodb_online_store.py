@@ -13,6 +13,7 @@ from feast.infra.online_stores.dynamodb import (
     DynamoDBOnlineStore,
     DynamoDBOnlineStoreConfig,
     _latest_data_to_write,
+    _sanitize_dynamo_tag_key,
     _sanitize_dynamo_tag_value,
 )
 from feast.protos.feast.types.EntityKey_pb2 import EntityKey as EntityKeyProto
@@ -1348,4 +1349,72 @@ def test_table_tags_sanitizes_global_and_table_tags(dynamodb_online_store):
             "Key": "feast.io/label-values:sentiment",
             "Value": "positive_negative_neutral",
         },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Tests for control whitespace in tag values (Finding 1 — RHOAIENG-71247)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("hello\tworld", "hello_world"),
+        ("hello\nworld", "hello_world"),
+        ("hello\rworld", "hello_world"),
+        ("hello\fworld", "hello_world"),
+        ("hello\vworld", "hello_world"),
+        ("tab\there\tnewline\nthere", "tab_here_newline_there"),
+        ("hello world", "hello world"),  # literal space is still allowed
+    ],
+)
+def test_sanitize_dynamo_tag_value_control_whitespace(raw, expected):
+    """Control whitespace (tab, newline, etc.) must be replaced; only literal spaces are allowed."""
+    assert _sanitize_dynamo_tag_value(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# Tests for _sanitize_dynamo_tag_key — DynamoDB tag key sanitization (Finding 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("simple", "simple"),
+        ("key,with,commas", "key_with_commas"),
+        ("feast.io/label-values:is_reliable", "feast.io/label-values:is_reliable"),
+        ("a+b-c.d/e:f@g", "a+b-c.d/e:f@g"),
+        ("key;with#special$chars!", "key_with_special_chars_"),
+        ("", ""),
+    ],
+)
+def test_sanitize_dynamo_tag_key(raw, expected):
+    assert _sanitize_dynamo_tag_key(raw) == expected
+
+
+def test_sanitize_dynamo_tag_key_truncates_long_keys():
+    long_key = "k" * 200
+    assert len(_sanitize_dynamo_tag_key(long_key)) == 128
+
+
+def test_sanitize_dynamo_tag_key_control_whitespace():
+    """Control whitespace in tag keys must be replaced."""
+    assert _sanitize_dynamo_tag_key("key\twith\ttabs") == "key_with_tabs"
+    assert _sanitize_dynamo_tag_key("key\nwith\nnewlines") == "key_with_newlines"
+
+
+def test_table_tags_sanitizes_keys(dynamodb_online_store):
+    """Tag keys with invalid characters are sanitized in _table_tags()."""
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags={"env,scope": "prod"}),
+        MockFeatureView(
+            name="view",
+            tags={"tag;key": "value"},
+        ),
+    )
+    assert actual == [
+        {"Key": "env_scope", "Value": "prod"},
+        {"Key": "tag_key", "Value": "value"},
     ]
