@@ -1387,11 +1387,16 @@ def test_sanitize_dynamo_tag_value_control_whitespace(raw, expected):
         ("feast.io/label-values:is_reliable", "feast.io/label-values:is_reliable"),
         ("a+b-c.d/e:f@g", "a+b-c.d/e:f@g"),
         ("key;with#special$chars!", "key_with_special_chars_"),
-        ("", ""),
     ],
 )
 def test_sanitize_dynamo_tag_key(raw, expected):
     assert _sanitize_dynamo_tag_key(raw) == expected
+
+
+def test_sanitize_dynamo_tag_key_rejects_empty_key():
+    """Empty keys (min length 1 in DynamoDB) must raise ValueError."""
+    with pytest.raises(ValueError, match="empty after sanitization"):
+        _sanitize_dynamo_tag_key("")
 
 
 def test_sanitize_dynamo_tag_key_truncates_long_keys():
@@ -1418,3 +1423,17 @@ def test_table_tags_sanitizes_keys(dynamodb_online_store):
         {"Key": "env_scope", "Value": "prod"},
         {"Key": "tag_key", "Value": "value"},
     ]
+
+
+def test_table_tags_dedupes_sanitized_key_collisions(dynamodb_online_store):
+    """When online and table-instance tags sanitize to the same key,
+    the table-instance tag value takes precedence and no duplicate is emitted."""
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags={"env,scope": "from-online"}),
+        MockFeatureView(
+            name="view",
+            tags={"env;scope": "from-table"},
+        ),
+    )
+    # Both raw keys sanitize to "env_scope"; table-level tag wins.
+    assert actual == [{"Key": "env_scope", "Value": "from-table"}]
