@@ -36,6 +36,7 @@ dependencies = [
     "tqdm>=4,<5",
     "typeguard>=4.0.0",
     "fastapi>=0.68.0",
+    "ujson>=5.12.1",
     "starlette>=1.0.1",
     "uvicorn[standard]>=0.30.6,<=0.34.0",
     "uvicorn-worker",
