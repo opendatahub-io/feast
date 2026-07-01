@@ -194,7 +194,7 @@ nlp = ["feast[docling, image, milvus, pytorch, rag]"]
 dev = ["feast[ci]"]
 docs = ["feast[ci]"]
 # used for the 'feature-server' container image build
-minimal = ["feast[aws, gcp, snowflake, redis, go, mysql, postgres-c, opentelemetry, grpcio, k8s, duckdb, mcp, milvus]"]
+minimal = ["feast[aws, gcp, snowflake, redis, go, mysql, postgres-c, opentelemetry, grpcio, k8s, duckdb, mcp, milvus]", "ujson>=5.12.1"]
 minimal-sdist-build = [
     "feast[minimal]",
     "feast[ibis]",
