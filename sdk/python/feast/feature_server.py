@@ -17,7 +17,6 @@ import os
 import sys
 import threading
 import time
-import traceback
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -626,13 +625,13 @@ def get_app(
         except Exception:
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    @app.post("/chat")
+    @app.post("/chat", dependencies=[Depends(inject_user_details)])
     async def chat(request: ChatRequest):
         # Process the chat request
         # For now, just return dummy text
         return {"response": "This is a dummy response from the Feast feature server."}
 
-    @app.get("/chat")
+    @app.get("/chat", dependencies=[Depends(inject_user_details)])
     async def chat_ui():
         # Serve the chat UI
         static_dir_ref = importlib_resources.files(__spec__.parent) / "static/chat"  # type: ignore[name-defined, arg-type]
@@ -711,7 +710,7 @@ def get_app(
     @app.exception_handler(Exception)
     async def rest_exception_handler(request: Request, exc: Exception):
         # Print the original exception on the server side
-        logger.exception(traceback.format_exc())
+        logger.exception("Unhandled exception")
 
         if isinstance(exc, FeastError):
             return JSONResponse(
@@ -721,7 +720,7 @@ def get_app(
         else:
             return JSONResponse(
                 status_code=500,
-                content=str(exc),
+                content="Internal Server Error",
             )
 
     # Chat WebSocket connection manager
@@ -747,7 +746,9 @@ def get_app(
     WS_READ_TIMEOUT_SEC = 60
 
     @app.websocket("/ws/chat")
-    async def websocket_endpoint(websocket: WebSocket):
+    async def websocket_endpoint(
+        websocket: WebSocket, _user: Any = Depends(inject_user_details)
+    ):
         if len(manager.active_connections) >= MAX_WS_CONNECTIONS:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
