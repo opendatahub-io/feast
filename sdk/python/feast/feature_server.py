@@ -49,6 +49,7 @@ from feast.constants import DEFAULT_FEATURE_SERVER_REGISTRY_TTL
 from feast.data_source import PushMode
 from feast.errors import (
     FeastError,
+    PushSourceNotFoundException,
 )
 from feast.feast_object import FeastObject
 from feast.feature_server_utils import convert_response_to_dict
@@ -530,6 +531,9 @@ def get_app(
                     and fv.stream_source.name == request.push_source_name
                 )
             }
+
+            if not fvs_with_push_sources:
+                raise PushSourceNotFoundException(request.push_source_name)
 
             for feature_view in fvs_with_push_sources:
                 assert_permissions(resource=feature_view, actions=actions)
