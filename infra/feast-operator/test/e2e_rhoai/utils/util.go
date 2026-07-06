@@ -2,10 +2,12 @@ package utils
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	testutils "github.com/feast-dev/feast/infra/feast-operator/test/utils"
@@ -734,4 +736,222 @@ func VerifyOnlineFeatureServing(namespace string, feastDeploymentName string, te
 	}
 
 	fmt.Printf("VerifyOnlineFeatureServing: online feature serving verified via feast get-online-features\n")
+}
+
+func ValidateFeastOperatorCRStatus(namespace, crName string, testDir string) {
+
+	cmd := exec.Command("kubectl", "get", "feastoperator", crName, "-n", namespace,
+		"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+	out, err := testutils.Run(cmd, testDir)
+	Expect(err).NotTo(HaveOccurred(), "failed to get FeastOperator CR %s: %v", crName, err)
+	Expect(strings.TrimSpace(string(out))).To(Equal("True"),
+		"FeastOperator CR %s in %s should be Ready=True, got: %s", crName, namespace, string(out))
+	fmt.Printf("✅ FeastOperator CR %s is Ready\n", crName)
+}
+
+// ValidateCRDExists asserts that a CRD with the given name is registered on the cluster.
+func ValidateCRDExists(crdName string, testDir string) {
+	cmd := exec.Command("kubectl", "get", "crd", crdName, "--ignore-not-found", "-o", "name")
+	out, err := testutils.Run(cmd, testDir)
+	Expect(err).NotTo(HaveOccurred(), "kubectl get crd %s failed: %v", crdName, err)
+	Expect(strings.TrimSpace(string(out))).NotTo(BeEmpty(),
+		"CRD %s not found on cluster", crdName)
+}
+
+// ValidateDeploymentAndPodsSelectorLabels asserts that the named Deployment in the given namespace available and
+// pods have all of the expected key=value selector labels.
+func ValidateDeploymentAndPodsSelectorLabels(namespace, deploymentName string, expectedLabels map[string]string, testDir string) {
+	CheckDeployment(namespace, deploymentName)
+	cmd := exec.Command("kubectl", "get", "deployment", deploymentName, "-n", namespace, "-o", "jsonpath={.spec.selector.matchLabels}")
+	out, err := testutils.Run(cmd, testDir)
+	Expect(err).NotTo(HaveOccurred(), "failed to get Deployment %s selector: %v", deploymentName, err)
+
+	var actual map[string]string
+	Expect(json.Unmarshal([]byte(strings.TrimSpace(string(out))), &actual)).To(Succeed(),
+		"could not parse selector labels from Deployment %s: %s", deploymentName, string(out))
+
+	for k, v := range expectedLabels {
+		Expect(actual).To(HaveKeyWithValue(k, v),
+			"Deployment %s selector missing label %s=%s", deploymentName, k, v)
+	}
+}
+
+// ValidateFeastModuleOperatorEnvVars asserts that the feast-module-operator
+// manager container has the required operator configuration env vars injected.
+// The deployed Deployment name is opendatahub-feast-operator (Helm chart default).
+// Required env vars come from config/chart/templates/apps_v1_deployment.yaml.
+func ValidateFeastModuleOperatorEnvVars(namespace, testDir string) {
+	const deploymentName = "opendatahub-feast-operator"
+
+	cmd := exec.Command("kubectl", "get", "deployment", deploymentName,
+		"-n", namespace,
+		"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="manager")].env}`)
+	out, err := testutils.Run(cmd, testDir)
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get env vars for %s manager container in %s: %v", deploymentName, namespace, err)
+
+	envJSON := strings.TrimSpace(string(out))
+	Expect(envJSON).NotTo(BeEmpty(),
+		"%s manager container in %s has no env vars — operator may not have injected configuration",
+		deploymentName, namespace)
+
+	var envVars []map[string]interface{}
+	Expect(json.Unmarshal([]byte(envJSON), &envVars)).To(Succeed(),
+		"could not parse env vars JSON for %s in %s: %q", deploymentName, namespace, envJSON)
+
+	envNames := make(map[string]bool, len(envVars))
+	for _, e := range envVars {
+		if name, ok := e["name"].(string); ok {
+			envNames[name] = true
+		}
+	}
+
+	required := []string{
+		"ODH_MODULE_OPERATOR_CONFIGURATION_PATH",
+		"ODH_MODULE_OPERATOR_MANIFESTS_PATH",
+		"ODH_MODULE_OPERATOR_NAMESPACE",
+		"ODH_MODULE_OPERATOR_APPLICATIONS_NAMESPACE",
+		"RHAI_APPLICATIONS_NAMESPACE",
+	}
+	for _, name := range required {
+		Expect(envNames).To(HaveKey(name),
+			"%s manager container missing required env var %q in namespace %s",
+			deploymentName, name, namespace)
+	}
+	fmt.Printf("%s manager container has all required env vars: %v\n", deploymentName, required)
+}
+
+// GetApplicationsNamespace returns the namespace where feast-module-operator
+// and opendatahub-feast-operator are deployed on RHOAI.
+func GetApplicationsNamespace() string {
+	ns := os.Getenv("APPLICATIONS_NAMESPACE")
+	if ns == "" {
+		return "redhat-ods-applications" // Default for RHOAI
+	}
+	return ns
+}
+
+// ValidateDSCCondition asserts that the DataScienceCluster resource has the
+// given condition type set to the expected status string (e.g. "True").
+func ValidateDSCCondition(conditionType, expectedStatus string) {
+	cmd := exec.Command("kubectl", "get", "datasciencecluster",
+		"-A",
+		"-o", fmt.Sprintf(`jsonpath={.items[0].status.conditions[?(@.type=="%s")].status}`, conditionType))
+	out, err := testutils.Run(cmd, "")
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to query DataScienceCluster condition %s: %v", conditionType, err)
+	Expect(strings.TrimSpace(string(out))).To(Equal(expectedStatus),
+		"DataScienceCluster condition %s should be %s, got: %q", conditionType, expectedStatus, string(out))
+}
+
+// ValidatePlatformVersionHandshake asserts that the platform version stored in
+// the odh-feastoperator-config ConfigMap matches the version reported in the
+// FeastOperator CR status.platformVersion field.
+func ValidatePlatformVersionHandshake(namespace string) {
+	// Get platform version from ConfigMap
+	configCmd := exec.Command("kubectl", "get", "configmap", "odh-feastoperator-config",
+		"-n", namespace,
+		"-o", `jsonpath={.data.platformVersion}`) // ✅ Correct: lowercase
+	configOut, err := testutils.Run(configCmd, "")
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get odh-feastoperator-config in %s: %v", namespace, err)
+	configVersion := strings.TrimSpace(string(configOut))
+	Expect(configVersion).NotTo(BeEmpty(),
+		"odh-feastoperator-config.data.platformVersion is empty in namespace %s", namespace)
+
+	// FIXED: Get platform version from status.releases (not status.platformVersion!)
+	statusCmd := exec.Command("kubectl", "get", "feastoperator", "default-feastoperator",
+		"-n", namespace,
+		"-o", `jsonpath={.status.releases[?(@.name=="platform")].version}`) // ← FIXED
+	statusOut, err := testutils.Run(statusCmd, "")
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get FeastOperator platform version from status.releases in %s: %v", namespace, err)
+	statusVersion := strings.TrimSpace(string(statusOut))
+	Expect(statusVersion).NotTo(BeEmpty(),
+		"FeastOperator status.releases platform version is empty in namespace %s", namespace)
+
+	// Verify handshake
+	Expect(statusVersion).To(Equal(configVersion),
+		"platform version mismatch: ConfigMap has %q but FeastOperator status.releases has %q",
+		configVersion, statusVersion)
+
+	fmt.Printf("✅ Platform version handshake validated: %s\n", configVersion)
+}
+
+// ValidateFeastOperatorReleases asserts that the FeastOperator CR
+// status.releases map is non-empty after operator reconciliation completes.
+func ValidateFeastOperatorReleases(namespace, crName string) {
+	cmd := exec.Command("kubectl", "get", "feastoperator", crName,
+		"-n", namespace,
+		"-o", "jsonpath={.status.releases}")
+	out, err := testutils.Run(cmd, "")
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get FeastOperator %s/%s status.releases: %v", namespace, crName, err)
+	var releases []map[string]string
+	Expect(json.Unmarshal([]byte(strings.TrimSpace(string(out))), &releases)).To(Succeed(),
+		"could not parse FeastOperator %s status.releases: %s", crName, string(out))
+	Expect(releases).NotTo(BeEmpty(),
+		"FeastOperator %s status.releases is empty — operator may not have completed reconciliation", crName)
+	byName := make(map[string]string, len(releases))
+	for _, r := range releases {
+		byName[r["name"]] = r["version"]
+	}
+	for _, required := range []string{"feast", "platform"} {
+		Expect(byName[required]).NotTo(BeEmpty(),
+			"FeastOperator %s status.releases missing non-empty version for %q entry", crName, required)
+	}
+}
+
+// ValidateFeastOperandPodsNotRestarted verifies that feast-operator pods were
+// not restarted unexpectedly during upgrade (zero-downtime in-place upgrade)
+// and that the Deployment selector was migrated to app.kubernetes.io/name=feast-operator.
+func ValidateFeastOperandPodsNotRestarted(namespace, testDir string) {
+	const selectorLabel = "app.kubernetes.io/name=feast-operator,control-plane=controller-manager"
+	const controllerDeployment = "feast-operator-controller-manager"
+
+	infoCmd := exec.Command("kubectl", "get", "pods",
+		"-n", namespace,
+		"-l", selectorLabel,
+		"--sort-by=.metadata.creationTimestamp",
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{" started="}{.status.startTime}{"\n"}{end}`)
+	infoOut, err := testutils.Run(infoCmd, testDir)
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to list pods with label %s in %s: %v", selectorLabel, namespace, err)
+	podInfo := strings.TrimSpace(string(infoOut))
+	Expect(podInfo).NotTo(BeEmpty(),
+		"no pods found with label %s in %s — operator may not be running or label selector changed",
+		selectorLabel, namespace)
+	fmt.Printf("feast-operator pod start times:\n%s\n", podInfo)
+
+	restartCmd := exec.Command("kubectl", "get", "pods",
+		"-n", namespace,
+		"-l", selectorLabel,
+		"-o", `jsonpath={range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}`)
+	restartOut, err := testutils.Run(restartCmd, testDir)
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get restart counts for pods in %s: %v", namespace, err)
+	for _, line := range strings.Split(strings.TrimSpace(string(restartOut)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		count, parseErr := strconv.Atoi(line)
+		Expect(parseErr).NotTo(HaveOccurred(),
+			"could not parse restart count %q: %v", line, parseErr)
+		Expect(count).To(BeNumerically("==", 0),
+			"feast-operator pod in %s was restarted %d time(s) — upgrade should be zero-downtime",
+			namespace, count)
+	}
+
+	selectorCmd := exec.Command("kubectl", "get", "deployment", controllerDeployment,
+		"-n", namespace,
+		"-o", `jsonpath={.spec.selector.matchLabels}`)
+	selectorOut, err := testutils.Run(selectorCmd, testDir)
+	Expect(err).NotTo(HaveOccurred(),
+		"failed to get %s selector in %s: %v", controllerDeployment, namespace, err)
+	selectorJSON := strings.TrimSpace(string(selectorOut))
+	Expect(selectorJSON).To(ContainSubstring("feast-operator"),
+		"%s selector in %s should contain 'feast-operator'; got: %s",
+		controllerDeployment, namespace, selectorJSON)
+	fmt.Printf("%s selector: %s\n", controllerDeployment, selectorJSON)
 }

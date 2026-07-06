@@ -39,7 +39,7 @@ var _ = Describe("Feast PostUpgrade scenario Testing", Ordered, func() {
 	})
 	runPostUpgradeTest := func() {
 
-		By("Checking if the Feast deployment is available after upgrade")
+		By("Checking if the Feast Instance deployment is available after upgrade")
 		CheckDeployment(namespace, feastDeploymentName)
 
 		By("Verify Feature Store CR is in Ready state")
