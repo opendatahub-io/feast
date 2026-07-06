@@ -29,6 +29,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.SYNC_STABLE_PAT }}
+          persist-credentials: false
 
       - name: Configure Git
         run: |
@@ -63,9 +64,9 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           SOURCE_PR_URL: ${{ github.event.pull_request.html_url }}
+          BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+          CONFLICT: ${{ steps.cherry-pick.outputs.conflict }}
         run: |
-          BRANCH="${{ steps.cherry-pick.outputs.branch }}"
-          CONFLICT="${{ steps.cherry-pick.outputs.conflict }}"
 
           if [ "$CONFLICT" = "true" ]; then
             PR_URL=$(gh pr create \

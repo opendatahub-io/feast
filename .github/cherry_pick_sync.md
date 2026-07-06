@@ -24,8 +24,9 @@ red-hat-data-services/feast  (downstream)
 |-------|-------------|---------------|------------|----------|
 | `sync-to-stable` | `opendatahub-io/feast` | `stable` | Yes | `sync_stable_branch.yml` |
 | `sync-to-upstream` | `feast-dev/feast` | `master` | No | `sync_upstream.yml` |
-| `sync-to-rhoai-3.5` | `red-hat-data-services/feast` | `rhoai-3.5` | Yes | `sync_downstream_branch.yml` |
-| `sync-to-rhoai-3.4-ea.1` | `red-hat-data-services/feast` | `rhoai-3.4-ea.1` | Yes | `sync_downstream_branch.yml` |
+| `sync-to-rhoai-<version>` | `red-hat-data-services/feast` | `rhoai-<version>` | Yes | `sync_downstream_branch.yml` |
+
+Examples: `sync-to-rhoai-3.5` → `rhoai-3.5`, `sync-to-rhoai-3.4` → `rhoai-3.4`, `sync-to-rhoai-3.4-ea.1` → `rhoai-3.4-ea.1`
 
 Multiple labels can be applied to a single PR. Each triggers independently.
 
@@ -62,10 +63,10 @@ The upstream PR will **not** auto-merge. Expect upstream maintainer review and p
 
 Use when the change needs to land in a specific RHOAI release branch. Typical cases:
 - Backporting a fix to `rhoai-3.5` for the current GA release
-- Backporting to `rhoai-3.4-ea.2` for an early-access build
+- Backporting to `rhoai-3.4-ea.1` for an early-access build
 - Applying a CVE fix across multiple release branches simultaneously
 
-Apply multiple downstream labels if the fix needs to go to several branches (e.g., `sync-to-rhoai-3.5` + `sync-to-rhoai-3.4`).
+Apply multiple downstream labels if the fix needs to go to several branches (e.g., `sync-to-rhoai-3.5` + `sync-to-rhoai-3.4-ea.1`).
 
 ## Handling Conflicts
 

@@ -11,6 +11,8 @@ jobs:
   detect-targets:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       targets: ${{ steps.extract.outputs.targets }}
       has_targets: ${{ steps.extract.outputs.has_targets }}
@@ -30,7 +32,7 @@ jobs:
 
   cherry-pick-to-downstream:
     needs: detect-targets
-    if: needs.detect-targets.outputs.has_targets == 'true'
+    if: needs.detect-targets.outputs.has_targets == 'true' &&  github.repository == 'opendatahub-io/feast' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -49,11 +51,12 @@ jobs:
     steps:
       - name: Resolve target branch
         id: resolve
+        env:
+          VERSION: ${{ matrix.version }}
         run: |
-          VERSION="${{ matrix.version }}"
-          # Branch name matches the label suffix directly (e.g., rhoai-3.5, rhoai-3.4-ea.1)
           TARGET_BRANCH="${VERSION}"
           echo "target_branch=${TARGET_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Target branch: ${TARGET_BRANCH}"
 
       - name: Checkout repository
@@ -61,19 +64,25 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.SYNC_STABLE_PAT }}
+          persist-credentials: false
 
-      - name: Fetch downstream
+      - name: Add downstream remote
         run: |
           git remote add downstream "https://x-access-token:${GH_TOKEN}@github.com/${DOWNSTREAM_REPO}.git" 2>/dev/null || true
-          git fetch downstream "${{ steps.resolve.outputs.target_branch }}"
 
       - name: Verify target branch exists
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
         run: |
-          TARGET_BRANCH="${{ steps.resolve.outputs.target_branch }}"
           if ! git ls-remote --exit-code downstream "refs/heads/${TARGET_BRANCH}" > /dev/null 2>&1; then
             echo "::error::Target branch '${TARGET_BRANCH}' does not exist on ${DOWNSTREAM_REPO}"
             exit 1
           fi
+
+      - name: Fetch downstream branch
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+        run: git fetch downstream "$TARGET_BRANCH"
 
       - name: Configure Git
         run: |
@@ -82,9 +91,9 @@ jobs:
 
       - name: Create cherry-pick branch
         id: cherry-pick
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
         run: |
-          TARGET_BRANCH="${{ steps.resolve.outputs.target_branch }}"
-          VERSION="${{ matrix.version }}"
           BRANCH="auto-sync/${TARGET_BRANCH}/${PR_NUMBER}"
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
@@ -105,12 +114,11 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           SOURCE_PR_URL: ${{ github.event.pull_request.html_url }}
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+          CONFLICT: ${{ steps.cherry-pick.outputs.conflict }}
         run: |
-          TARGET_BRANCH="${{ steps.resolve.outputs.target_branch }}"
-          VERSION="${{ matrix.version }}"
-          BRANCH="${{ steps.cherry-pick.outputs.branch }}"
-          CONFLICT="${{ steps.cherry-pick.outputs.conflict }}"
-
           if [ "$CONFLICT" = "true" ]; then
             PR_URL=$(gh pr create \
               --repo "$DOWNSTREAM_REPO" \
@@ -153,6 +161,6 @@ jobs:
 
       - name: Enable auto-merge
         if: steps.cherry-pick.outputs.conflict == 'false'
-        run: |
-          PR_URL="${{ steps.create-pr.outputs.pr_url }}"
-          gh pr merge "$PR_URL" --auto --squash
+        env:
+          PR_URL: ${{ steps.create-pr.outputs.pr_url }}
+        run: gh pr merge "$PR_URL" --auto --squash
