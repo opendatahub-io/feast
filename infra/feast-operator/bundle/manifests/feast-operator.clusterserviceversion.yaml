@@ -302,7 +302,6 @@ spec:
           - clusterroles
           - rolebindings
           - roles
-          - subjectaccessreviews
           verbs:
           - create
           - delete

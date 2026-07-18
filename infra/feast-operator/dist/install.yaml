@@ -22107,6 +22107,12 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
   - autoscaling
   resources:
   - horizontalpodautoscalers
@@ -22202,7 +22208,6 @@ rules:
   - clusterroles
   - rolebindings
   - roles
-  - subjectaccessreviews
   verbs:
   - create
   - delete
