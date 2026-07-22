@@ -1,0 +1,109 @@
+name: Sync to Upstream
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - master
+
+jobs:
+  cherry-pick-to-upstream:
+    permissions:
+      contents: write
+      pull-requests: write
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'sync-to-upstream')
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_STABLE_PAT }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      UPSTREAM_REPO: feast-dev/feast
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_STABLE_PAT }}
+          persist-credentials: false
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git" 2>/dev/null || true
+          git fetch upstream master
+
+      - name: Create cherry-pick branch
+        id: cherry-pick
+        run: |
+          BRANCH="auto-sync/upstream/${PR_NUMBER}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+          git checkout -b "$BRANCH" upstream/master
+
+          if git cherry-pick -m 1 "$MERGE_SHA"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git cherry-pick --abort || true
+            git commit --allow-empty -m "cherry-pick of #${PR_NUMBER} failed — manual resolution needed"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git push upstream "$BRANCH" --force
+
+      - name: Create Pull Request
+        id: create-pr
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          SOURCE_PR_URL: ${{ github.event.pull_request.html_url }}
+          BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+          CONFLICT: ${{ steps.cherry-pick.outputs.conflict }}
+        run: |
+
+          if [ "$CONFLICT" = "true" ]; then
+            PR_URL=$(gh pr create \
+              --repo "$UPSTREAM_REPO" \
+              --base master \
+              --head "$BRANCH" \
+              --title "sync(upstream): ${PR_TITLE} (#${PR_NUMBER}) [CONFLICT]" \
+              --body "## Auto-sync from ${GITHUB_REPOSITORY} (PR #${PR_NUMBER})
+
+          Cherry-pick of ${SOURCE_PR_URL} **failed due to merge conflicts**.
+
+          ### Manual resolution required
+          \`\`\`bash
+          git clone https://github.com/${UPSTREAM_REPO}.git && cd feast
+          git checkout ${BRANCH}
+          git reset --hard origin/master
+          git cherry-pick -m 1 ${MERGE_SHA}
+          # resolve conflicts, then:
+          git add .
+          git cherry-pick --continue
+          git push origin ${BRANCH} --force
+          \`\`\`" \
+              --label "sync-to-upstream" \
+              --label "needs-manual-resolution")
+          else
+            PR_URL=$(gh pr create \
+              --repo "$UPSTREAM_REPO" \
+              --base master \
+              --head "$BRANCH" \
+              --title "sync(upstream): ${PR_TITLE} (#${PR_NUMBER})" \
+              --body "## Auto-sync from ${GITHUB_REPOSITORY} (PR #${PR_NUMBER})
+
+          Cherry-pick of ${SOURCE_PR_URL} to upstream \`master\` branch.
+
+          This PR was automatically created from the midstream repository." \
+              --label "sync-to-upstream")
+          fi
+
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+          echo "Created PR: ${PR_URL}"
