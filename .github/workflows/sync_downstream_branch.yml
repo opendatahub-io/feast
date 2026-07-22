@@ -1,0 +1,166 @@
+name: Sync to Downstream Branch
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - master
+
+jobs:
+  detect-targets:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.extract.outputs.targets }}
+      has_targets: ${{ steps.extract.outputs.has_targets }}
+    steps:
+      - name: Extract downstream branch labels
+        id: extract
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          # Match labels like sync-to-rhoai-3.5, sync-to-rhoai-3.4-ea.1, etc.
+          # Excludes sync-to-stable and sync-to-upstream which are handled by other workflows
+          TARGETS=$(echo "$LABELS_JSON" | jq -c '[.[] | select(test("^sync-to-rhoai-")) | sub("^sync-to-"; "")]')
+          COUNT=$(echo "$TARGETS" | jq 'length')
+          echo "targets=${TARGETS}" >> "$GITHUB_OUTPUT"
+          echo "has_targets=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Found ${COUNT} downstream target(s): ${TARGETS}"
+
+  cherry-pick-to-downstream:
+    needs: detect-targets
+    if: needs.detect-targets.outputs.has_targets == 'true' &&  github.repository == 'opendatahub-io/feast' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.detect-targets.outputs.targets) }}
+
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_STABLE_PAT }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      DOWNSTREAM_REPO: red-hat-data-services/feast
+
+    steps:
+      - name: Resolve target branch
+        id: resolve
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          TARGET_BRANCH="${VERSION}"
+          echo "target_branch=${TARGET_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Target branch: ${TARGET_BRANCH}"
+
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_STABLE_PAT }}
+          persist-credentials: false
+
+      - name: Add downstream remote
+        run: |
+          git remote add downstream "https://x-access-token:${GH_TOKEN}@github.com/${DOWNSTREAM_REPO}.git" 2>/dev/null || true
+
+      - name: Verify target branch exists
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+        run: |
+          if ! git ls-remote --exit-code downstream "refs/heads/${TARGET_BRANCH}" > /dev/null 2>&1; then
+            echo "::error::Target branch '${TARGET_BRANCH}' does not exist on ${DOWNSTREAM_REPO}"
+            exit 1
+          fi
+
+      - name: Fetch downstream branch
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+        run: git fetch downstream "$TARGET_BRANCH"
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create cherry-pick branch
+        id: cherry-pick
+        env:
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+        run: |
+          BRANCH="auto-sync/${TARGET_BRANCH}/${PR_NUMBER}"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+          git checkout -b "$BRANCH" "downstream/${TARGET_BRANCH}"
+
+          if git cherry-pick -m 1 "$MERGE_SHA"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git cherry-pick --abort || true
+            git commit --allow-empty -m "cherry-pick of #${PR_NUMBER} failed — manual resolution needed"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git push downstream "$BRANCH" --force
+
+      - name: Create Pull Request
+        id: create-pr
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          SOURCE_PR_URL: ${{ github.event.pull_request.html_url }}
+          TARGET_BRANCH: ${{ steps.resolve.outputs.target_branch }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+          CONFLICT: ${{ steps.cherry-pick.outputs.conflict }}
+        run: |
+          if [ "$CONFLICT" = "true" ]; then
+            PR_URL=$(gh pr create \
+              --repo "$DOWNSTREAM_REPO" \
+              --base "$TARGET_BRANCH" \
+              --head "$BRANCH" \
+              --title "sync(${VERSION}): ${PR_TITLE} (#${PR_NUMBER}) [CONFLICT]" \
+              --body "## Auto-sync from ${GITHUB_REPOSITORY} to ${TARGET_BRANCH} (PR #${PR_NUMBER})
+
+          Cherry-pick of ${SOURCE_PR_URL} **failed due to merge conflicts**.
+
+          ### Manual resolution required
+          \`\`\`bash
+          git clone https://github.com/${DOWNSTREAM_REPO}.git && cd feast
+          git checkout ${BRANCH}
+          git reset --hard origin/${TARGET_BRANCH}
+          git cherry-pick -m 1 ${MERGE_SHA}
+          # resolve conflicts, then:
+          git add .
+          git cherry-pick --continue
+          git push origin ${BRANCH} --force
+          \`\`\`" \
+              --label "sync-to-${VERSION}" \
+              --label "needs-manual-resolution")
+          else
+            PR_URL=$(gh pr create \
+              --repo "$DOWNSTREAM_REPO" \
+              --base "$TARGET_BRANCH" \
+              --head "$BRANCH" \
+              --title "sync(${VERSION}): ${PR_TITLE} (#${PR_NUMBER})" \
+              --body "## Auto-sync from ${GITHUB_REPOSITORY} to ${TARGET_BRANCH} (PR #${PR_NUMBER})
+
+          Cherry-pick of ${SOURCE_PR_URL} to \`${TARGET_BRANCH}\`.
+
+          This PR was automatically created and will auto-merge after CI passes." \
+              --label "sync-to-${VERSION}")
+          fi
+
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+          echo "Created PR: ${PR_URL}"
+
+      - name: Enable auto-merge
+        if: steps.cherry-pick.outputs.conflict == 'false'
+        env:
+          PR_URL: ${{ steps.create-pr.outputs.pr_url }}
+        run: gh pr merge "$PR_URL" --auto --squash
