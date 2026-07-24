@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
+import re
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -46,6 +47,27 @@ except ImportError as e:
 
 
 logger = logging.getLogger(__name__)
+
+# DynamoDB tag keys and values allow Unicode letters, digits, spaces, and: _ . / = + - : @
+# Characters outside this set (e.g. commas in label-values tags) must be replaced.
+# Note: only literal spaces are allowed, not other whitespace (tabs, newlines, etc.).
+_DYNAMO_TAG_INVALID_RE = re.compile(r"[^\w +\-=./:@]", re.UNICODE)
+
+
+def _sanitize_dynamo_tag_value(value: str) -> str:
+    sanitized = _DYNAMO_TAG_INVALID_RE.sub("_", value)
+    return sanitized[:256]
+
+
+def _sanitize_dynamo_tag_key(key: str) -> str:
+    sanitized = _DYNAMO_TAG_INVALID_RE.sub("_", key)
+    sanitized = sanitized[:128]
+    if not sanitized:
+        raise ValueError(
+            f"DynamoDB tag key is empty after sanitization (original key: {key!r}). "
+            "Tag keys must have a minimum length of 1."
+        )
+    return sanitized
 
 
 class DynamoDBOnlineStoreConfig(FeastConfigBaseModel):
@@ -222,17 +244,25 @@ class DynamoDBOnlineStore(OnlineStore):
         table_instance_tags = table_instance.tags or {}
         online_tags = online_config.tags or {}
 
-        common_tags = [
-            {"Key": key, "Value": table_instance_tags.get(key) or value}
-            for key, value in online_tags.items()
-        ]
-        table_tags = [
-            {"Key": key, "Value": value}
-            for key, value in table_instance_tags.items()
-            if key not in online_tags
-        ]
+        # Build a dict keyed by sanitized key to deduplicate collisions.
+        # Table-instance tags take precedence over online config tags,
+        # so we insert online config tags first, then overwrite with
+        # table-instance tags.
+        seen: dict[str, str] = {}
 
-        return common_tags + table_tags
+        for key, value in online_tags.items():
+            sanitized_key = _sanitize_dynamo_tag_key(key)
+            # If the table instance overrides this raw key, use its value
+            resolved_value = table_instance_tags.get(key) or value
+            seen[sanitized_key] = _sanitize_dynamo_tag_value(resolved_value)
+
+        for key, value in table_instance_tags.items():
+            if key not in online_tags:
+                sanitized_key = _sanitize_dynamo_tag_key(key)
+                # Table-level tags override on sanitized-key collision
+                seen[sanitized_key] = _sanitize_dynamo_tag_value(value)
+
+        return [{"Key": k, "Value": v} for k, v in seen.items()]
 
     @staticmethod
     def _update_tags(dynamodb_client, table_name: str, new_tags: list[dict[str, str]]):
