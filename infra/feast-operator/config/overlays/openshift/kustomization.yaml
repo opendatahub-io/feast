@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../../default
   - ../../prometheus
+  - service_ca_configmap.yaml
 
 patches:
   - path: metrics_service_patch.yaml
