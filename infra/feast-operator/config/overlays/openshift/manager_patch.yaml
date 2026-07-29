@@ -20,4 +20,4 @@ spec:
       volumes:
         - name: metrics-cert
           secret:
-            secretName: controller-manager-metrics-tls
+            secretName: controller-manager-metrics-tls  # pragma: allowlist secret
