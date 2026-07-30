@@ -101,7 +101,7 @@ func ApplyDefaultsToStatus(cr *feastdevv1.FeatureStore) {
 	}
 	services := applied.Services
 	if services.RunFeastApplyOnInit == nil {
-		services.RunFeastApplyOnInit = boolPtr(true)
+		services.RunFeastApplyOnInit = boolPtr(false)
 	}
 
 	if services.Registry != nil {

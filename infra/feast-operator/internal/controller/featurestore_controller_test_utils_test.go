@@ -104,6 +104,7 @@ func createFeatureStoreResource(resourceName string, image string, pullPolicy co
 		Spec: feastdevv1.FeatureStoreSpec{
 			FeastProject: feastProject,
 			Services: &feastdevv1.FeatureStoreServices{
+				RunFeastApplyOnInit: ptr(true),
 				OfflineStore: &feastdevv1.OfflineStore{
 					Server: &feastdevv1.ServerConfigs{
 						ContainerConfigs: feastdevv1.ContainerConfigs{
