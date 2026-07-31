@@ -26,6 +26,8 @@ import (
 
 const (
 	TmpFeatureStoreYamlEnvVar      = "TMP_FEATURE_STORE_YAML_BASE64"
+	packagedFeatureRepoEnvVar = "FEAST_PACKAGED_FEATURE_REPO_PATH"
+	stagedFeatureRepoEnvVar   = "FEAST_STAGED_FEATURE_REPO_PATH"
 	IntraCommunicationBase64EnvVar = "INTRA_COMMUNICATION_BASE64"
 	intraCommunicationTokenKey     = "token"
 	feastServerImageVar            = "RELATED_IMAGE_FEATURE_SERVER"
