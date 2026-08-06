@@ -48,6 +48,12 @@ const (
 	NotebookConfigMapNameSuffix = "-feast-config"
 	// TrueValue is the value that indicates feast integration is enabled
 	TrueValue = "true"
+	// NotebookFeastVolumeName is the name of the volume added to Notebooks for feast config
+	NotebookFeastVolumeName = "feast-client-config"
+	// NotebookFeastMountPath is where the feast config ConfigMap is mounted in the workbench container
+	NotebookFeastMountPath = "/opt/app-root/src/feast-config"
+	// NotebookFeastRepoPathEnvVar is the environment variable pointing to the feast config directory
+	NotebookFeastRepoPathEnvVar = "FEAST_REPO_PATH"
 )
 
 // NotebookConfigMapReconciler reconciles Notebooks to create/update notebook-feast-config ConfigMaps
@@ -59,7 +65,7 @@ type NotebookConfigMapReconciler struct {
 	NotebookGVK schema.GroupVersionKind
 }
 
-// +kubebuilder:rbac:groups=kubeflow.org,resources=notebooks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kubeflow.org,resources=notebooks,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=feast.dev,resources=featurestores,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list
@@ -90,12 +96,18 @@ func (r *NotebookConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	labels := notebook.GetLabels()
 	if labels == nil {
 		logger.V(1).Info("No integration label found on Notebook, skipping reconciliation")
+		if err := r.removeNotebookVolumeMounts(ctx, notebook); err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.cleanupNotebookConfigMap(ctx, req.Namespace, req.Name)
 	}
 
 	feastIntegrationEnabled, exists := labels[NotebookFeastIntegrationLabel]
 	if !exists || feastIntegrationEnabled != TrueValue {
 		logger.V(1).Info("Feast integration not enabled, skipping reconciliation", "label", NotebookFeastIntegrationLabel, "value", feastIntegrationEnabled)
+		if err := r.removeNotebookVolumeMounts(ctx, notebook); err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.cleanupNotebookConfigMap(ctx, req.Namespace, req.Name)
 	}
 
@@ -114,6 +126,13 @@ func (r *NotebookConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Create or update the notebook-feast-config ConfigMap
 	if err := r.reconcileNotebookConfigMap(ctx, req.Namespace, notebook, projectNames); err != nil {
 		logger.Error(err, "Failed to reconcile notebook ConfigMap")
+		return ctrl.Result{}, err
+	}
+
+	// Patch the Notebook to mount the ConfigMap and inject FEAST_REPO_PATH
+	configMapName := fmt.Sprintf("%s%s", notebook.GetName(), NotebookConfigMapNameSuffix)
+	if err := r.ensureNotebookVolumeMounts(ctx, notebook, configMapName); err != nil {
+		logger.Error(err, "Failed to ensure volume mounts on Notebook")
 		return ctrl.Result{}, err
 	}
 
@@ -175,39 +194,27 @@ func (r *NotebookConfigMapReconciler) setNotebookConfigMapData(
 		cm.Data = make(map[string]string)
 	}
 
-	// Track which projects should exist
-	expectedProjects := make(map[string]bool)
-	for _, projectName := range projectNames {
-		expectedProjects[projectName] = true
+	oldConfig := cm.Data[services.FeatureStoreYamlCmKey]
+
+	// Clear all existing data — rebuild with the standard feature_store.yaml key
+	for key := range cm.Data {
+		delete(cm.Data, key)
 	}
 
-	// Add or update projects that are in the annotation
-	// This always fetches fresh data, so any updates to FeatureStore client ConfigMaps will be picked up
+	// Fetch and set config using the standard feature_store.yaml key.
+	// If multiple projects are listed, the last successfully resolved project wins.
 	for _, projectName := range projectNames {
 		clientConfigYAML, err := r.getClientConfigYAMLForProject(ctx, projectName)
 		if err != nil {
-			// Log error and remove this project from ConfigMap if it exists
-			logger.Error(err, "Failed to get client config for project, removing from ConfigMap", "project", projectName, "notebook", notebook.GetName())
-			delete(cm.Data, projectName)
+			logger.Error(err, "Failed to get client config for project", "project", projectName, "notebook", notebook.GetName())
 			continue
 		}
 
-		// Check if this is an update
-		existingYAML, exists := cm.Data[projectName]
-		if exists && existingYAML != clientConfigYAML {
+		if oldConfig != "" && oldConfig != clientConfigYAML {
 			logger.Info("Updating project config in ConfigMap (FeatureStore client ConfigMap changed)", "project", projectName, "notebook", notebook.GetName())
 		}
 
-		// Set or update the project config
-		cm.Data[projectName] = clientConfigYAML
-	}
-
-	// Remove projects that are no longer in the annotation
-	for key := range cm.Data {
-		if !expectedProjects[key] {
-			logger.Info("Removing project from ConfigMap (no longer in annotation)", "project", key, "notebook", notebook.GetName())
-			delete(cm.Data, key)
-		}
+		cm.Data[services.FeatureStoreYamlCmKey] = clientConfigYAML
 	}
 
 	// Set labels
@@ -323,6 +330,188 @@ func (r *NotebookConfigMapReconciler) getClientConfigYAMLForProject(ctx context.
 	}
 
 	return yamlContent, nil
+}
+
+// ensureNotebookVolumeMounts patches the Notebook to add a volume, volumeMount, and
+// FEAST_REPO_PATH environment variable for the feast config ConfigMap.
+func (r *NotebookConfigMapReconciler) ensureNotebookVolumeMounts(
+	ctx context.Context,
+	notebook *unstructured.Unstructured,
+	configMapName string,
+) error {
+	logger := log.FromContext(ctx)
+
+	_, found, err := unstructured.NestedMap(notebook.Object, "spec", "template", "spec")
+	if err != nil || !found {
+		logger.V(1).Info("Notebook has no pod spec, skipping volume mount injection")
+		return nil
+	}
+
+	containers, _, _ := unstructured.NestedSlice(notebook.Object, "spec", "template", "spec", "containers")
+	if len(containers) == 0 {
+		logger.V(1).Info("Notebook has no containers, skipping volume mount injection")
+		return nil
+	}
+
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	volumes, _, _ := unstructured.NestedSlice(notebook.Object, "spec", "template", "spec", "volumes")
+	volumeExists := unstructuredSliceContainsName(volumes, NotebookFeastVolumeName)
+	volumeMounts, _ := container["volumeMounts"].([]interface{})
+	mountExists := unstructuredSliceContainsName(volumeMounts, NotebookFeastVolumeName)
+	envVars, _ := container["env"].([]interface{})
+	envExists := unstructuredSliceContainsName(envVars, NotebookFeastRepoPathEnvVar)
+
+	if volumeExists && mountExists && envExists {
+		return nil
+	}
+
+	patch := notebook.DeepCopy()
+	patchContainers, _, _ := unstructured.NestedSlice(patch.Object, "spec", "template", "spec", "containers")
+	patchContainer, _ := patchContainers[0].(map[string]interface{})
+
+	if !volumeExists {
+		volumes = append(volumes, map[string]interface{}{
+			"name": NotebookFeastVolumeName,
+			"configMap": map[string]interface{}{
+				"name": configMapName,
+			},
+		})
+		if err := unstructured.SetNestedSlice(patch.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+			return fmt.Errorf("failed to set volumes: %w", err)
+		}
+	}
+
+	if !mountExists {
+		volumeMounts = append(volumeMounts, map[string]interface{}{
+			"name":      NotebookFeastVolumeName,
+			"mountPath": NotebookFeastMountPath,
+			"readOnly":  true,
+		})
+		patchContainer["volumeMounts"] = volumeMounts
+	}
+
+	if !envExists {
+		envVars = append(envVars, map[string]interface{}{
+			"name":  NotebookFeastRepoPathEnvVar,
+			"value": NotebookFeastMountPath,
+		})
+		patchContainer["env"] = envVars
+	}
+
+	if !mountExists || !envExists {
+		patchContainers[0] = patchContainer
+		if err := unstructured.SetNestedSlice(patch.Object, patchContainers, "spec", "template", "spec", "containers"); err != nil {
+			return fmt.Errorf("failed to set containers: %w", err)
+		}
+	}
+
+	if err := r.Patch(ctx, patch, client.MergeFrom(notebook)); err != nil {
+		return fmt.Errorf("failed to patch Notebook with volume mounts: %w", err)
+	}
+
+	logger.Info("Patched Notebook with feast volume mounts", "notebook", notebook.GetName())
+	return nil
+}
+
+// removeNotebookVolumeMounts removes the feast volume, volumeMount, and
+// FEAST_REPO_PATH environment variable from a Notebook when feast integration is disabled.
+func (r *NotebookConfigMapReconciler) removeNotebookVolumeMounts(
+	ctx context.Context,
+	notebook *unstructured.Unstructured,
+) error {
+	logger := log.FromContext(ctx)
+
+	_, found, err := unstructured.NestedMap(notebook.Object, "spec", "template", "spec")
+	if err != nil || !found {
+		return nil
+	}
+
+	containers, _, _ := unstructured.NestedSlice(notebook.Object, "spec", "template", "spec", "containers")
+	if len(containers) == 0 {
+		return nil
+	}
+
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	volumes, _, _ := unstructured.NestedSlice(notebook.Object, "spec", "template", "spec", "volumes")
+	volumeExists := unstructuredSliceContainsName(volumes, NotebookFeastVolumeName)
+	volumeMounts, _ := container["volumeMounts"].([]interface{})
+	mountExists := unstructuredSliceContainsName(volumeMounts, NotebookFeastVolumeName)
+	envVars, _ := container["env"].([]interface{})
+	envExists := unstructuredSliceContainsName(envVars, NotebookFeastRepoPathEnvVar)
+
+	if !volumeExists && !mountExists && !envExists {
+		return nil
+	}
+
+	patch := notebook.DeepCopy()
+	patchContainers, _, _ := unstructured.NestedSlice(patch.Object, "spec", "template", "spec", "containers")
+	patchContainer, _ := patchContainers[0].(map[string]interface{})
+
+	if volumeExists {
+		newVolumes := removeFromSliceByName(volumes, NotebookFeastVolumeName)
+		if err := unstructured.SetNestedSlice(patch.Object, newVolumes, "spec", "template", "spec", "volumes"); err != nil {
+			return fmt.Errorf("failed to set volumes: %w", err)
+		}
+	}
+
+	if mountExists {
+		patchContainer["volumeMounts"] = removeFromSliceByName(volumeMounts, NotebookFeastVolumeName)
+	}
+
+	if envExists {
+		patchContainer["env"] = removeFromSliceByName(envVars, NotebookFeastRepoPathEnvVar)
+	}
+
+	if mountExists || envExists {
+		patchContainers[0] = patchContainer
+		if err := unstructured.SetNestedSlice(patch.Object, patchContainers, "spec", "template", "spec", "containers"); err != nil {
+			return fmt.Errorf("failed to set containers: %w", err)
+		}
+	}
+
+	if err := r.Patch(ctx, patch, client.MergeFrom(notebook)); err != nil {
+		return fmt.Errorf("failed to remove feast volume mounts from Notebook: %w", err)
+	}
+
+	logger.Info("Removed feast volume mounts from Notebook", "notebook", notebook.GetName())
+	return nil
+}
+
+func unstructuredSliceContainsName(slice []interface{}, name string) bool {
+	for _, item := range slice {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if n, ok := m["name"].(string); ok && n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func removeFromSliceByName(slice []interface{}, name string) []interface{} {
+	var result []interface{}
+	for _, item := range slice {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			result = append(result, item)
+			continue
+		}
+		if n, ok := m["name"].(string); ok && n == name {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
 }
 
 // cleanupNotebookConfigMap removes the notebook-feast-config ConfigMap when integration label is completely removed and config annotation is empty
