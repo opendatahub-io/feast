@@ -19,6 +19,8 @@ metadata:
   name: credit-scoring
   namespace: test-ns-feast
 spec:
+  authz:
+      noAuth: true
   feastProject: credit_scoring_local
   feastProjectDir:
     git:
