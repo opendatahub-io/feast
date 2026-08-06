@@ -13,6 +13,8 @@ from feast.infra.online_stores.dynamodb import (
     DynamoDBOnlineStore,
     DynamoDBOnlineStoreConfig,
     _latest_data_to_write,
+    _sanitize_dynamo_tag_key,
+    _sanitize_dynamo_tag_value,
 )
 from feast.protos.feast.types.EntityKey_pb2 import EntityKey as EntityKeyProto
 from feast.protos.feast.types.Value_pb2 import Value as ValueProto
@@ -1287,3 +1289,151 @@ def test_update_tags_no_existing_tags_no_new_tags():
 
     client.untag_resource.assert_not_called()
     client.tag_resource.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests for _sanitize_dynamo_tag_value — DynamoDB tag value sanitization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("simple", "simple"),
+        ("1,0", "1_0"),
+        ("a,b,c", "a_b_c"),
+        ("hello world", "hello world"),
+        ("key=value", "key=value"),
+        ("a+b-c.d/e:f@g", "a+b-c.d/e:f@g"),
+        ("val;with#special$chars!", "val_with_special_chars_"),
+        ("", ""),
+    ],
+)
+def test_sanitize_dynamo_tag_value(raw, expected):
+    assert _sanitize_dynamo_tag_value(raw) == expected
+
+
+def test_sanitize_dynamo_tag_value_truncates_long_values():
+    long_value = "a" * 300
+    assert len(_sanitize_dynamo_tag_value(long_value)) == 256
+
+
+def test_table_tags_sanitizes_comma_in_label_values(dynamodb_online_store):
+    """Regression: feast.io/label-values tags with commas must be sanitized
+    to prevent DynamoDB ValidationException on CreateTable (RHOAIENG-71247).
+    """
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags=None),
+        MockFeatureView(
+            name="label_view",
+            tags={"feast.io/label-values:is_reliable": "1,0"},
+        ),
+    )
+    assert actual == [
+        {"Key": "feast.io/label-values:is_reliable", "Value": "1_0"},
+    ]
+
+
+def test_table_tags_sanitizes_global_and_table_tags(dynamodb_online_store):
+    """Both global and table-level tag values are sanitized."""
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags={"env": "prod,staging"}),
+        MockFeatureView(
+            name="view",
+            tags={"feast.io/label-values:sentiment": "positive,negative,neutral"},
+        ),
+    )
+    assert actual == [
+        {"Key": "env", "Value": "prod_staging"},
+        {
+            "Key": "feast.io/label-values:sentiment",
+            "Value": "positive_negative_neutral",
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Tests for control whitespace in tag values (Finding 1 — RHOAIENG-71247)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("hello\tworld", "hello_world"),
+        ("hello\nworld", "hello_world"),
+        ("hello\rworld", "hello_world"),
+        ("hello\fworld", "hello_world"),
+        ("hello\vworld", "hello_world"),
+        ("tab\there\tnewline\nthere", "tab_here_newline_there"),
+        ("hello world", "hello world"),  # literal space is still allowed
+    ],
+)
+def test_sanitize_dynamo_tag_value_control_whitespace(raw, expected):
+    """Control whitespace (tab, newline, etc.) must be replaced; only literal spaces are allowed."""
+    assert _sanitize_dynamo_tag_value(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# Tests for _sanitize_dynamo_tag_key — DynamoDB tag key sanitization (Finding 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("simple", "simple"),
+        ("key,with,commas", "key_with_commas"),
+        ("feast.io/label-values:is_reliable", "feast.io/label-values:is_reliable"),
+        ("a+b-c.d/e:f@g", "a+b-c.d/e:f@g"),
+        ("key;with#special$chars!", "key_with_special_chars_"),
+    ],
+)
+def test_sanitize_dynamo_tag_key(raw, expected):
+    assert _sanitize_dynamo_tag_key(raw) == expected
+
+
+def test_sanitize_dynamo_tag_key_rejects_empty_key():
+    """Empty keys (min length 1 in DynamoDB) must raise ValueError."""
+    with pytest.raises(ValueError, match="empty after sanitization"):
+        _sanitize_dynamo_tag_key("")
+
+
+def test_sanitize_dynamo_tag_key_truncates_long_keys():
+    long_key = "k" * 200
+    assert len(_sanitize_dynamo_tag_key(long_key)) == 128
+
+
+def test_sanitize_dynamo_tag_key_control_whitespace():
+    """Control whitespace in tag keys must be replaced."""
+    assert _sanitize_dynamo_tag_key("key\twith\ttabs") == "key_with_tabs"
+    assert _sanitize_dynamo_tag_key("key\nwith\nnewlines") == "key_with_newlines"
+
+
+def test_table_tags_sanitizes_keys(dynamodb_online_store):
+    """Tag keys with invalid characters are sanitized in _table_tags()."""
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags={"env,scope": "prod"}),
+        MockFeatureView(
+            name="view",
+            tags={"tag;key": "value"},
+        ),
+    )
+    assert actual == [
+        {"Key": "env_scope", "Value": "prod"},
+        {"Key": "tag_key", "Value": "value"},
+    ]
+
+
+def test_table_tags_dedupes_sanitized_key_collisions(dynamodb_online_store):
+    """When online and table-instance tags sanitize to the same key,
+    the table-instance tag value takes precedence and no duplicate is emitted."""
+    actual = dynamodb_online_store._table_tags(
+        MockOnlineConfig(tags={"env,scope": "from-online"}),
+        MockFeatureView(
+            name="view",
+            tags={"env;scope": "from-table"},
+        ),
+    )
+    # Both raw keys sanitize to "env_scope"; table-level tag wins.
+    assert actual == [{"Key": "env_scope", "Value": "from-table"}]
