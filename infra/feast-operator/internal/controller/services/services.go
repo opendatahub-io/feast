@@ -134,6 +134,9 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
+	if err := feast.deployDataRegistry(); err != nil {
+		return err
+	}
 	if err := feast.createOrDeleteHPA(); err != nil {
 		return err
 	}
