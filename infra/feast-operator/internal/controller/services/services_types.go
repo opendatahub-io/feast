@@ -58,6 +58,21 @@ const (
 	// shared registry on startup.
 	ProtectedProjectAnnotation = "feast.dev/protected-project"
 
+	// DataRegistryAnnotation is the annotation key on a FeatureStore CR that
+	// enables Data Registry (catalog-mode) reconciliation. When set to "true",
+	// the operator creates a dedicated data-registry Deployment alongside the
+	// standard feature store Deployment.
+	DataRegistryAnnotation = "dataregistry.opendatahub.io/enabled"
+
+	// Data Registry env var names injected into the data-registry-server container.
+	DataCatalogEnabledEnvVar   = "DATACATALOG_ENABLED"
+	CatalogSSARApiGroupEnvVar  = "CATALOG_SSAR_API_GROUP"
+	CatalogSSARResourcesEnvVar = "CATALOG_SSAR_RESOURCES"
+	FeastProjectEnvVar         = "FEAST_PROJECT"
+
+	DataRegistryContainerName       = "data-registry-server"
+	DataRegistryPort          int32 = 6572
+
 	HttpPort              = 80
 	HttpsPort             = 443
 	HttpScheme            = "http"
@@ -83,15 +98,16 @@ const (
 	DefaultRegistryStorageRequest       = "5Gi"
 	MetricsPort                   int32 = 8000
 
-	AuthzFeastType    FeastServiceType = "authorization"
-	OfflineFeastType  FeastServiceType = "offline"
-	OnlineFeastType   FeastServiceType = "online"
-	RegistryFeastType FeastServiceType = "registry"
-	UIFeastType       FeastServiceType = "ui"
-	LineageFeastType  FeastServiceType = "lineage"
-	ClientFeastType   FeastServiceType = "client"
-	ClientCaFeastType FeastServiceType = "client-ca"
-	CronJobFeastType  FeastServiceType = "cronjob"
+	AuthzFeastType        FeastServiceType = "authorization"
+	OfflineFeastType      FeastServiceType = "offline"
+	OnlineFeastType       FeastServiceType = "online"
+	RegistryFeastType     FeastServiceType = "registry"
+	UIFeastType           FeastServiceType = "ui"
+	LineageFeastType      FeastServiceType = "lineage"
+	ClientFeastType       FeastServiceType = "client"
+	ClientCaFeastType     FeastServiceType = "client-ca"
+	CronJobFeastType      FeastServiceType = "cronjob"
+	DataRegistryFeastType FeastServiceType = "data-registry"
 
 	OfflineRemoteConfigType                 OfflineConfigType = "remote"
 	OfflineFilePersistenceDaskConfigType    OfflineConfigType = "dask"
@@ -211,6 +227,10 @@ var (
 			Args:            []string{"serve_lineage", "-h", "0.0.0.0"},
 			TargetHttpPort:  6580,
 			TargetHttpsPort: 6581,
+		},
+		DataRegistryFeastType: {
+			Args:               []string{"serve_registry", "--rest-api"},
+			TargetRestHttpPort: DataRegistryPort,
 		},
 	}
 
