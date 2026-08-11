@@ -215,11 +215,19 @@ saved_datasets = Table(
     metadata,
     Column("saved_dataset_name", String(255), primary_key=True),
     Column("project_id", String(255), primary_key=True),
+    # Denormalized hierarchy fields for SQL filtering (also stored in proto blob).
+    Column("namespace", String(255), nullable=False, server_default=""),
+    Column("collection", String(255), nullable=False, server_default=""),
     Column("last_updated_timestamp", BigInteger, nullable=False),
     Column("saved_dataset_proto", ProtoBytes, nullable=False),
 )
 
 Index("idx_saved_datasets_project_id", saved_datasets.c.project_id)
+Index(
+    "idx_saved_datasets_project_namespace",
+    saved_datasets.c.project_id,
+    saved_datasets.c.namespace,
+)
 
 validation_references = Table(
     "validation_references",
@@ -364,10 +372,14 @@ class SqlRegistry(CachingRegistry):
             self._verify_schema(self.write_engine)
             if self.read_engine is not self.write_engine:
                 self._verify_schema(self.read_engine)
+        # Additive migration for existing registries created before hierarchy columns.
+        # Only the write engine may ALTER TABLE; read replicas are often read-only.
+        self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
         self._warn_if_narrow_blob_columns(self.write_engine)
         if self.read_engine is not self.write_engine:
-            # A read replica can be on a different schema version (e.g. mid
-            # blue-green switchover), so check it independently.
+            # A read replica can lag schema version mid blue-green switchover —
+            # inspect only; never migrate a non-writable engine.
+            self._warn_if_missing_saved_dataset_hierarchy_columns(self.read_engine)
             self._warn_if_narrow_blob_columns(self.read_engine)
         self.thread_pool_executor_worker_count = (
             registry_config.thread_pool_executor_worker_count
@@ -399,6 +411,92 @@ class SqlRegistry(CachingRegistry):
         missing = expected - actual
         if missing:
             raise FeastRegistrySchemaError(sorted(missing))
+
+    @staticmethod
+    def _saved_dataset_hierarchy_gaps(engine: Engine) -> List[str]:
+        """Return missing hierarchy column/index names on ``saved_datasets``, if any."""
+        inspector = sa_inspect(engine)
+        if "saved_datasets" not in set(inspector.get_table_names()):
+            return []
+
+        gaps: List[str] = []
+        existing_columns = {
+            column["name"] for column in inspector.get_columns("saved_datasets")
+        }
+        if "namespace" not in existing_columns:
+            gaps.append("column:namespace")
+        if "collection" not in existing_columns:
+            gaps.append("column:collection")
+        existing_indexes = {
+            index["name"] for index in inspector.get_indexes("saved_datasets")
+        }
+        if "idx_saved_datasets_project_namespace" not in existing_indexes:
+            gaps.append("index:idx_saved_datasets_project_namespace")
+        return gaps
+
+    @staticmethod
+    def _ensure_saved_dataset_hierarchy_columns(engine: Engine) -> None:
+        """Add namespace/collection columns + index on existing saved_datasets tables.
+
+        ``metadata.create_all`` does not alter existing tables. Registries created
+        before these hierarchy columns existed need an additive migration so
+        SQL-backed namespace filtering works. Safe/no-op when columns already exist.
+        Best-effort: never block registry startup on migration failure.
+        Intended for the writable registry engine only.
+        """
+        try:
+            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+            if not gaps:
+                return
+
+            with engine.begin() as conn:
+                if "column:namespace" in gaps:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE saved_datasets ADD COLUMN namespace "
+                            "VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if "column:collection" in gaps:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE saved_datasets ADD COLUMN collection "
+                            "VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if "index:idx_saved_datasets_project_namespace" in gaps:
+                    # Re-check after ALTERs in case inspector was stale for indexes
+                    # that depend on newly added columns.
+                    conn.execute(
+                        text(
+                            "CREATE INDEX idx_saved_datasets_project_namespace "
+                            "ON saved_datasets (project_id, namespace)"
+                        )
+                    )
+        except Exception as exc:  # pragma: no cover - never block startup
+            logger.error(
+                "Failed to ensure saved_datasets namespace/collection columns: %s",
+                exc,
+            )
+
+    @staticmethod
+    def _warn_if_missing_saved_dataset_hierarchy_columns(engine: Engine) -> None:
+        """Warn when a read engine lacks hierarchy columns (do not ALTER)."""
+        try:
+            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+        except Exception as exc:  # pragma: no cover - never block startup
+            logger.error(
+                "Failed to inspect saved_datasets hierarchy columns on read engine: %s",
+                exc,
+            )
+            return
+        if gaps:
+            logger.warning(
+                "Read registry engine is missing saved_datasets hierarchy schema "
+                "(%s). Namespace/collection SQL filters may be wrong until the "
+                "replica is migrated. Migrations run only on the write engine.",
+                ", ".join(gaps),
+            )
 
     @staticmethod
     def _warn_if_narrow_blob_columns(
@@ -1129,19 +1227,39 @@ class SqlRegistry(CachingRegistry):
         collection: Optional[str] = None,
         **kwargs,
     ) -> List[SavedDataset]:
-        results = self._list_objects(
-            saved_datasets,
-            project,
-            SavedDatasetProto,
-            SavedDataset,
-            "saved_dataset_proto",
-            tags=tags,
-            **kwargs,
-        )
-        if namespace is not None:
-            results = [sd for sd in results if sd.namespace == namespace]
-        if collection is not None:
-            results = [sd for sd in results if sd.collection == collection]
+        proto_only = kwargs.get("proto_only", False)
+        updated_since = kwargs.get("updated_since")
+
+        # Prefer SQL filters for hierarchy fields (denormalized columns).
+        with self.read_engine.begin() as conn:
+            stmt = select(saved_datasets).where(saved_datasets.c.project_id == project)
+            if namespace is not None:
+                stmt = stmt.where(saved_datasets.c.namespace == namespace)
+            if collection is not None:
+                stmt = stmt.where(saved_datasets.c.collection == collection)
+            if updated_since is not None:
+                if updated_since.tzinfo is None:
+                    updated_since_utc = updated_since.replace(tzinfo=timezone.utc)
+                else:
+                    updated_since_utc = updated_since.astimezone(timezone.utc)
+                stmt = stmt.where(
+                    saved_datasets.c.last_updated_timestamp
+                    >= int(updated_since_utc.timestamp())
+                )
+            rows = conn.execute(stmt).all()
+
+        if not rows:
+            return []
+
+        results: List[Any] = []
+        for row in rows:
+            proto = SavedDatasetProto.FromString(row._mapping["saved_dataset_proto"])
+            if proto_only:
+                results.append(proto)
+                continue
+            dataset = SavedDataset.from_proto(proto)
+            if utils.has_all_tags(dataset.tags, tags):
+                results.append(dataset)
         return results
 
     def _list_on_demand_feature_views(
@@ -1216,12 +1334,18 @@ class SqlRegistry(CachingRegistry):
         project: str,
         commit: bool = True,
     ):
+        # Denormalized index columns: caller owns hierarchy fields; proto remains
+        # the source of truth inside saved_dataset_proto.
         return self._apply_object(
             saved_datasets,
             project,
             "saved_dataset_name",
             saved_dataset,
             "saved_dataset_proto",
+            extra_values={
+                "namespace": saved_dataset.namespace or "",
+                "collection": saved_dataset.collection or "",
+            },
         )
 
     def delete_saved_dataset(self, name: str, project: str, commit: bool = True):
@@ -1593,6 +1717,7 @@ class SqlRegistry(CachingRegistry):
         obj: Any,
         proto_field_name: str,
         name: Optional[str] = None,
+        extra_values: Optional[Dict[str, Any]] = None,
     ):
         if not self.purge_feast_metadata:
             self._maybe_init_project_metadata(project)
@@ -1646,6 +1771,8 @@ class SqlRegistry(CachingRegistry):
                     proto_field_name: obj.to_proto().SerializeToString(),
                     "last_updated_timestamp": update_time,
                 }
+                if extra_values:
+                    values.update(extra_values)
                 update_stmt = (
                     update(table)
                     .where(
@@ -1678,6 +1805,8 @@ class SqlRegistry(CachingRegistry):
                     "last_updated_timestamp": update_time,
                     "project_id": project,
                 }
+                if extra_values:
+                    values.update(extra_values)
                 try:
                     with conn.begin_nested():
                         conn.execute(insert(table).values(values))
