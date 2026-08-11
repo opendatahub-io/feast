@@ -14,6 +14,9 @@ from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast.protos.feast.core.SavedDataset_pb2 import SavedDataset as SavedDatasetProto
 from feast.protos.feast.core.SavedDataset_pb2 import SavedDatasetMeta, SavedDatasetSpec
 from feast.protos.feast.core.SavedDataset_pb2 import (
+    SavedDatasetColumn as SavedDatasetColumnProto,
+)
+from feast.protos.feast.core.SavedDataset_pb2 import (
     SavedDatasetStorage as SavedDatasetStorageProto,
 )
 from feast.protos.feast.core.ValidationProfile_pb2 import (
@@ -165,6 +168,46 @@ class SavedDatasetStorage(metaclass=_StorageRegistry):
             )
 
 
+class SavedDatasetColumn:
+    """Schema column definition for a SavedDataset (data-registry assets)."""
+
+    name: str
+    type: str
+    description: str
+
+    def __init__(self, name: str, type: str, description: str = ""):
+        self.name = name
+        self.type = type
+        self.description = description
+
+    def __eq__(self, other):
+        if not isinstance(other, SavedDatasetColumn):
+            return False
+        return (
+            self.name == other.name
+            and self.type == other.type
+            and self.description == other.description
+        )
+
+    def __hash__(self):
+        return hash((self.name, self.type, self.description))
+
+    @staticmethod
+    def from_proto(column_proto: SavedDatasetColumnProto) -> "SavedDatasetColumn":
+        return SavedDatasetColumn(
+            name=column_proto.name,
+            type=column_proto.type,
+            description=column_proto.description,
+        )
+
+    def to_proto(self) -> SavedDatasetColumnProto:
+        return SavedDatasetColumnProto(
+            name=self.name,
+            type=self.type,
+            description=self.description,
+        )
+
+
 class SavedDataset:
     name: str
     features: List[str]
@@ -176,6 +219,7 @@ class SavedDataset:
     namespace: str = ""
     collection: str = ""
     description: str = ""
+    columns: List[SavedDatasetColumn]
 
     created_timestamp: Optional[datetime] = None
     last_updated_timestamp: Optional[datetime] = None
@@ -197,6 +241,7 @@ class SavedDataset:
         namespace: str = "",
         collection: str = "",
         description: str = "",
+        columns: Optional[List[SavedDatasetColumn]] = None,
     ):
         self.name = name
         self.features = features
@@ -208,6 +253,7 @@ class SavedDataset:
         self.namespace = namespace
         self.collection = collection
         self.description = description
+        self.columns = columns or []
 
         self._retrieval_job = None
 
@@ -236,6 +282,7 @@ class SavedDataset:
             or self.namespace != other.namespace
             or self.collection != other.collection
             or self.description != other.description
+            or self.columns != other.columns
         ):
             return False
 
@@ -259,6 +306,10 @@ class SavedDataset:
             namespace=saved_dataset_proto.spec.namespace,
             collection=saved_dataset_proto.spec.collection,
             description=saved_dataset_proto.spec.description,
+            columns=[
+                SavedDatasetColumn.from_proto(column)
+                for column in saved_dataset_proto.spec.columns
+            ],
         )
 
         if saved_dataset_proto.spec.feature_service_name:
@@ -308,6 +359,7 @@ class SavedDataset:
             namespace=self.namespace,
             collection=self.collection,
             description=self.description,
+            columns=[column.to_proto() for column in self.columns],
         )
         if self.feature_service_name:
             spec.feature_service_name = self.feature_service_name
