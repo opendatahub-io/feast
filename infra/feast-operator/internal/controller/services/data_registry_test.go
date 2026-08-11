@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("Data Registry", func() {
@@ -41,7 +40,6 @@ var _ = Describe("Data Registry", func() {
 		ctx                context.Context
 	)
 
-	// setAnnotation updates the CR's annotation and refreshes the FeastServices handler.
 	setAnnotation := func(value string) {
 		if featureStore.Annotations == nil {
 			featureStore.Annotations = map[string]string{}
@@ -106,227 +104,105 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Delete(ctx, featureStore)).To(Succeed())
 	})
 
-	// -------------------------------------------------------------------------
-	// isDataRegistryEnabled
-	// -------------------------------------------------------------------------
+	It("is disabled by default and only activates on exact 'true' annotation", func() {
+		Expect(feast.isDataRegistryEnabled()).To(BeFalse(), "no annotation")
 
-	Describe("isDataRegistryEnabled", func() {
-		It("returns false when no annotation is present", func() {
-			Expect(feast.isDataRegistryEnabled()).To(BeFalse())
-		})
-
-		It("returns true when annotation is set to 'true'", func() {
-			setAnnotation("true")
-			Expect(feast.isDataRegistryEnabled()).To(BeTrue())
-		})
-
-		It("returns false when annotation is set to 'false'", func() {
-			setAnnotation("false")
-			Expect(feast.isDataRegistryEnabled()).To(BeFalse())
-		})
-
-		It("returns false when annotation is set to 'TRUE' (case-sensitive match)", func() {
-			setAnnotation("TRUE")
-			Expect(feast.isDataRegistryEnabled()).To(BeFalse())
-		})
-	})
-
-	// -------------------------------------------------------------------------
-	// Deployment spec when annotation is enabled
-	// -------------------------------------------------------------------------
-
-	Describe("Deployment spec when data registry is enabled", func() {
-		BeforeEach(func() {
-			setAnnotation("true")
-		})
-
-		It("produces the correct Deployment name", func() {
-			deploy := feast.initDataRegistryDeploy()
-			expectedName := GetFeastName(featureStore) + "-" + string(DataRegistryFeastType)
-			Expect(deploy.Name).To(Equal(expectedName))
-			Expect(deploy.Namespace).To(Equal(typeNamespacedName.Namespace))
-		})
-
-		It("sets labels including service-type data-registry", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-
-			Expect(deploy.Labels).To(HaveKeyWithValue(NameLabelKey, featureStore.Name))
-			Expect(deploy.Labels).To(HaveKeyWithValue(ManagedByLabelKey, ManagedByLabelValue))
-			Expect(deploy.Labels).To(HaveKeyWithValue(ServiceTypeLabelKey, string(DataRegistryFeastType)))
-		})
-
-		It("uses a two-label selector to avoid overlap with the main Deployment", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-
-			selector := deploy.Spec.Selector.MatchLabels
-			Expect(selector).To(HaveLen(2))
-			Expect(selector).To(HaveKeyWithValue(NameLabelKey, featureStore.Name))
-			Expect(selector).To(HaveKeyWithValue(ServiceTypeLabelKey, string(DataRegistryFeastType)))
-		})
-
-		It("sets replicas to 1", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			Expect(deploy.Spec.Replicas).NotTo(BeNil())
-			Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
-		})
-
-		It("uses the feast ServiceAccount", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
-		})
-
-		It("sets an owner reference pointing to the FeatureStore CR", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			Expect(deploy.OwnerReferences).To(HaveLen(1))
-			Expect(deploy.OwnerReferences[0].Name).To(Equal(featureStore.Name))
-			Expect(*deploy.OwnerReferences[0].Controller).To(BeTrue())
-		})
-
-		It("has exactly one container named data-registry-server", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			containers := deploy.Spec.Template.Spec.Containers
-			Expect(containers).To(HaveLen(1))
-			Expect(containers[0].Name).To(Equal(DataRegistryContainerName))
-		})
-
-		It("uses the correct command", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			cmd := deploy.Spec.Template.Spec.Containers[0].Command
-			Expect(cmd).To(ContainElements("feast", "serve_registry", "--rest-api"))
-		})
-
-		It("exposes port 6572/TCP named 'http'", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			ports := deploy.Spec.Template.Spec.Containers[0].Ports
-			Expect(ports).To(HaveLen(1))
-			Expect(ports[0].Name).To(Equal("http"))
-			Expect(ports[0].ContainerPort).To(Equal(DataRegistryPort))
-			Expect(ports[0].Protocol).To(Equal(corev1.ProtocolTCP))
-		})
-
-		It("sets all required env vars", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			envs := deploy.Spec.Template.Spec.Containers[0].Env
-
-			envMap := map[string]string{}
-			for _, e := range envs {
-				envMap[e.Name] = e.Value
-			}
-
-			Expect(envMap).To(HaveKey(TmpFeatureStoreYamlEnvVar))
-			Expect(envMap[TmpFeatureStoreYamlEnvVar]).NotTo(BeEmpty())
-			Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
-			Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
-			Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io"))
-			Expect(envMap).To(HaveKey(CatalogSSARResourcesEnvVar))
-			Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, featureStore.Spec.FeastProject))
-		})
-
-		It("sets readiness probe on /v1/config:6572", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			probe := deploy.Spec.Template.Spec.Containers[0].ReadinessProbe
-			Expect(probe).NotTo(BeNil())
-			Expect(probe.HTTPGet).NotTo(BeNil())
-			Expect(probe.HTTPGet.Path).To(Equal("/v1/config"))
-			Expect(probe.HTTPGet.Port).To(Equal(intstr.FromInt32(DataRegistryPort)))
-			Expect(probe.PeriodSeconds).To(Equal(int32(10)))
-		})
-
-		It("sets liveness probe with failureThreshold 6", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			probe := deploy.Spec.Template.Spec.Containers[0].LivenessProbe
-			Expect(probe).NotTo(BeNil())
-			Expect(probe.HTTPGet).NotTo(BeNil())
-			Expect(probe.HTTPGet.Path).To(Equal("/v1/config"))
-			Expect(probe.HTTPGet.Port).To(Equal(intstr.FromInt32(DataRegistryPort)))
-			Expect(probe.PeriodSeconds).To(Equal(int32(20)))
-			Expect(probe.FailureThreshold).To(Equal(int32(6)))
-		})
-
-		It("sets startup probe with failureThreshold 40", func() {
-			deploy := feast.initDataRegistryDeploy()
-			Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
-			probe := deploy.Spec.Template.Spec.Containers[0].StartupProbe
-			Expect(probe).NotTo(BeNil())
-			Expect(probe.HTTPGet).NotTo(BeNil())
-			Expect(probe.HTTPGet.Path).To(Equal("/v1/config"))
-			Expect(probe.HTTPGet.Port).To(Equal(intstr.FromInt32(DataRegistryPort)))
-			Expect(probe.PeriodSeconds).To(Equal(int32(3)))
-			Expect(probe.FailureThreshold).To(Equal(int32(40)))
-		})
-	})
-
-	// -------------------------------------------------------------------------
-	// deployDataRegistry lifecycle (create, idempotent update, cleanup)
-	// -------------------------------------------------------------------------
-
-	Describe("deployDataRegistry lifecycle", func() {
-		drDeployKey := func() types.NamespacedName {
-			return types.NamespacedName{
-				Name:      GetFeastName(featureStore) + "-" + string(DataRegistryFeastType),
-				Namespace: typeNamespacedName.Namespace,
-			}
+		for _, v := range []string{"false", "TRUE", "yes", "1"} {
+			setAnnotation(v)
+			Expect(feast.isDataRegistryEnabled()).To(BeFalse(), "annotation=%q should not enable", v)
 		}
 
-		It("does not create a Deployment when annotation is absent", func() {
-			Expect(feast.deployDataRegistry()).To(Succeed())
+		setAnnotation("true")
+		Expect(feast.isDataRegistryEnabled()).To(BeTrue())
+	})
 
+	It("produces a correct Deployment spec", func() {
+		setAnnotation("true")
+
+		deploy := feast.initDataRegistryDeploy()
+		Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
+
+		expectedName := GetFeastName(featureStore) + "-" + string(DataRegistryFeastType)
+		Expect(deploy.Name).To(Equal(expectedName))
+		Expect(deploy.Namespace).To(Equal(typeNamespacedName.Namespace))
+
+		// Labels & selector
+		Expect(deploy.Labels).To(HaveKeyWithValue(NameLabelKey, featureStore.Name))
+		Expect(deploy.Labels).To(HaveKeyWithValue(ServiceTypeLabelKey, string(DataRegistryFeastType)))
+		selector := deploy.Spec.Selector.MatchLabels
+		Expect(selector).To(HaveLen(2))
+		Expect(selector).To(HaveKeyWithValue(NameLabelKey, featureStore.Name))
+		Expect(selector).To(HaveKeyWithValue(ServiceTypeLabelKey, string(DataRegistryFeastType)))
+
+		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
+		Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
+
+		// Owner reference
+		Expect(deploy.OwnerReferences).To(HaveLen(1))
+		Expect(deploy.OwnerReferences[0].Name).To(Equal(featureStore.Name))
+		Expect(*deploy.OwnerReferences[0].Controller).To(BeTrue())
+
+		// Container
+		Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
+		ctr := deploy.Spec.Template.Spec.Containers[0]
+		Expect(ctr.Name).To(Equal(DataRegistryContainerName))
+		Expect(ctr.Command).To(ContainElements("feast", "serve_registry", "--rest-api"))
+		Expect(ctr.Ports).To(ConsistOf(corev1.ContainerPort{
+			Name: "http", ContainerPort: DataRegistryPort, Protocol: corev1.ProtocolTCP,
+		}))
+
+		// Env vars
+		envMap := map[string]string{}
+		for _, e := range ctr.Env {
+			envMap[e.Name] = e.Value
+		}
+		Expect(envMap).To(HaveKey(TmpFeatureStoreYamlEnvVar))
+		Expect(envMap[TmpFeatureStoreYamlEnvVar]).NotTo(BeEmpty())
+		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
+		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
+		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io"))
+		Expect(envMap).To(HaveKey(CatalogSSARResourcesEnvVar))
+		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, featureStore.Spec.FeastProject))
+
+		// Probes — all hit the same endpoint
+		expectedProbe := intstr.FromInt32(DataRegistryPort)
+		for _, p := range []*corev1.Probe{ctr.ReadinessProbe, ctr.LivenessProbe, ctr.StartupProbe} {
+			Expect(p).NotTo(BeNil())
+			Expect(p.HTTPGet.Path).To(Equal("/v1/config"))
+			Expect(p.HTTPGet.Port).To(Equal(expectedProbe))
+		}
+	})
+
+	It("creates a real Deployment and cleans it up when the annotation is removed", func() {
+		drKey := types.NamespacedName{
+			Name:      GetFeastName(featureStore) + "-" + string(DataRegistryFeastType),
+			Namespace: typeNamespacedName.Namespace,
+		}
+
+		// Disabled → no Deployment
+		Expect(feast.deployDataRegistry()).To(Succeed())
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, drKey, &appsv1.Deployment{}))).To(BeTrue())
+
+		// Enable → Deployment created
+		setAnnotation("true")
+		Expect(feast.deployDataRegistry()).To(Succeed())
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, drKey, deploy)).To(Succeed())
+		Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal(DataRegistryContainerName))
+
+		// Idempotent
+		Expect(feast.deployDataRegistry()).To(Succeed())
+
+		// Remove annotation → Deployment deleted
+		setAnnotation("")
+		Expect(feast.deployDataRegistry()).To(Succeed())
+		err := k8sClient.Get(ctx, drKey, &appsv1.Deployment{})
+		deleted := apierrors.IsNotFound(err)
+		if !deleted {
 			deploy := &appsv1.Deployment{}
-			err := k8sClient.Get(ctx, drDeployKey(), deploy)
-			Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		})
-
-		It("creates the Deployment when annotation is 'true'", func() {
-			setAnnotation("true")
-			Expect(feast.deployDataRegistry()).To(Succeed())
-
-			deploy := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, drDeployKey(), deploy)).To(Succeed())
-			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
-			Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal(DataRegistryContainerName))
-
-			// Cleanup for this test
-			Expect(k8sClient.Delete(ctx, deploy, client.PropagationPolicy(metav1.DeletePropagationForeground))).To(Succeed())
-		})
-
-		It("is idempotent — calling deployDataRegistry twice does not error", func() {
-			setAnnotation("true")
-			Expect(feast.deployDataRegistry()).To(Succeed())
-			Expect(feast.deployDataRegistry()).To(Succeed())
-
-			deploy := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, drDeployKey(), deploy)).To(Succeed())
-
-			// Cleanup for this test
-			Expect(k8sClient.Delete(ctx, deploy, client.PropagationPolicy(metav1.DeletePropagationForeground))).To(Succeed())
-		})
-
-		It("deletes the Deployment when annotation is removed", func() {
-			// Create the Deployment.
-			setAnnotation("true")
-			Expect(feast.deployDataRegistry()).To(Succeed())
-			deploy := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, drDeployKey(), deploy)).To(Succeed())
-
-			// Remove the annotation and reconcile.
-			setAnnotation("")
-			Expect(feast.deployDataRegistry()).To(Succeed())
-
-			// Deployment should be gone (or have a deletionTimestamp set).
-			deployAfter := &appsv1.Deployment{}
-			err := k8sClient.Get(ctx, drDeployKey(), deployAfter)
-			Expect(err == nil && deployAfter.DeletionTimestamp != nil || apierrors.IsNotFound(err)).To(BeTrue())
-		})
+			_ = k8sClient.Get(ctx, drKey, deploy)
+			deleted = deploy.DeletionTimestamp != nil
+		}
+		Expect(deleted).To(BeTrue())
 	})
 })

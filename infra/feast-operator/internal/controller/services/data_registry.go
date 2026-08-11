@@ -94,23 +94,29 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 			},
 			Spec: corev1.PodSpec{
 				ServiceAccountName: feast.initFeastSA().Name,
-				Containers:         []corev1.Container{feast.buildDataRegistryContainer()},
 			},
 		},
 	}
+
+	ctr, err := feast.buildDataRegistryContainer()
+	if err != nil {
+		return err
+	}
+	deploy.Spec.Template.Spec.Containers = []corev1.Container{ctr}
 
 	return controllerutil.SetControllerReference(cr, deploy, feast.Handler.Scheme)
 }
 
 // buildDataRegistryContainer returns the data-registry-server container spec.
-func (feast *FeastServices) buildDataRegistryContainer() corev1.Container {
+func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, error) {
 	cr := feast.Handler.FeatureStore
 
-	// Reuse the feature-server image (RELATED_IMAGE_FEATURE_SERVER or DefaultImage).
 	image := getFeatureServerImage()
 
-	// feature_store.yaml is delivered as a base64 env var; feast reads it at startup.
-	fsYamlB64, _ := feast.GetServiceFeatureStoreYamlBase64()
+	fsYamlB64, err := feast.GetServiceFeatureStoreYamlBase64()
+	if err != nil {
+		return corev1.Container{}, err
+	}
 
 	probeHandler := corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{
@@ -157,5 +163,5 @@ func (feast *FeastServices) buildDataRegistryContainer() corev1.Container {
 			PeriodSeconds:    3,
 			FailureThreshold: 40,
 		},
-	}
+	}, nil
 }
