@@ -230,6 +230,7 @@ var (
 		},
 		DataRegistryFeastType: {
 			Args:               []string{"serve_registry", "--rest-api"},
+			TargetHttpPort:     DataRegistryPort,
 			TargetRestHttpPort: DataRegistryPort,
 		},
 	}
