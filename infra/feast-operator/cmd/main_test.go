@@ -79,7 +79,10 @@ func TestValidateNotebookCRD(t *testing.T) {
 							"name": "notebooks.kubeflow.org",
 						},
 					}
-					json.NewEncoder(w).Encode(resp)
+					if err := json.NewEncoder(w).Encode(resp); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
 				} else {
 					w.WriteHeader(tt.statusCode)
 					resp := map[string]interface{}{
@@ -91,7 +94,10 @@ func TestValidateNotebookCRD(t *testing.T) {
 						"reason":     http.StatusText(tt.statusCode),
 						"code":       tt.statusCode,
 					}
-					json.NewEncoder(w).Encode(resp)
+					if err := json.NewEncoder(w).Encode(resp); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
 				}
 			}))
 			defer server.Close()
