@@ -13,12 +13,19 @@
 # limitations under the License.
 
 import tempfile
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
-from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
+from feast.infra.registry.sql import (
+    FeastRegistryHierarchySchemaError,
+    SqlRegistry,
+    SqlRegistryConfig,
+    metadata as registry_metadata,
+)
+from feast.protos.feast.core.SavedDataset_pb2 import SavedDataset as SavedDatasetProto
 from feast.saved_dataset import SavedDataset, SavedDatasetColumn
 
 
@@ -51,6 +58,39 @@ def _make_saved_dataset(
         description="test dataset",
         columns=columns or [],
     )
+
+
+def _create_legacy_saved_datasets_table(engine, *, with_row: bool = False):
+    """Pre-hierarchy schema: no namespace/collection SQL columns."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE saved_datasets ("
+                "saved_dataset_name VARCHAR(255) NOT NULL, "
+                "project_id VARCHAR(255) NOT NULL, "
+                "last_updated_timestamp BIGINT NOT NULL, "
+                "saved_dataset_proto BLOB NOT NULL, "
+                "PRIMARY KEY (saved_dataset_name, project_id))"
+            )
+        )
+        if with_row:
+            dataset = _make_saved_dataset(
+                "claims", namespace="underwriting", collection="curated"
+            )
+            proto_bytes = dataset.to_proto().SerializeToString()
+            conn.execute(
+                text(
+                    "INSERT INTO saved_datasets "
+                    "(saved_dataset_name, project_id, last_updated_timestamp, "
+                    "saved_dataset_proto) VALUES (:name, :project, :ts, :proto)"
+                ),
+                {
+                    "name": "claims",
+                    "project": "test_project",
+                    "ts": 1,
+                    "proto": proto_bytes,
+                },
+            )
 
 
 def test_saved_dataset_columns_round_trip(sqlite_registry):
@@ -112,19 +152,7 @@ def test_ensure_hierarchy_columns_migrates_legacy_table():
     """Existing DBs without hierarchy columns get them via additive migration."""
     fd, registry_path = tempfile.mkstemp()
     engine = create_engine(f"sqlite:///{registry_path}")
-
-    # Simulate a pre-hierarchy schema (no namespace/collection columns).
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE saved_datasets ("
-                "saved_dataset_name VARCHAR(255) NOT NULL, "
-                "project_id VARCHAR(255) NOT NULL, "
-                "last_updated_timestamp BIGINT NOT NULL, "
-                "saved_dataset_proto BLOB NOT NULL, "
-                "PRIMARY KEY (saved_dataset_name, project_id))"
-            )
-        )
+    _create_legacy_saved_datasets_table(engine)
 
     SqlRegistry._ensure_saved_dataset_hierarchy_columns(engine)
 
@@ -139,6 +167,30 @@ def test_ensure_hierarchy_columns_migrates_legacy_table():
     SqlRegistry._ensure_saved_dataset_hierarchy_columns(engine)
 
 
+def test_ensure_backfills_hierarchy_from_proto():
+    """Migration must copy namespace/collection out of the proto blob into SQL."""
+    fd, registry_path = tempfile.mkstemp()
+    engine = create_engine(f"sqlite:///{registry_path}")
+    _create_legacy_saved_datasets_table(engine, with_row=True)
+
+    SqlRegistry._ensure_saved_dataset_hierarchy_columns(engine)
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT namespace, collection, saved_dataset_proto "
+                "FROM saved_datasets WHERE saved_dataset_name = 'claims'"
+            )
+        ).one()
+
+    proto = SavedDatasetProto.FromString(row.saved_dataset_proto)
+    assert row.namespace == proto.spec.namespace == "underwriting"
+    assert row.collection == proto.spec.collection == "curated"
+
+    # Filter would have missed this row if SQL stayed at default ''.
+    assert row.namespace == "underwriting"
+
+
 def test_saved_dataset_column_proto_round_trip():
     column = SavedDatasetColumn(name="x", type="long", description="desc")
     restored = SavedDatasetColumn.from_proto(column.to_proto())
@@ -147,8 +199,6 @@ def test_saved_dataset_column_proto_round_trip():
 
 def test_sql_hierarchy_columns_match_proto_after_apply(sqlite_registry):
     """Denormalized SQL columns must stay in sync with proto (source of truth)."""
-    from feast.protos.feast.core.SavedDataset_pb2 import SavedDataset as SavedDatasetProto
-
     dataset = _make_saved_dataset(
         name="claims",
         namespace="underwriting",
@@ -173,26 +223,116 @@ def test_sql_hierarchy_columns_match_proto_after_apply(sqlite_registry):
     assert row.collection == loaded.collection == "curated"
 
 
-def test_warn_if_missing_hierarchy_columns_does_not_alter():
-    """Read-engine path must inspect/warn only — never ALTER TABLE."""
+def test_require_hierarchy_raises_on_legacy_schema():
     fd, registry_path = tempfile.mkstemp()
     engine = create_engine(f"sqlite:///{registry_path}")
+    _create_legacy_saved_datasets_table(engine)
 
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE saved_datasets ("
-                "saved_dataset_name VARCHAR(255) NOT NULL, "
-                "project_id VARCHAR(255) NOT NULL, "
-                "last_updated_timestamp BIGINT NOT NULL, "
-                "saved_dataset_proto BLOB NOT NULL, "
-                "PRIMARY KEY (saved_dataset_name, project_id))"
-            )
+    with pytest.raises(FeastRegistryHierarchySchemaError, match="hierarchy schema"):
+        SqlRegistry._require_saved_dataset_hierarchy_columns(
+            engine, engine_role="read engine"
         )
 
-    SqlRegistry._warn_if_missing_saved_dataset_hierarchy_columns(engine)
+
+def test_require_does_not_alter_schema():
+    """Fail-fast path must never ALTER TABLE."""
+    fd, registry_path = tempfile.mkstemp()
+    engine = create_engine(f"sqlite:///{registry_path}")
+    _create_legacy_saved_datasets_table(engine)
+
+    with pytest.raises(FeastRegistryHierarchySchemaError):
+        SqlRegistry._require_saved_dataset_hierarchy_columns(engine)
 
     inspector = inspect(engine)
     column_names = {column["name"] for column in inspector.get_columns("saved_datasets")}
     assert "namespace" not in column_names
     assert "collection" not in column_names
+
+
+def test_schema_mode_verify_does_not_run_ensure(tmp_path):
+    db_file = tmp_path / "verify_hierarchy.db"
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    registry_metadata.create_all(engine)
+    engine.dispose()
+
+    with patch.object(
+        SqlRegistry, "_ensure_saved_dataset_hierarchy_columns"
+    ) as mock_ensure:
+        config = SqlRegistryConfig(
+            registry_type="sql",
+            path=db_url,
+            schema_mode="verify",
+        )
+        registry = SqlRegistry(config, "test_project", None)
+        mock_ensure.assert_not_called()
+        registry.teardown()
+
+
+def test_schema_mode_skip_does_not_run_ensure(tmp_path):
+    db_file = tmp_path / "skip_hierarchy.db"
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    registry_metadata.create_all(engine)
+    engine.dispose()
+
+    with patch.object(
+        SqlRegistry, "_ensure_saved_dataset_hierarchy_columns"
+    ) as mock_ensure:
+        config = SqlRegistryConfig(
+            registry_type="sql",
+            path=db_url,
+            schema_mode="skip",
+        )
+        registry = SqlRegistry(config, "test_project", None)
+        mock_ensure.assert_not_called()
+        registry.teardown()
+
+
+def test_schema_mode_verify_raises_when_hierarchy_missing(tmp_path):
+    """verify must not ALTER; missing hierarchy columns fail startup."""
+    db_file = tmp_path / "verify_legacy.db"
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    registry_metadata.create_all(engine)
+    # Simulate a pre-hierarchy saved_datasets table.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE saved_datasets"))
+    _create_legacy_saved_datasets_table(engine)
+    engine.dispose()
+
+    config = SqlRegistryConfig(
+        registry_type="sql",
+        path=db_url,
+        schema_mode="verify",
+    )
+    with pytest.raises(FeastRegistryHierarchySchemaError, match="write engine"):
+        SqlRegistry(config, "test_project", None)
+
+
+def test_read_replica_missing_hierarchy_fails_startup(tmp_path):
+    """Option A: lagging read schema must fail init, not warn-and-query."""
+    write_file = tmp_path / "write.db"
+    read_file = tmp_path / "read.db"
+    write_url = f"sqlite:///{write_file}"
+    read_url = f"sqlite:///{read_file}"
+
+    write_engine = create_engine(write_url)
+    registry_metadata.create_all(write_engine)
+    write_engine.dispose()
+
+    read_engine = create_engine(read_url)
+    registry_metadata.create_all(read_engine)
+    with read_engine.begin() as conn:
+        conn.execute(text("DROP TABLE saved_datasets"))
+    _create_legacy_saved_datasets_table(read_engine)
+    read_engine.dispose()
+
+    config = SqlRegistryConfig(
+        registry_type="sql",
+        path=write_url,
+        read_path=read_url,
+        schema_mode="verify",
+    )
+    with pytest.raises(FeastRegistryHierarchySchemaError, match="read engine"):
+        SqlRegistry(config, "test_project", None)
