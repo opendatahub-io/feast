@@ -35,10 +35,10 @@ func TestValidateNotebookCRD(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		statusCode  int
-		wantExists  bool
-		wantErr     bool
+		name       string
+		statusCode int
+		wantExists bool
+		wantErr    bool
 	}{
 		{
 			name:       "CRD exists returns true",
