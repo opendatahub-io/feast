@@ -349,13 +349,12 @@ func validateNotebookCRD(ctx context.Context, config *rest.Config, gvk schema.Gr
 			return false, nil
 		}
 		if apierrors.IsForbidden(err) {
-			// Can't verify - assume it might exist and let controller try
 			setupLog.Info(
-				"Unable to validate Notebook CRD (insufficient permissions), will attempt setup",
+				"Unable to validate Notebook CRD (insufficient permissions), skipping controller setup",
 				"CRD", crdName,
 				"GVK", gvk,
 			)
-			return true, nil // Return true to allow controller setup
+			return false, nil
 		}
 		return false, fmt.Errorf("failed to check Notebook CRD availability: %w", err)
 	}
