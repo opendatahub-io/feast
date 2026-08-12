@@ -343,6 +343,18 @@ class FeastRegistrySchemaError(Exception):
         )
 
 
+class FeastRegistryHierarchySchemaError(Exception):
+    """Raised when saved_datasets lacks namespace/collection columns or index."""
+
+    def __init__(self, gaps: List[str], engine_role: str = "registry") -> None:
+        super().__init__(
+            f"SQL registry {engine_role} is missing saved_datasets hierarchy schema "
+            f"({', '.join(gaps)}). Migrate the writable registry with "
+            "schema_mode='auto' (or apply ALTER TABLE / CREATE INDEX manually), "
+            "and ensure any read replica is migrated before startup."
+        )
+
+
 class SqlRegistry(CachingRegistry):
     def __init__(
         self,
@@ -368,18 +380,23 @@ class SqlRegistry(CachingRegistry):
             self.read_engine = self.write_engine
         if registry_config.schema_mode == "auto":
             metadata.create_all(self.write_engine)
+            # Additive migration for existing registries — write engine only.
+            self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
         elif registry_config.schema_mode == "verify":
             self._verify_schema(self.write_engine)
             if self.read_engine is not self.write_engine:
                 self._verify_schema(self.read_engine)
-        # Additive migration for existing registries created before hierarchy columns.
-        # Only the write engine may ALTER TABLE; read replicas are often read-only.
-        self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
+        # Hierarchy columns are required for list/filter SQL; fail fast if absent
+        # (verify/skip must not ALTER — operator owns schema).
+        self._require_saved_dataset_hierarchy_columns(
+            self.write_engine, engine_role="write engine"
+        )
         self._warn_if_narrow_blob_columns(self.write_engine)
         if self.read_engine is not self.write_engine:
-            # A read replica can lag schema version mid blue-green switchover —
-            # inspect only; never migrate a non-writable engine.
-            self._warn_if_missing_saved_dataset_hierarchy_columns(self.read_engine)
+            # Never ALTER a read replica; require it already matches write schema.
+            self._require_saved_dataset_hierarchy_columns(
+                self.read_engine, engine_role="read engine"
+            )
             self._warn_if_narrow_blob_columns(self.read_engine)
         self.thread_pool_executor_worker_count = (
             registry_config.thread_pool_executor_worker_count
@@ -435,68 +452,84 @@ class SqlRegistry(CachingRegistry):
         return gaps
 
     @staticmethod
+    def _require_saved_dataset_hierarchy_columns(
+        engine: Engine, engine_role: str = "registry"
+    ) -> None:
+        """Raise if saved_datasets exists but lacks hierarchy columns/index."""
+        gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+        if gaps:
+            raise FeastRegistryHierarchySchemaError(gaps, engine_role=engine_role)
+
+    @staticmethod
+    def _backfill_saved_dataset_hierarchy_columns(engine: Engine) -> None:
+        """Copy namespace/collection from each proto blob into SQL columns."""
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT saved_dataset_name, project_id, saved_dataset_proto "
+                    "FROM saved_datasets"
+                )
+            ).all()
+            for row in rows:
+                proto = SavedDatasetProto.FromString(row.saved_dataset_proto)
+                conn.execute(
+                    text(
+                        "UPDATE saved_datasets SET namespace = :namespace, "
+                        "collection = :collection "
+                        "WHERE saved_dataset_name = :name AND project_id = :project"
+                    ),
+                    {
+                        "namespace": proto.spec.namespace or "",
+                        "collection": proto.spec.collection or "",
+                        "name": row.saved_dataset_name,
+                        "project": row.project_id,
+                    },
+                )
+
+    @staticmethod
     def _ensure_saved_dataset_hierarchy_columns(engine: Engine) -> None:
         """Add namespace/collection columns + index on existing saved_datasets tables.
 
         ``metadata.create_all`` does not alter existing tables. Registries created
         before these hierarchy columns existed need an additive migration so
         SQL-backed namespace filtering works. Safe/no-op when columns already exist.
-        Best-effort: never block registry startup on migration failure.
-        Intended for the writable registry engine only.
+        After adding columns, backfill values from ``saved_dataset_proto``.
+        Intended for the writable registry engine only; call only when
+        ``schema_mode == "auto"``.
         """
-        try:
-            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
-            if not gaps:
-                return
-
-            with engine.begin() as conn:
-                if "column:namespace" in gaps:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE saved_datasets ADD COLUMN namespace "
-                            "VARCHAR(255) DEFAULT ''"
-                        )
-                    )
-                if "column:collection" in gaps:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE saved_datasets ADD COLUMN collection "
-                            "VARCHAR(255) DEFAULT ''"
-                        )
-                    )
-                if "index:idx_saved_datasets_project_namespace" in gaps:
-                    # Re-check after ALTERs in case inspector was stale for indexes
-                    # that depend on newly added columns.
-                    conn.execute(
-                        text(
-                            "CREATE INDEX idx_saved_datasets_project_namespace "
-                            "ON saved_datasets (project_id, namespace)"
-                        )
-                    )
-        except Exception as exc:  # pragma: no cover - never block startup
-            logger.error(
-                "Failed to ensure saved_datasets namespace/collection columns: %s",
-                exc,
-            )
-
-    @staticmethod
-    def _warn_if_missing_saved_dataset_hierarchy_columns(engine: Engine) -> None:
-        """Warn when a read engine lacks hierarchy columns (do not ALTER)."""
-        try:
-            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
-        except Exception as exc:  # pragma: no cover - never block startup
-            logger.error(
-                "Failed to inspect saved_datasets hierarchy columns on read engine: %s",
-                exc,
-            )
+        gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+        if not gaps:
+            # Columns may already exist from a prior migration that left empty
+            # defaults — still sync SQL from proto (source of truth).
+            inspector = sa_inspect(engine)
+            if "saved_datasets" in set(inspector.get_table_names()):
+                SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
             return
-        if gaps:
-            logger.warning(
-                "Read registry engine is missing saved_datasets hierarchy schema "
-                "(%s). Namespace/collection SQL filters may be wrong until the "
-                "replica is migrated. Migrations run only on the write engine.",
-                ", ".join(gaps),
-            )
+
+        with engine.begin() as conn:
+            if "column:namespace" in gaps:
+                conn.execute(
+                    text(
+                        "ALTER TABLE saved_datasets ADD COLUMN namespace "
+                        "VARCHAR(255) DEFAULT ''"
+                    )
+                )
+            if "column:collection" in gaps:
+                conn.execute(
+                    text(
+                        "ALTER TABLE saved_datasets ADD COLUMN collection "
+                        "VARCHAR(255) DEFAULT ''"
+                    )
+                )
+            if "index:idx_saved_datasets_project_namespace" in gaps:
+                conn.execute(
+                    text(
+                        "CREATE INDEX idx_saved_datasets_project_namespace "
+                        "ON saved_datasets (project_id, namespace)"
+                    )
+                )
+
+        SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
 
     @staticmethod
     def _warn_if_narrow_blob_columns(
