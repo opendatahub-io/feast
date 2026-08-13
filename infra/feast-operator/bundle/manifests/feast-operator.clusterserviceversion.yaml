@@ -239,8 +239,6 @@ spec:
           - secrets
           verbs:
           - get
-          - list
-          - watch
         - apiGroups:
           - ""
           resources:
@@ -389,8 +387,6 @@ spec:
           - clusterroles
           verbs:
           - create
-          - get
-          - list
         - apiGroups:
           - rbac.authorization.k8s.io
           resourceNames:
@@ -401,6 +397,7 @@ spec:
           - clusterroles
           verbs:
           - delete
+          - get
           - update
         - apiGroups:
           - rbac.authorization.k8s.io
