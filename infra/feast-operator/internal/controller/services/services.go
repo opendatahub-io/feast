@@ -98,6 +98,12 @@ func (feast *FeastServices) applyMlflowDefaults() {
 
 // Deploy the feast services
 func (feast *FeastServices) Deploy() error {
+	// Data-registry mode: deploy a single registry-only pod with proxy sidecar
+	// and skip standard online/offline store deployments.
+	if feast.isDataRegistryEnabled() {
+		return feast.deployDataRegistryMode()
+	}
+
 	if feast.noLocalCoreServerConfigured() {
 		return errors.New("at least one local server must be configured. e.g. registry / online / offline")
 	}
@@ -134,6 +140,7 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
+	// Clean up any data-registry resources left from a previous enablement.
 	if err := feast.deployDataRegistry(); err != nil {
 		return err
 	}
@@ -162,6 +169,32 @@ func (feast *FeastServices) Deploy() error {
 		return err
 	}
 
+	return nil
+}
+
+// deployDataRegistryMode handles the full reconciliation when the
+// dataregistry.opendatahub.io/enabled annotation is "true".
+// Standard online/offline store deployments are skipped; a single
+// registry-only pod with the kube-rbac-proxy sidecar is deployed instead.
+func (feast *FeastServices) deployDataRegistryMode() error {
+	// Clean up the standard multi-container Deployment if it exists,
+	// avoiding the resource-wasteful double-deployment.
+	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
+		return err
+	}
+
+	if err := feast.createServiceAccount(); err != nil {
+		return err
+	}
+	if err := feast.deployDataRegistry(); err != nil {
+		return err
+	}
+	if err := feast.deployClient(); err != nil {
+		return err
+	}
+	if err := feast.deployNamespaceRegistry(); err != nil {
+		return err
+	}
 	return nil
 }
 

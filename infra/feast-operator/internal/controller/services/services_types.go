@@ -64,8 +64,19 @@ const (
 	CatalogSSARResourcesEnvVar = "CATALOG_SSAR_RESOURCES"
 	FeastProjectEnvVar         = "FEAST_PROJECT"
 
-	DataRegistryContainerName       = "data-registry-server"
-	DataRegistryPort          int32 = 6572
+	DataRegistryContainerName        = "data-registry-server"
+	DataRegistryPort           int32 = 6572
+	DataRegistryLocalhostAddr        = "127.0.0.1"
+
+	// kube-rbac-proxy sidecar for Data Registry authentication enforcement.
+	kubeRBACProxyImageVar            = "RELATED_IMAGE_KUBE_RBAC_PROXY"
+	DataRegistryProxyContainerName   = "kube-rbac-proxy"
+	DataRegistryProxyPort      int32 = 8443
+	dataRegistryAuthConfigSuffix     = "-data-registry-auth"
+	dataRegistryClusterRoleSuffix    = "-data-registry"
+	dataRegistryTlsSecretSuffix      = "-data-registry-tls"
+
+	DefaultKubeRBACProxyImage = "gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0"
 
 	HttpPort              = 80
 	HttpsPort             = 443
