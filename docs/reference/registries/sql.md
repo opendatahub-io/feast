@@ -93,9 +93,22 @@ registry:
 
 | Value | Behavior |
 |---|---|
-| `auto` (default) | Creates tables if they don't exist. Current behavior, no breaking change. |
-| `verify` | Skips DDL. Checks that all expected tables exist on startup; raises an error listing missing tables if any are absent. When a separate `read_path` is configured, the read replica is also verified — a lagging replica (e.g. mid-migration) will block startup. Note: this is a table-level check only — it does not verify individual columns. A schema created by an older Feast version (missing newer columns) will pass verification but may fail at query time. |
+| `auto` (default) | Creates tables if they don't exist. Also runs an additive migration on existing `saved_datasets` tables to add denormalized `namespace` / `collection` columns and `idx_saved_datasets_project_namespace`, then backfills those columns from the proto blob. |
+| `verify` | Skips DDL. Checks that all expected tables exist on startup; raises an error listing missing tables if any are absent. When a separate `read_path` is configured, the read replica is also verified — a lagging replica (e.g. mid-migration) will block startup. Hierarchy column checks are separate (see below). |
 | `skip` | Skips both creation and verification. Use when schema is managed entirely outside Feast (e.g. by a migration tool). |
+
+### SavedDataset hierarchy columns (`namespace` / `collection`)
+
+`saved_datasets` includes denormalized `namespace` and `collection` columns (plus index `idx_saved_datasets_project_namespace`) so list filters can use SQL `WHERE` instead of scanning every proto.
+
+| Situation | Behavior |
+|---|---|
+| `schema_mode=auto` | Feast adds missing hierarchy columns/index and backfills from proto. |
+| `schema_mode=verify` or `skip` | Feast does **not** ALTER the table. |
+| `DATACATALOG_ENABLED=true` and hierarchy schema missing | Startup raises an error — catalog requires hierarchy SQL filters. Migrate with `schema_mode=auto` or apply `ALTER TABLE` / `CREATE INDEX` manually. |
+| Catalog disabled and hierarchy schema missing | Startup logs a warning and continues. `list_saved_datasets(namespace=…)` falls back to proto-side filtering (pre-hierarchy behavior). |
+
+Proto / SDK fields (`namespace`, `collection`, `columns`) are always available regardless of `DATACATALOG_ENABLED`.
 
 ### Pre-creating the schema
 

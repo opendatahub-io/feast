@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -386,18 +387,22 @@ class SqlRegistry(CachingRegistry):
             self._verify_schema(self.write_engine)
             if self.read_engine is not self.write_engine:
                 self._verify_schema(self.read_engine)
-        # Hierarchy columns are required for list/filter SQL; fail fast if absent
-        # (verify/skip must not ALTER — operator owns schema).
-        self._require_saved_dataset_hierarchy_columns(
+        # Hierarchy SQL columns: hard-require only when catalog is enabled.
+        # Non-catalog registries warn and fall back to proto-side filtering.
+        self._has_hierarchy_columns = self._resolve_saved_dataset_hierarchy_schema(
             self.write_engine, engine_role="write engine"
         )
         self._warn_if_narrow_blob_columns(self.write_engine)
         if self.read_engine is not self.write_engine:
-            # Never ALTER a read replica; require it already matches write schema.
-            self._require_saved_dataset_hierarchy_columns(
-                self.read_engine, engine_role="read engine"
+            # Never ALTER a read replica; apply the same catalog/non-catalog policy.
+            self._read_has_hierarchy_columns = (
+                self._resolve_saved_dataset_hierarchy_schema(
+                    self.read_engine, engine_role="read engine"
+                )
             )
             self._warn_if_narrow_blob_columns(self.read_engine)
+        else:
+            self._read_has_hierarchy_columns = self._has_hierarchy_columns
         self.thread_pool_executor_worker_count = (
             registry_config.thread_pool_executor_worker_count
         )
@@ -452,6 +457,11 @@ class SqlRegistry(CachingRegistry):
         return gaps
 
     @staticmethod
+    def _is_datacatalog_enabled() -> bool:
+        """True when this Feast process is running as the Data Catalog server."""
+        return os.environ.get("DATACATALOG_ENABLED", "").lower() in ("1", "true", "yes")
+
+    @staticmethod
     def _require_saved_dataset_hierarchy_columns(
         engine: Engine, engine_role: str = "registry"
     ) -> None:
@@ -459,6 +469,29 @@ class SqlRegistry(CachingRegistry):
         gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
         if gaps:
             raise FeastRegistryHierarchySchemaError(gaps, engine_role=engine_role)
+
+    def _resolve_saved_dataset_hierarchy_schema(
+        self, engine: Engine, engine_role: str = "registry"
+    ) -> bool:
+        """Return True when hierarchy SQL columns are present and usable.
+
+        When ``DATACATALOG_ENABLED`` is set, missing hierarchy schema raises
+        ``FeastRegistryHierarchySchemaError``. Otherwise log a warning and return
+        False so list paths can fall back to proto-side filtering.
+        """
+        gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+        if not gaps:
+            return True
+        if SqlRegistry._is_datacatalog_enabled():
+            raise FeastRegistryHierarchySchemaError(gaps, engine_role=engine_role)
+        logger.warning(
+            "saved_datasets is missing hierarchy schema (%s); "
+            "namespace/collection SQL filters unavailable until migrated "
+            "(schema_mode='auto' or manual ALTER). Falling back to proto-side "
+            "filtering.",
+            ", ".join(gaps),
+        )
+        return False
 
     @staticmethod
     def _backfill_saved_dataset_hierarchy_columns(engine: Engine) -> None:
@@ -1263,13 +1296,28 @@ class SqlRegistry(CachingRegistry):
         proto_only = kwargs.get("proto_only", False)
         updated_since = kwargs.get("updated_since")
 
-        # Prefer SQL filters for hierarchy fields (denormalized columns).
+        # When hierarchy SQL columns are missing (non-catalog + verify/skip),
+        # select only legacy columns so SQLAlchemy does not reference
+        # namespace/collection, then filter those fields in Python from the proto.
+        use_hierarchy_sql = getattr(self, "_read_has_hierarchy_columns", True)
+
         with self.read_engine.begin() as conn:
-            stmt = select(saved_datasets).where(saved_datasets.c.project_id == project)
-            if namespace is not None:
-                stmt = stmt.where(saved_datasets.c.namespace == namespace)
-            if collection is not None:
-                stmt = stmt.where(saved_datasets.c.collection == collection)
+            if use_hierarchy_sql:
+                stmt = select(saved_datasets).where(
+                    saved_datasets.c.project_id == project
+                )
+                if namespace is not None:
+                    stmt = stmt.where(saved_datasets.c.namespace == namespace)
+                if collection is not None:
+                    stmt = stmt.where(saved_datasets.c.collection == collection)
+            else:
+                # Explicit column list: avoid SELECT of missing hierarchy columns.
+                stmt = select(
+                    saved_datasets.c.saved_dataset_name,
+                    saved_datasets.c.project_id,
+                    saved_datasets.c.last_updated_timestamp,
+                    saved_datasets.c.saved_dataset_proto,
+                ).where(saved_datasets.c.project_id == project)
             if updated_since is not None:
                 if updated_since.tzinfo is None:
                     updated_since_utc = updated_since.replace(tzinfo=timezone.utc)
@@ -1288,11 +1336,22 @@ class SqlRegistry(CachingRegistry):
         for row in rows:
             proto = SavedDatasetProto.FromString(row._mapping["saved_dataset_proto"])
             if proto_only:
+                if not use_hierarchy_sql:
+                    if namespace is not None and proto.spec.namespace != namespace:
+                        continue
+                    if collection is not None and proto.spec.collection != collection:
+                        continue
                 results.append(proto)
                 continue
             dataset = SavedDataset.from_proto(proto)
-            if utils.has_all_tags(dataset.tags, tags):
-                results.append(dataset)
+            if not utils.has_all_tags(dataset.tags, tags):
+                continue
+            if not use_hierarchy_sql:
+                if namespace is not None and dataset.namespace != namespace:
+                    continue
+                if collection is not None and dataset.collection != collection:
+                    continue
+            results.append(dataset)
         return results
 
     def _list_on_demand_feature_views(
