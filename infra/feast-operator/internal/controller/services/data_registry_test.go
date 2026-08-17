@@ -166,7 +166,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
 		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io"))
-		Expect(envMap).To(HaveKey(CatalogSSARResourcesEnvVar))
+		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
 		// Multi-tenancy: FEAST_PROJECT must be empty for dynamic routing
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, ""))
 
