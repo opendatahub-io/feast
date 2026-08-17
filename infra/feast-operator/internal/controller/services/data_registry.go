@@ -19,6 +19,7 @@ package services
 import (
 	"os"
 
+	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -26,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -53,10 +55,19 @@ func (feast *FeastServices) deployDataRegistry() error {
 	if err := feast.deployDataRegistryClusterRoles(); err != nil {
 		return err
 	}
+	if err := feast.deployDataRegistryAuthDelegatorBinding(); err != nil {
+		return err
+	}
 	if err := feast.createDataRegistryService(); err != nil {
 		return err
 	}
 	if err := feast.createDataRegistryDeployment(); err != nil {
+		return err
+	}
+	if err := feast.deployDataRegistryCaBundleConfigMap(); err != nil {
+		return err
+	}
+	if err := feast.createDataRegistryRoute(); err != nil {
 		return err
 	}
 	return nil
@@ -64,6 +75,11 @@ func (feast *FeastServices) deployDataRegistry() error {
 
 // cleanupDataRegistryResources removes all data-registry owned resources.
 func (feast *FeastServices) cleanupDataRegistryResources() error {
+	if isOpenShift {
+		if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryRoute()); err != nil {
+			return err
+		}
+	}
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryDeploy()); err != nil {
 		return err
 	}
@@ -73,7 +89,13 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryAuthCM()); err != nil {
 		return err
 	}
-	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+	if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryCaBundleCM()); err != nil {
+		return err
+	}
+	if err := feast.deleteDataRegistryClusterRoles(); err != nil {
+		return err
+	}
+	if err := feast.deleteDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
 	}
 	return nil
@@ -237,6 +259,7 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
+			"--ignore-paths=/v1/search",
 			"--logtostderr=true",
 			"--v=3",
 		},
@@ -381,10 +404,29 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cr := feast.Handler.FeatureStore
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
+	// Path-based resource mapping: the proxy matches incoming URL paths against
+	// these regex patterns and issues SubjectAccessReview checks with the
+	// corresponding resource type. Patterns are evaluated top-to-bottom; the
+	// first match wins. The /v1/search endpoint is excluded via --ignore-paths
+	// because cross-namespace search cannot be scoped to a single resource.
 	authYaml := `authorization:
   resourceAttributes:
     apiGroup: dataregistry.opendatahub.io
     resource: registries
+  rewrites:
+    byHTTPPath:
+      - path: "/v1/[^/]+/namespaces/[^/]+/tables.*"
+        resourceAttributes:
+          resource: tables
+      - path: "/v1/[^/]+/namespaces/[^/]+/volumes.*"
+        resourceAttributes:
+          resource: volumes
+      - path: "/v1/[^/]+/namespaces/[^/]+/generic-tables.*"
+        resourceAttributes:
+          resource: generic-tables
+      - path: "/v1/[^/]+/namespaces.*"
+        resourceAttributes:
+          resource: namespaces
 `
 
 	cm.Data = map[string]string{
@@ -457,6 +499,37 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		logger.Info("Successfully reconciled", "ClusterRole", editorCR.Name, "operation", op)
 	}
 
+	adminCR := feast.initDataRegistryClusterRole("admin")
+	if op, err := controllerutil.CreateOrUpdate(
+		feast.Handler.Context,
+		feast.Handler.Client,
+		adminCR,
+		func() error {
+			adminCR.Labels = map[string]string{
+				NameLabelKey:      feast.Handler.FeatureStore.Name,
+				ManagedByLabelKey: ManagedByLabelValue,
+				"rbac.authorization.k8s.io/aggregate-to-admin": "true",
+			}
+			adminCR.Rules = []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{"dataregistry.opendatahub.io"},
+					Resources: []string{"registries"},
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
+				{
+					APIGroups: []string{"dataregistry.opendatahub.io"},
+					Resources: []string{"connections"},
+					Verbs:     []string{"use"},
+				},
+			}
+			return nil
+		},
+	); err != nil {
+		return err
+	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
+		logger.Info("Successfully reconciled", "ClusterRole", adminCR.Name, "operation", op)
+	}
+
 	return nil
 }
 
@@ -473,9 +546,9 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 // CleanupDataRegistryClusterRoles removes the aggregated ClusterRoles.
 // ClusterRoles are cluster-scoped and cannot carry namespace-scoped owner
 // references, so we delete by name + managed-by label check instead of
-// using DeleteOwnedFeastObj. Exported for use by cleanupOnDeletion.
-func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
-	for _, suffix := range []string{"viewer", "editor"} {
+// using DeleteOwnedFeastObj.
+func (feast *FeastServices) deleteDataRegistryClusterRoles() error {
+	for _, suffix := range []string{"viewer", "editor", "admin"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
 		if err := feast.Handler.Client.Get(
@@ -499,6 +572,209 @@ func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 }
 
 // ---------------------------------------------------------------------------
+// Route — ReEncrypt Route exposing the data-registry to external clients
+// ---------------------------------------------------------------------------
+
+func (feast *FeastServices) createDataRegistryRoute() error {
+	if !isOpenShift {
+		return nil
+	}
+	logger := log.FromContext(feast.Handler.Context)
+	route := feast.initDataRegistryRoute()
+	if op, err := controllerutil.CreateOrUpdate(
+		feast.Handler.Context,
+		feast.Handler.Client,
+		route,
+		controllerutil.MutateFn(func() error {
+			return feast.setDataRegistryRoute(route)
+		}),
+	); err != nil {
+		return err
+	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
+		logger.Info("Successfully reconciled", "Route", route.Name, "operation", op)
+	}
+	return nil
+}
+
+func (feast *FeastServices) initDataRegistryRoute() *routev1.Route {
+	route := &routev1.Route{
+		ObjectMeta: feast.GetObjectMetaType(DataRegistryFeastType),
+	}
+	route.SetGroupVersionKind(routev1.SchemeGroupVersion.WithKind("Route"))
+	return route
+}
+
+// setDataRegistryRoute configures a ReEncrypt Route that terminates TLS at the
+// OpenShift Router and re-encrypts traffic to the kube-rbac-proxy sidecar.
+// The destinationCACertificate is read from the Service CA bundle ConfigMap
+// so the Router trusts the internal service certificate.
+func (feast *FeastServices) setDataRegistryRoute(route *routev1.Route) error {
+	cr := feast.Handler.FeatureStore
+	route.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
+
+	svcName := feast.GetFeastServiceName(DataRegistryFeastType)
+	route.Spec = routev1.RouteSpec{
+		To: routev1.RouteTargetReference{
+			Kind: "Service",
+			Name: svcName,
+		},
+		Port: &routev1.RoutePort{
+			TargetPort: intstr.FromInt32(DataRegistryProxyPort),
+		},
+		TLS: &routev1.TLSConfig{
+			Termination:                   routev1.TLSTerminationReencrypt,
+			InsecureEdgeTerminationPolicy: routev1.InsecureEdgeTerminationPolicyRedirect,
+		},
+	}
+
+	caCert := feast.readServiceCACert()
+	if caCert != "" {
+		route.Spec.TLS.DestinationCACertificate = caCert
+	}
+
+	return controllerutil.SetControllerReference(cr, route, feast.Handler.Scheme)
+}
+
+// readServiceCACert attempts to read the Service CA certificate from the
+// injected CA bundle ConfigMap. Returns empty string if not yet available
+// (the ConfigMap is populated asynchronously by OpenShift's service-ca
+// controller; the next reconciliation will pick it up).
+func (feast *FeastServices) readServiceCACert() string {
+	cm := &corev1.ConfigMap{}
+	key := client.ObjectKey{
+		Name:      feast.dataRegistryCaBundleCMName(),
+		Namespace: feast.Handler.FeatureStore.Namespace,
+	}
+	if err := feast.Handler.Client.Get(feast.Handler.Context, key, cm); err != nil {
+		return ""
+	}
+	return cm.Data["service-ca.crt"]
+}
+
+// ---------------------------------------------------------------------------
+// CA Bundle ConfigMap — annotated for OpenShift Service CA injection
+// ---------------------------------------------------------------------------
+
+func (feast *FeastServices) deployDataRegistryCaBundleConfigMap() error {
+	if !isOpenShift {
+		return nil
+	}
+	logger := log.FromContext(feast.Handler.Context)
+	cm := feast.initDataRegistryCaBundleCM()
+	if op, err := controllerutil.CreateOrUpdate(
+		feast.Handler.Context,
+		feast.Handler.Client,
+		cm,
+		controllerutil.MutateFn(func() error {
+			return feast.setDataRegistryCaBundleConfigMap(cm)
+		}),
+	); err != nil {
+		return err
+	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
+		logger.Info("Successfully reconciled", "ConfigMap", cm.Name, "operation", op)
+	}
+	return nil
+}
+
+func (feast *FeastServices) initDataRegistryCaBundleCM() *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      feast.dataRegistryCaBundleCMName(),
+			Namespace: feast.Handler.FeatureStore.Namespace,
+		},
+	}
+	cm.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	return cm
+}
+
+func (feast *FeastServices) setDataRegistryCaBundleConfigMap(cm *corev1.ConfigMap) error {
+	cr := feast.Handler.FeatureStore
+	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
+	if cm.Annotations == nil {
+		cm.Annotations = map[string]string{}
+	}
+	cm.Annotations[openshiftInjectCaBundleAnnotation] = stringTrue
+	return controllerutil.SetControllerReference(cr, cm, feast.Handler.Scheme)
+}
+
+// ---------------------------------------------------------------------------
+// Auth Delegator ClusterRoleBinding — grants the SA SubjectAccessReview perms
+// ---------------------------------------------------------------------------
+
+// deployDataRegistryAuthDelegatorBinding creates a ClusterRoleBinding that
+// binds the feast ServiceAccount to the system:auth-delegator ClusterRole.
+// This allows the data-registry-server to perform SubjectAccessReview calls
+// for server-side authorization of cross-namespace search requests.
+func (feast *FeastServices) deployDataRegistryAuthDelegatorBinding() error {
+	logger := log.FromContext(feast.Handler.Context)
+	crb := feast.initDataRegistryAuthDelegatorCRB()
+	if op, err := controllerutil.CreateOrUpdate(
+		feast.Handler.Context,
+		feast.Handler.Client,
+		crb,
+		func() error {
+			crb.Labels = map[string]string{
+				NameLabelKey:      feast.Handler.FeatureStore.Name,
+				ManagedByLabelKey: ManagedByLabelValue,
+			}
+			crb.Subjects = []rbacv1.Subject{
+				{
+					Kind:      "ServiceAccount",
+					Name:      feast.initFeastSA().Name,
+					Namespace: feast.Handler.FeatureStore.Namespace,
+				},
+			}
+			crb.RoleRef = rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     "system:auth-delegator",
+			}
+			return nil
+		},
+	); err != nil {
+		return err
+	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
+		logger.Info("Successfully reconciled", "ClusterRoleBinding", crb.Name, "operation", op)
+	}
+	return nil
+}
+
+func (feast *FeastServices) initDataRegistryAuthDelegatorCRB() *rbacv1.ClusterRoleBinding {
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: feast.dataRegistryAuthDelegatorCRBName(),
+		},
+	}
+	crb.SetGroupVersionKind(rbacv1.SchemeGroupVersion.WithKind("ClusterRoleBinding"))
+	return crb
+}
+
+// deleteDataRegistryAuthDelegatorBinding removes the auth-delegator CRB.
+// ClusterRoleBindings are cluster-scoped and cannot carry namespace-scoped
+// owner references, so we delete by name + managed-by label check.
+func (feast *FeastServices) deleteDataRegistryAuthDelegatorBinding() error {
+	crb := &rbacv1.ClusterRoleBinding{}
+	name := feast.dataRegistryAuthDelegatorCRBName()
+	if err := feast.Handler.Client.Get(
+		feast.Handler.Context,
+		types.NamespacedName{Name: name},
+		crb,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if crb.Labels[ManagedByLabelKey] == ManagedByLabelValue &&
+		crb.Labels[NameLabelKey] == feast.Handler.FeatureStore.Name {
+		if err := feast.Handler.Client.Delete(feast.Handler.Context, crb); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // Naming helpers
 // ---------------------------------------------------------------------------
 
@@ -512,4 +788,12 @@ func (feast *FeastServices) dataRegistryTlsSecretName() string {
 
 func (feast *FeastServices) dataRegistryClusterRoleName(suffix string) string {
 	return GetFeastName(feast.Handler.FeatureStore) + dataRegistryClusterRoleSuffix + "-" + suffix
+}
+
+func (feast *FeastServices) dataRegistryAuthDelegatorCRBName() string {
+	return GetFeastName(feast.Handler.FeatureStore) + dataRegistryAuthDelegatorSuffix
+}
+
+func (feast *FeastServices) dataRegistryCaBundleCMName() string {
+	return GetFeastName(feast.Handler.FeatureStore) + dataRegistryCaBundleSuffix
 }
