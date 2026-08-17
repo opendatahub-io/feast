@@ -200,7 +200,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			{Name: "FEAST_USAGE", Value: "False"},
 			{Name: DataCatalogEnabledEnvVar, Value: "true"},
 			{Name: CatalogSSARApiGroupEnvVar, Value: "dataregistry.opendatahub.io"},
-			{Name: CatalogSSARResourcesEnvVar, Value: ""},
+			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
 			{Name: FeastProjectEnvVar, Value: ""},
 		},
 		ReadinessProbe: &corev1.Probe{
@@ -404,11 +404,11 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		viewerCR,
 		func() error {
 			viewerCR.Labels = map[string]string{
-				NameLabelKey:                                       feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey:                                  ManagedByLabelValue,
-				"rbac.authorization.k8s.io/aggregate-to-view":     "true",
-				"rbac.authorization.k8s.io/aggregate-to-edit":     "true",
-				"rbac.authorization.k8s.io/aggregate-to-admin":    "true",
+				NameLabelKey:      feast.Handler.FeatureStore.Name,
+				ManagedByLabelKey: ManagedByLabelValue,
+				"rbac.authorization.k8s.io/aggregate-to-view":           "true",
+				"rbac.authorization.k8s.io/aggregate-to-edit":           "true",
+				"rbac.authorization.k8s.io/aggregate-to-admin":          "true",
 				"rbac.authorization.k8s.io/aggregate-to-cluster-reader": "true",
 			}
 			viewerCR.Rules = []rbacv1.PolicyRule{
@@ -433,8 +433,8 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		editorCR,
 		func() error {
 			editorCR.Labels = map[string]string{
-				NameLabelKey:                                    feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey:                               ManagedByLabelValue,
+				NameLabelKey:      feast.Handler.FeatureStore.Name,
+				ManagedByLabelKey: ManagedByLabelValue,
 				"rbac.authorization.k8s.io/aggregate-to-edit":  "true",
 				"rbac.authorization.k8s.io/aggregate-to-admin": "true",
 			}
