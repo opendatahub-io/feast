@@ -22719,6 +22719,7 @@ spec:
           value: quay.io/feastdev/feature-server:0.65.0
         - name: RELATED_IMAGE_CRON_JOB
           value: quay.io/openshift/origin-cli:4.17
+        - name: RELATED_IMAGE_KUBE_RBAC_PROXY
         - name: GOMEMLIMIT
           value: 230MiB
         - name: OIDC_ISSUER_URL
