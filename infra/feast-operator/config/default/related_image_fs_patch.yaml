@@ -13,4 +13,4 @@ spec:
         - name: RELATED_IMAGE_CRON_JOB
           value: quay.io/openshift/origin-cli:4.17
         - name: RELATED_IMAGE_KUBE_RBAC_PROXY
-          value: gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0
+          value: 
