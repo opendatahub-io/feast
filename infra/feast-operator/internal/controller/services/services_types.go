@@ -86,7 +86,10 @@ const (
 	dataRegistryClusterRoleSuffix        = "-data-registry"
 	dataRegistryTlsSecretSuffix          = "-data-registry-tls"
 
-	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
+	dataRegistryAuthDelegatorSuffix = "-data-registry-auth-delegator"
+	dataRegistryCaBundleSuffix      = "-data-registry-ca-bundle"
+
+	DefaultKubeRBACProxyImage = "gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0"
 
 	HttpPort              = 80
 	HttpsPort             = 443
