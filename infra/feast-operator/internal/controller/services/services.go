@@ -17,8 +17,6 @@ limitations under the License.
 package services
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"path"
 	"strconv"
@@ -44,6 +42,7 @@ import (
 // Apply defaults and set service hostnames in FeatureStore status
 func (feast *FeastServices) ApplyDefaults() error {
 	ApplyDefaultsToStatus(feast.Handler.FeatureStore)
+	feast.applyMlflowDefaults()
 	if err := feast.setTlsDefaults(); err != nil {
 		return err
 	}
@@ -51,6 +50,48 @@ func (feast *FeastServices) ApplyDefaults() error {
 		return err
 	}
 	return nil
+}
+
+// applyMlflowDefaults auto-enables MLflow integration when:
+//   - spec.mlflow is nil (not explicitly configured) — auto-discover from cluster MLflow CR
+//   - spec.mlflow.enabled is true but trackingUri is omitted — auto-discover the URI
+//
+// When spec.mlflow.enabled is explicitly false, the applied config is cleared (opt-out).
+func (feast *FeastServices) applyMlflowDefaults() {
+	cr := feast.Handler.FeatureStore
+	if cr.Spec.Mlflow != nil {
+		if !cr.Spec.Mlflow.Enabled {
+			cr.Status.Applied.Mlflow = nil
+			return
+		}
+		// enabled: true but missing trackingUri or uiUrl → discover them
+		needsDiscovery := cr.Spec.Mlflow.TrackingUri == nil || cr.Spec.Mlflow.UiUrl == nil
+		if needsDiscovery && feast.Handler.Client != nil {
+			if discovered, ok := DiscoverMlflow(feast.Handler.Context, feast.Handler.Client); ok {
+				if cr.Status.Applied.Mlflow != nil && cr.Status.Applied.Mlflow.TrackingUri == nil {
+					cr.Status.Applied.Mlflow.TrackingUri = &discovered.TrackingUri
+				}
+				if cr.Status.Applied.Mlflow != nil && cr.Status.Applied.Mlflow.UiUrl == nil && discovered.UiUrl != "" {
+					cr.Status.Applied.Mlflow.UiUrl = &discovered.UiUrl
+				}
+			}
+		}
+		return
+	}
+	// spec.mlflow is nil → attempt auto-discovery
+	if feast.Handler.Client == nil {
+		return
+	}
+	if discovered, ok := DiscoverMlflow(feast.Handler.Context, feast.Handler.Client); ok {
+		applied := &feastdevv1.MlflowConfig{
+			Enabled:     true,
+			TrackingUri: &discovered.TrackingUri,
+		}
+		if discovered.UiUrl != "" {
+			applied.UiUrl = &discovered.UiUrl
+		}
+		cr.Status.Applied.Mlflow = applied
+	}
 }
 
 // Deploy the feast services
@@ -85,9 +126,6 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.reconcileBatchEngineRBAC(); err != nil {
 		return err
 	}
-	if err := feast.createIntraCommunicationConfigMap(); err != nil {
-		return err
-	}
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
@@ -98,6 +136,12 @@ func (feast *FeastServices) Deploy() error {
 		return err
 	}
 	if err := feast.deployClient(); err != nil {
+		return err
+	}
+	// Remove RoleBindings created by older operator versions that incorrectly
+	// bound the FeatureStore SA to an MLflow ClusterRole. Auth is handled via
+	// MLFLOW_TRACKING_AUTH (SA token), not Kubernetes RBAC RoleBindings.
+	if err := feast.cleanupLegacyMlflowRoleBinding(); err != nil {
 		return err
 	}
 	if err := feast.deployNamespaceRegistry(); err != nil {
@@ -352,38 +396,6 @@ func (feast *FeastServices) createServiceAccount() error {
 	return nil
 }
 
-// GetIntraCommunicationConfigMapName returns the name of the ConfigMap holding the intra-communication token.
-func GetIntraCommunicationConfigMapName(featureStoreName string) string {
-	return handler.FeastPrefix + featureStoreName + "-intra-comm"
-}
-
-func (feast *FeastServices) createIntraCommunicationConfigMap() error {
-	logger := log.FromContext(feast.Handler.Context)
-	cr := feast.Handler.FeatureStore
-	cmName := GetIntraCommunicationConfigMapName(cr.Name)
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: cr.Namespace},
-	}
-	if op, err := controllerutil.CreateOrUpdate(feast.Handler.Context, feast.Handler.Client, cm, controllerutil.MutateFn(func() error {
-		if cm.Data == nil || cm.Data[intraCommunicationTokenKey] == "" {
-			b := make([]byte, 32)
-			if _, err := rand.Read(b); err != nil {
-				return err
-			}
-			cm.Data = map[string]string{
-				intraCommunicationTokenKey: base64.StdEncoding.EncodeToString(b),
-			}
-		}
-		cm.Labels = feast.getLabels()
-		return controllerutil.SetControllerReference(cr, cm, feast.Handler.Scheme)
-	})); err != nil {
-		return err
-	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
-		logger.Info("Successfully reconciled", "ConfigMap", cmName, "operation", op)
-	}
-	return nil
-}
-
 func (feast *FeastServices) createDeployment() error {
 	logger := log.FromContext(feast.Handler.Context)
 	deploy := feast.initFeastDeploy()
@@ -536,8 +548,7 @@ func (feast *FeastServices) setContainer(containers *[]corev1.Container, feastTy
 		name := string(feastType)
 		workingDir := feast.getFeatureRepoDir()
 		cmd := feast.getContainerCommand(feastType)
-		intraCommCMName := GetIntraCommunicationConfigMapName(feast.Handler.FeatureStore.Name)
-		container := getContainer(name, workingDir, cmd, serverConfigs.ContainerConfigs, fsYamlB64, intraCommCMName)
+		container := getContainer(name, workingDir, cmd, serverConfigs.ContainerConfigs, fsYamlB64)
 		tls := feast.getTlsConfigs(feastType)
 		probeHandler := feast.getProbeHandler(feastType, tls)
 		container.Ports = []corev1.ContainerPort{}
@@ -590,11 +601,45 @@ func (feast *FeastServices) setContainer(containers *[]corev1.Container, feastTy
 		if len(volumeMounts) > 0 {
 			container.VolumeMounts = append(container.VolumeMounts, volumeMounts...)
 		}
+		feast.injectMlflowEnv(container)
 		*containers = append(*containers, *container)
 	}
 }
 
-func getContainer(name, workingDir string, cmd []string, containerConfigs feastdevv1.ContainerConfigs, fsYamlB64, intraCommCMName string) *corev1.Container {
+const defaultMlflowTrackingAuth = "kubernetes-namespaced"
+
+// injectMlflowEnv adds MLFLOW_TRACKING_AUTH and MLFLOW_TRACKING_URI env vars
+// to the container when MLflow integration is enabled.
+func (feast *FeastServices) injectMlflowEnv(container *corev1.Container) {
+	applied := feast.Handler.FeatureStore.Status.Applied.Mlflow
+	if applied == nil || !applied.Enabled {
+		return
+	}
+
+	trackingAuth := defaultMlflowTrackingAuth
+	if applied.TrackingAuth != nil {
+		trackingAuth = *applied.TrackingAuth
+	}
+
+	var mlflowEnv []corev1.EnvVar
+	if trackingAuth != "" {
+		mlflowEnv = append(mlflowEnv, corev1.EnvVar{
+			Name:  "MLFLOW_TRACKING_AUTH",
+			Value: trackingAuth,
+		})
+	}
+	if applied.TrackingUri != nil {
+		mlflowEnv = append(mlflowEnv, corev1.EnvVar{
+			Name:  "MLFLOW_TRACKING_URI",
+			Value: *applied.TrackingUri,
+		})
+	}
+	if len(mlflowEnv) > 0 {
+		container.Env = envOverride(container.Env, mlflowEnv)
+	}
+}
+
+func getContainer(name, workingDir string, cmd []string, containerConfigs feastdevv1.ContainerConfigs, fsYamlB64 string) *corev1.Container {
 	container := &corev1.Container{
 		Name:    name,
 		Command: cmd,
@@ -602,22 +647,13 @@ func getContainer(name, workingDir string, cmd []string, containerConfigs feastd
 	if len(workingDir) > 0 {
 		container.WorkingDir = workingDir
 	}
-	container.Env = []corev1.EnvVar{
-		{
-			Name: IntraCommunicationBase64EnvVar,
-			ValueFrom: &corev1.EnvVarSource{
-				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: intraCommCMName},
-					Key:                  intraCommunicationTokenKey,
-				},
-			},
-		},
-	}
 	if len(fsYamlB64) > 0 {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  TmpFeatureStoreYamlEnvVar,
-			Value: fsYamlB64,
-		})
+		container.Env = []corev1.EnvVar{
+			{
+				Name:  TmpFeatureStoreYamlEnvVar,
+				Value: fsYamlB64,
+			},
+		}
 	}
 	applyCtrConfigs(container, containerConfigs)
 	return container

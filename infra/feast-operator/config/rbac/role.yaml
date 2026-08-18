@@ -8,28 +8,6 @@ rules:
   - ""
   resources:
   - configmaps
-  verbs:
-  - create
-  - delete
-  - deletecollection
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - persistentvolumeclaims
   - services
   verbs:
@@ -39,6 +17,15 @@ rules:
   - get
   - list
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - secrets
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - ""
@@ -66,14 +53,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - serviceaccounts
   verbs:
   - create
@@ -82,13 +61,6 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - apiextensions.k8s.io
-  resources:
-  - customresourcedefinitions
-  verbs:
-  - get
-  - list
 - apiGroups:
   - apps
   resources:
@@ -165,9 +137,9 @@ rules:
   - patch
   - update
 - apiGroups:
-  - kubeflow.org
+  - mlflow.opendatahub.io
   resources:
-  - notebooks
+  - mlflows
   verbs:
   - get
   - list
@@ -199,10 +171,35 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - clusterroles
+  verbs:
+  - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - feast-discover-namespaces
+  - feast-oidc-token-review
+  - feast-token-review-cluster-role
+  resources:
+  - clusterroles
+  verbs:
+  - delete
+  - get
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
   - roles
-  - subjectaccessreviews
   verbs:
   - create
   - delete
