@@ -29,6 +29,8 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/go-logr/logr"
 )
 
 const (
@@ -61,9 +63,10 @@ func classifyTLSProfileError(err error) (configv1.TLSProfileSpec, bool, error) {
 	intermediate := *configv1.TLSProfiles[configv1.TLSProfileIntermediateType]
 
 	switch {
-	case apimeta.IsNoMatchError(err):
-		return intermediate, false, nil
-	case apierrors.IsNotFound(err):
+	case apimeta.IsNoMatchError(err),
+		apierrors.IsNotFound(err),
+		apierrors.IsForbidden(err):
+		// API not present or no RBAC — not an OpenShift cluster, fall back to Intermediate.
 		return intermediate, false, nil
 	case isTransientError(err):
 		return intermediate, true, nil
@@ -72,7 +75,14 @@ func classifyTLSProfileError(err error) (configv1.TLSProfileSpec, bool, error) {
 	}
 }
 
-func fetchTLSAdherencePolicy(ctx context.Context, k8sClient client.Client) (configv1.TLSAdherencePolicy, bool, error) {
+func fetchTLSAdherencePolicy(
+	ctx context.Context, k8sClient client.Client, profileFetched bool,
+) (configv1.TLSAdherencePolicy, bool, error) {
+	if !profileFetched {
+		return "", false, nil
+	}
+
+	logger := log.FromContext(ctx)
 	fetchCtx, cancel := context.WithTimeout(ctx, tlsFetchTimeout)
 	defer cancel()
 
@@ -81,13 +91,20 @@ func fetchTLSAdherencePolicy(ctx context.Context, k8sClient client.Client) (conf
 		return policy, true, nil
 	}
 
+	ok, classifyErr := classifyTLSAdherenceError(err, logger)
+	return "", ok, classifyErr
+}
+
+func classifyTLSAdherenceError(err error, logger logr.Logger) (bool, error) {
 	switch {
-	case apimeta.IsNoMatchError(err),
-		apierrors.IsNotFound(err),
-		isTransientError(err):
-		return "", false, nil
+	case apimeta.IsNoMatchError(err), apierrors.IsNotFound(err):
+		logger.Info("TLS adherence policy lookup unavailable, watcher will retry", "error", err)
+		return true, nil
+	case isTransientError(err), apierrors.IsInternalError(err):
+		logger.Info("Transient API error reading TLS adherence policy, watcher will retry", "error", err)
+		return true, nil
 	default:
-		return "", false, fmt.Errorf("unable to read APIServer TLS adherence policy: %w", err)
+		return false, fmt.Errorf("unable to read APIServer TLS adherence policy: %w", err)
 	}
 }
 
@@ -111,7 +128,7 @@ func bootstrapTLS(ctx context.Context, k8sClient client.Client) (*tlsBootstrapRe
 	}
 	result.TLSOpts = append(result.TLSOpts, tlsConfigFn)
 
-	adherence, adherenceFetched, err := fetchTLSAdherencePolicy(ctx, k8sClient)
+	adherence, adherenceFetched, err := fetchTLSAdherencePolicy(ctx, k8sClient, profileFetched)
 	if err != nil {
 		return nil, err
 	}
