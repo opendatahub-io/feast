@@ -495,12 +495,17 @@ class SqlRegistry(CachingRegistry):
 
     @staticmethod
     def _backfill_saved_dataset_hierarchy_columns(engine: Engine) -> None:
-        """Copy namespace/collection from each proto blob into SQL columns."""
+        """Copy namespace/collection from proto into SQL for rows still at defaults.
+
+        Only rows with empty ``namespace`` or ``collection`` are touched, so
+        steady-state ``schema_mode=auto`` startups do not rewrite every row.
+        """
         with engine.begin() as conn:
             rows = conn.execute(
                 text(
                     "SELECT saved_dataset_name, project_id, saved_dataset_proto "
-                    "FROM saved_datasets"
+                    "FROM saved_datasets "
+                    "WHERE namespace = '' OR collection = ''"
                 )
             ).all()
             for row in rows:
@@ -526,14 +531,15 @@ class SqlRegistry(CachingRegistry):
         ``metadata.create_all`` does not alter existing tables. Registries created
         before these hierarchy columns existed need an additive migration so
         SQL-backed namespace filtering works. Safe/no-op when columns already exist.
-        After adding columns, backfill values from ``saved_dataset_proto``.
+        After adding columns (or when empty defaults remain), backfill from
+        ``saved_dataset_proto`` only for rows with empty hierarchy SQL values.
         Intended for the writable registry engine only; call only when
         ``schema_mode == "auto"``.
         """
         gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
         if not gaps:
             # Columns may already exist from a prior migration that left empty
-            # defaults — still sync SQL from proto (source of truth).
+            # defaults — heal only those empty SQL values from proto.
             inspector = sa_inspect(engine)
             if "saved_datasets" in set(inspector.get_table_names()):
                 SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)

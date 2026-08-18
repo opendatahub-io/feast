@@ -93,7 +93,7 @@ registry:
 
 | Value | Behavior |
 |---|---|
-| `auto` (default) | Creates tables if they don't exist. Also runs an additive migration on existing `saved_datasets` tables to add denormalized `namespace` / `collection` columns and `idx_saved_datasets_project_namespace`, then backfills those columns from the proto blob. |
+| `auto` (default) | Creates tables if they don't exist. Also runs an additive migration on existing `saved_datasets` tables to add denormalized `namespace` / `collection` columns and `idx_saved_datasets_project_namespace`, then backfills **empty** hierarchy columns from the proto blob (rows that already have non-empty values are left alone). |
 | `verify` | Skips DDL. Checks that all expected tables exist on startup; raises an error listing missing tables if any are absent. When a separate `read_path` is configured, the read replica is also verified — a lagging replica (e.g. mid-migration) will block startup. Hierarchy column checks are separate (see below). |
 | `skip` | Skips both creation and verification. Use when schema is managed entirely outside Feast (e.g. by a migration tool). |
 
@@ -103,7 +103,7 @@ registry:
 
 | Situation | Behavior |
 |---|---|
-| `schema_mode=auto` | Feast adds missing hierarchy columns/index and backfills from proto. |
+| `schema_mode=auto` | Feast adds missing hierarchy columns/index and backfills empty `namespace`/`collection` values from proto. |
 | `schema_mode=verify` or `skip` | Feast does **not** ALTER the table. |
 | `DATACATALOG_ENABLED=true` and hierarchy schema missing | Startup raises an error — catalog requires hierarchy SQL filters. Migrate with `schema_mode=auto` or apply `ALTER TABLE` / `CREATE INDEX` manually. |
 | Catalog disabled and hierarchy schema missing | Startup logs a warning and continues. `list_saved_datasets(namespace=…)` falls back to proto-side filtering (pre-hierarchy behavior). |
