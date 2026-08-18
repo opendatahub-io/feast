@@ -191,6 +191,35 @@ def test_ensure_backfills_hierarchy_from_proto():
     assert row.namespace == "underwriting"
 
 
+def test_backfill_skips_rows_with_non_empty_hierarchy():
+    """Steady-state backfill must not rewrite rows that already have SQL values."""
+    fd, registry_path = tempfile.mkstemp()
+    engine = create_engine(f"sqlite:///{registry_path}")
+    _create_legacy_saved_datasets_table(engine, with_row=True)
+    SqlRegistry._ensure_saved_dataset_hierarchy_columns(engine)
+
+    # Simulate a non-empty (even wrong) SQL value — backfill must leave it alone.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE saved_datasets SET namespace = 'stale-ns', "
+                "collection = 'stale-coll' WHERE saved_dataset_name = 'claims'"
+            )
+        )
+
+    SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT namespace, collection FROM saved_datasets "
+                "WHERE saved_dataset_name = 'claims'"
+            )
+        ).one()
+    assert row.namespace == "stale-ns"
+    assert row.collection == "stale-coll"
+
+
 def test_saved_dataset_column_proto_round_trip():
     column = SavedDatasetColumn(name="x", type="long", description="desc")
     restored = SavedDatasetColumn.from_proto(column.to_proto())
