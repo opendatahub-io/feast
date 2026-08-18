@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package tls
 
 import (
 	"context"
@@ -23,23 +23,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	configv1 "github.com/openshift/api/config/v1"
 	tlspkg "github.com/openshift/controller-runtime-common/pkg/tls"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/go-logr/logr"
 )
 
 const (
-	tlsFetchTimeout = 10 * time.Second
-	alpnH2          = "h2"
-	alpnHTTP11      = "http/1.1"
+	FetchTimeout = 10 * time.Second
+	ALPNH2       = "h2"
+	ALPNHTTP11   = "http/1.1"
 )
 
-type tlsBootstrapResult struct {
+// BootstrapResult holds the TLS configuration resolved at operator startup.
+type BootstrapResult struct {
 	TLSOpts            []func(*tls.Config)
 	ProfileFetched     bool
 	ProfileSpec        configv1.TLSProfileSpec
@@ -48,8 +48,44 @@ type tlsBootstrapResult struct {
 	UnsupportedCiphers []string
 }
 
+// Bootstrap fetches the cluster TLS profile and adherence policy and returns
+// the resolved TLS options to apply to the metrics server and webhook server.
+func Bootstrap(ctx context.Context, k8sClient client.Client) (*BootstrapResult, error) {
+	logger := log.FromContext(ctx)
+	result := &BootstrapResult{
+		TLSOpts: make([]func(*tls.Config), 0, 2),
+	}
+
+	profile, profileFetched, err := fetchTLSProfile(ctx, k8sClient)
+	if err != nil {
+		return nil, err
+	}
+	result.ProfileFetched = profileFetched
+	result.ProfileSpec = profile
+
+	tlsConfigFn, unsupported := tlspkg.NewTLSConfigFromProfile(profile)
+	result.UnsupportedCiphers = unsupported
+	if len(unsupported) > 0 {
+		logger.Info("TLS profile contains ciphers unsupported by Go", "unsupported", unsupported)
+	}
+	result.TLSOpts = append(result.TLSOpts, tlsConfigFn)
+
+	adherence, adherenceFetched, err := fetchTLSAdherencePolicy(ctx, k8sClient, profileFetched)
+	if err != nil {
+		return nil, err
+	}
+	result.AdherenceFetched = adherenceFetched
+	result.AdherencePolicy = adherence
+
+	result.TLSOpts = append(result.TLSOpts, func(c *tls.Config) {
+		c.NextProtos = []string{ALPNH2, ALPNHTTP11}
+	})
+
+	return result, nil
+}
+
 func fetchTLSProfile(ctx context.Context, k8sClient client.Client) (configv1.TLSProfileSpec, bool, error) {
-	fetchCtx, cancel := context.WithTimeout(ctx, tlsFetchTimeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
 
 	profile, err := tlspkg.FetchAPIServerTLSProfile(fetchCtx, k8sClient)
@@ -83,7 +119,7 @@ func fetchTLSAdherencePolicy(
 	}
 
 	logger := log.FromContext(ctx)
-	fetchCtx, cancel := context.WithTimeout(ctx, tlsFetchTimeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
 
 	policy, err := tlspkg.FetchAPIServerTLSAdherencePolicy(fetchCtx, k8sClient)
@@ -106,40 +142,6 @@ func classifyTLSAdherenceError(err error, logger logr.Logger) (bool, error) {
 	default:
 		return false, fmt.Errorf("unable to read APIServer TLS adherence policy: %w", err)
 	}
-}
-
-func bootstrapTLS(ctx context.Context, k8sClient client.Client) (*tlsBootstrapResult, error) {
-	logger := log.FromContext(ctx)
-	result := &tlsBootstrapResult{
-		TLSOpts: make([]func(*tls.Config), 0, 2),
-	}
-
-	profile, profileFetched, err := fetchTLSProfile(ctx, k8sClient)
-	if err != nil {
-		return nil, err
-	}
-	result.ProfileFetched = profileFetched
-	result.ProfileSpec = profile
-
-	tlsConfigFn, unsupported := tlspkg.NewTLSConfigFromProfile(profile)
-	result.UnsupportedCiphers = unsupported
-	if len(unsupported) > 0 {
-		logger.Info("TLS profile contains ciphers unsupported by Go", "unsupported", unsupported)
-	}
-	result.TLSOpts = append(result.TLSOpts, tlsConfigFn)
-
-	adherence, adherenceFetched, err := fetchTLSAdherencePolicy(ctx, k8sClient, profileFetched)
-	if err != nil {
-		return nil, err
-	}
-	result.AdherenceFetched = adherenceFetched
-	result.AdherencePolicy = adherence
-
-	result.TLSOpts = append(result.TLSOpts, func(c *tls.Config) {
-		c.NextProtos = []string{alpnH2, alpnHTTP11}
-	})
-
-	return result, nil
 }
 
 func isTransientError(err error) bool {

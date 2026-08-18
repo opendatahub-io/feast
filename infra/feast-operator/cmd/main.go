@@ -63,6 +63,7 @@ import (
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller"
 	feastmetrics "github.com/feast-dev/feast/infra/feast-operator/internal/controller/metrics"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
+	featuretls "github.com/feast-dev/feast/infra/feast-operator/internal/tls"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -143,7 +144,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	tlsResult, err := bootstrapTLS(context.Background(), bootstrapClient)
+	tlsResult, err := featuretls.Bootstrap(context.Background(), bootstrapClient)
 	if err != nil {
 		setupLog.Error(err, "TLS bootstrap failed")
 		os.Exit(1)

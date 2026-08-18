@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package tls
 
 import (
 	"context"
@@ -227,7 +227,7 @@ func TestTLSConfigFromIntermediateProfile(t *testing.T) {
 
 func configv1ToTLSConfig(profile configv1.TLSProfileSpec) func(*tls.Config) {
 	// Thin wrapper to test the actual conversion without importing tlspkg in tests.
-	// tlspkg.NewTLSConfigFromProfile is what main.go uses.
+	// tlspkg.NewTLSConfigFromProfile is what Bootstrap uses.
 	var minVersion uint16
 	switch profile.MinTLSVersion {
 	case configv1.VersionTLS10:
@@ -346,15 +346,15 @@ func TestClassifyTLSProfileError_IntermediateProfileAlwaysApplied(t *testing.T) 
 	}
 }
 
-func TestTLSBootstrapResult_NextProtosAlwaysSet(t *testing.T) {
-	// Verify that the TLSOpts from bootstrapTLS always include ALPN with h2 and http/1.1.
-	// We can't call bootstrapTLS without a real client, but we can verify the function
-	// in tls_bootstrap.go sets NextProtos.
-	result := &tlsBootstrapResult{
+func TestBootstrapResult_NextProtosAlwaysSet(t *testing.T) {
+	// Verify that Bootstrap always includes ALPN with h2 and http/1.1 in TLSOpts.
+	// We can't call Bootstrap without a real client, but we can verify the constants
+	// and that a BootstrapResult with those opts sets NextProtos correctly.
+	result := &BootstrapResult{
 		TLSOpts: make([]func(*tls.Config), 0, 2),
 	}
 	result.TLSOpts = append(result.TLSOpts, func(c *tls.Config) {
-		c.NextProtos = []string{"h2", alpnHTTP11}
+		c.NextProtos = []string{ALPNH2, ALPNHTTP11}
 	})
 
 	cfg := &tls.Config{}
@@ -362,8 +362,8 @@ func TestTLSBootstrapResult_NextProtosAlwaysSet(t *testing.T) {
 		opt(cfg)
 	}
 
-	if len(cfg.NextProtos) != 2 || cfg.NextProtos[0] != "h2" || cfg.NextProtos[1] != alpnHTTP11 {
-		t.Errorf("NextProtos = %v, want [h2, %s]", cfg.NextProtos, alpnHTTP11)
+	if len(cfg.NextProtos) != 2 || cfg.NextProtos[0] != ALPNH2 || cfg.NextProtos[1] != ALPNHTTP11 {
+		t.Errorf("NextProtos = %v, want [%s, %s]", cfg.NextProtos, ALPNH2, ALPNHTTP11)
 	}
 }
 
