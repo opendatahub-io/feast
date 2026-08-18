@@ -528,7 +528,7 @@ var ValidOfflineStoreFilePersistenceTypes = []string{
 // OfflineStoreDBStorePersistence configures the DB store persistence for the offline store service
 type OfflineStoreDBStorePersistence struct {
 	// Type of the persistence type you want to use.
-	// +kubebuilder:validation:Enum=snowflake.offline;bigquery;redshift;spark;postgres;trino;athena;mssql;couchbase.offline;clickhouse;ray;oracle
+	// +kubebuilder:validation:Enum=snowflake.offline;bigquery;redshift;spark;postgres;trino;athena;mssql;couchbase.offline;clickhouse;ray;oracle;hybrid
 	Type string `json:"type"`
 	// Data store parameters should be placed as-is from the "feature_store.yaml" under the secret key. "registry_type" & "type" fields should be removed.
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
@@ -549,6 +549,7 @@ var ValidOfflineStoreDBStorePersistenceTypes = []string{
 	"clickhouse",
 	"ray",
 	"oracle",
+	"hybrid",
 }
 
 // OnlineStore configures the online store service
@@ -929,6 +930,17 @@ type OidcAuthz struct {
 	// ConfigMap with the CA certificate for self-signed OIDC providers. Auto-detected on RHOAI/ODH.
 	// +optional
 	CACertConfigMap *OidcCACertConfigMap `json:"caCertConfigMap,omitempty"`
+	// Seconds the servers reuse the provider's fetched JWK set before refetching. Defaults to 300.
+	// Also bounds how long a key the provider revoked keeps validating tokens, so lower it if the
+	// provider rotates or revokes aggressively, at the cost of more JWKS fetches.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	JwksCacheLifespanSeconds *int32 `json:"jwksCacheLifespanSeconds,omitempty"`
+	// Seconds before a JWKS fetch times out. Defaults to 10. The fetch happens inline on the request
+	// path, so an unresponsive provider blocks serving for at most this long.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	JwksRequestTimeoutSeconds *int32 `json:"jwksRequestTimeoutSeconds,omitempty"`
 }
 
 // OidcCACertConfigMap references a ConfigMap containing a CA certificate for OIDC provider TLS.
