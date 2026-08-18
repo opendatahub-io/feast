@@ -6,7 +6,6 @@ namespace: redhat-ods-applications
 resources:
   - ../../default
   - ../../prometheus
-  - service_ca_configmap.yaml
   - tls_clusterrole.yaml
   - tls_clusterrolebinding.yaml
 
