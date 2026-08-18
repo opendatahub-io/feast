@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"testing"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -94,6 +95,24 @@ func TestClassifyTLSProfileError(t *testing.T) {
 		{
 			name:               "Forbidden falls back to Intermediate (no OpenShift RBAC)",
 			err:                apierrors.NewForbidden(schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}, "cluster", errors.New("RBAC")),
+			wantProfileFetched: false,
+			wantError:          false,
+			wantIntermediate:   true,
+		},
+		{
+			name: "Wrapped Forbidden (from FetchAPIServerTLSProfile) falls back to Intermediate",
+			err: fmt.Errorf("failed to get APIServer %q: %w",
+				"/cluster",
+				apierrors.NewForbidden(schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}, "cluster", errors.New("RBAC"))),
+			wantProfileFetched: false,
+			wantError:          false,
+			wantIntermediate:   true,
+		},
+		{
+			name: "Wrapped NotFound falls back to Intermediate",
+			err: fmt.Errorf("failed to get APIServer %q: %w",
+				"/cluster",
+				apierrors.NewNotFound(schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}, "cluster")),
 			wantProfileFetched: false,
 			wantError:          false,
 			wantIntermediate:   true,
@@ -381,6 +400,13 @@ func TestClassifyTLSAdherenceError(t *testing.T) {
 			name:      "Forbidden is fatal",
 			err:       apierrors.NewForbidden(schema.GroupResource{}, "cluster", errors.New("RBAC")),
 			wantError: true,
+		},
+		{
+			name: "Wrapped NotFound sets adherenceFetched for watcher retry",
+			err: fmt.Errorf("failed to get APIServer %q: %w",
+				"/cluster",
+				apierrors.NewNotFound(schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}, "cluster")),
+			wantAdherenceFetched: true,
 		},
 	}
 

@@ -64,8 +64,8 @@ func classifyTLSProfileError(err error) (configv1.TLSProfileSpec, bool, error) {
 
 	switch {
 	case apimeta.IsNoMatchError(err),
-		apierrors.IsNotFound(err),
-		apierrors.IsForbidden(err):
+		isAPIError(err, apierrors.IsNotFound),
+		isAPIError(err, apierrors.IsForbidden):
 		// API not present or no RBAC — not an OpenShift cluster, fall back to Intermediate.
 		return intermediate, false, nil
 	case isTransientError(err):
@@ -97,10 +97,10 @@ func fetchTLSAdherencePolicy(
 
 func classifyTLSAdherenceError(err error, logger logr.Logger) (bool, error) {
 	switch {
-	case apimeta.IsNoMatchError(err), apierrors.IsNotFound(err):
+	case apimeta.IsNoMatchError(err), isAPIError(err, apierrors.IsNotFound):
 		logger.Info("TLS adherence policy lookup unavailable, watcher will retry", "error", err)
 		return true, nil
-	case isTransientError(err), apierrors.IsInternalError(err):
+	case isTransientError(err), isAPIError(err, apierrors.IsInternalError):
 		logger.Info("Transient API error reading TLS adherence policy, watcher will retry", "error", err)
 		return true, nil
 	default:
@@ -143,9 +143,19 @@ func bootstrapTLS(ctx context.Context, k8sClient client.Client) (*tlsBootstrapRe
 }
 
 func isTransientError(err error) bool {
-	return apierrors.IsServiceUnavailable(err) ||
-		apierrors.IsTimeout(err) ||
-		apierrors.IsServerTimeout(err) ||
-		apierrors.IsTooManyRequests(err) ||
+	return isAPIError(err, apierrors.IsServiceUnavailable) ||
+		isAPIError(err, apierrors.IsTimeout) ||
+		isAPIError(err, apierrors.IsServerTimeout) ||
+		isAPIError(err, apierrors.IsTooManyRequests) ||
 		errors.Is(err, context.DeadlineExceeded)
+}
+
+// isAPIError unwraps err and applies check to any *apierrors.StatusError in the chain.
+// apierrors.Is* functions do a direct type assertion, missing wrapped errors.
+func isAPIError(err error, check func(error) bool) bool {
+	var statusErr *apierrors.StatusError
+	if errors.As(err, &statusErr) {
+		return check(statusErr)
+	}
+	return check(err)
 }
