@@ -78,6 +78,10 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=create;get;list
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role,verbs=update;delete
 // +kubebuilder:rbac:groups=core,resources=secrets;namespaces,verbs=get;list;watch
+// namespaces update is required by access.EnsureNamespaceLabel and
+// RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
+// discovery label. Not present upstream; do not drop when syncing.
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
