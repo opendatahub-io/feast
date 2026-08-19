@@ -106,6 +106,10 @@ func getServiceRepoConfig(
 		}
 	}
 
+	if appliedSpec.Mlflow != nil && appliedSpec.Mlflow.Enabled {
+		setRepoConfigMlflow(appliedSpec.Mlflow, &repoConfig)
+	}
+
 	if appliedSpec.DataQualityMonitoring != nil {
 		setRepoConfigDataQualityMonitoring(appliedSpec.DataQualityMonitoring, &repoConfig)
 	}
@@ -562,6 +566,28 @@ func coerceStringToYamlType(v string) interface{} {
 	return v
 }
 
+// setRepoConfigMlflow maps the CRD MlflowConfig into the mlflow YAML block.
+func setRepoConfigMlflow(mlflow *feastdevv1.MlflowConfig, repoConfig *RepoConfig) {
+	yamlCfg := &MlflowYamlConfig{
+		Enabled:             mlflow.Enabled,
+		TrackingUri:         mlflow.TrackingUri,
+		UiUrl:               mlflow.UiUrl,
+		AutoLog:             mlflow.AutoLog,
+		AutoLogEntityDf:     mlflow.AutoLogEntityDf,
+		EntityDfMaxRows:     mlflow.EntityDfMaxRows,
+		LogOperations:       mlflow.LogOperations,
+		OpsExperimentSuffix: mlflow.OpsExperimentSuffix,
+	}
+	if len(mlflow.ExtraConfig) > 0 {
+		ec := make(map[string]interface{}, len(mlflow.ExtraConfig))
+		for k, v := range mlflow.ExtraConfig {
+			ec[k] = coerceStringToYamlType(v)
+		}
+		yamlCfg.ExtraConfig = ec
+	}
+	repoConfig.Mlflow = yamlCfg
+}
+
 func setRepoConfigDataQualityMonitoring(dqmConfig *feastdevv1.DataQualityMonitoringConfig, repoConfig *RepoConfig) {
 	if dqmConfig.AutoBaseline == nil {
 		return
@@ -619,6 +645,10 @@ func getClientRepoConfig(
 		}
 	}
 
+	if status.Applied.Mlflow != nil && status.Applied.Mlflow.Enabled {
+		setRepoConfigMlflow(status.Applied.Mlflow, &clientRepoConfig)
+	}
+
 	return clientRepoConfig
 }
 
@@ -626,7 +656,11 @@ func getRepoConfig(featureStore *feastdevv1.FeatureStore) RepoConfig {
 	status := featureStore.Status
 	repoConfig := initRepoConfig(status.Applied.FeastProject)
 	if status.Applied.AuthzConfig != nil {
-		if status.Applied.AuthzConfig.KubernetesAuthz != nil {
+		if status.Applied.AuthzConfig.NoAuth != nil && *status.Applied.AuthzConfig.NoAuth {
+			repoConfig.AuthzConfig = AuthzConfig{
+				Type: NoAuthAuthType,
+			}
+		} else if status.Applied.AuthzConfig.KubernetesAuthz != nil {
 			repoConfig.AuthzConfig = AuthzConfig{
 				Type: KubernetesAuthType,
 			}
@@ -772,7 +806,7 @@ var defaultOfflineStoreConfig = OfflineStoreConfig{
 }
 
 var defaultAuthzConfig = AuthzConfig{
-	Type: NoAuthAuthType,
+	Type: KubernetesAuthType,
 }
 
 // getCertificatePath returns the appropriate certificate path based on whether a custom CA bundle is available

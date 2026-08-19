@@ -147,8 +147,8 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-08-18T08:24:02Z"
-    operators.operatorframework.io/builder: operator-sdk-v1.39.1
+    createdAt: "2026-08-19T07:47:07Z"
+    operators.operatorframework.io/builder: operator-sdk-v1.41.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: feast-operator.v0.65.0
   namespace: placeholder
@@ -195,7 +195,6 @@ spec:
           verbs:
           - get
           - list
-          - patch
           - update
           - watch
         - apiGroups:
@@ -344,6 +343,14 @@ spec:
           - list
           - watch
         - apiGroups:
+          - mlflow.opendatahub.io
+          resources:
+          - mlflows
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
           - monitoring.coreos.com
           resources:
           - servicemonitors
@@ -370,10 +377,36 @@ spec:
           - rbac.authorization.k8s.io
           resources:
           - clusterrolebindings
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - update
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resources:
           - clusterroles
+          verbs:
+          - create
+          - get
+          - list
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resourceNames:
+          - feast-discover-namespaces
+          - feast-oidc-token-review
+          - feast-token-review-cluster-role
+          resources:
+          - clusterroles
+          verbs:
+          - delete
+          - update
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resources:
           - rolebindings
           - roles
-          - subjectaccessreviews
           verbs:
           - create
           - delete

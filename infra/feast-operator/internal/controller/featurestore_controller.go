@@ -35,9 +35,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	handler "sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
@@ -70,9 +73,15 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;create;update;watch;delete
 // +kubebuilder:rbac:groups=core,resources=services;configmaps;persistentvolumeclaims,verbs=get;list;create;update;watch;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;create;update;watch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings;subjectaccessreviews,verbs=get;list;create;update;watch;delete
-// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;patch;update
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;create;update;watch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=create;get;list
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role,verbs=update;delete
+// +kubebuilder:rbac:groups=core,resources=secrets;namespaces,verbs=get;list;watch
+// namespaces update is required by access.EnsureNamespaceLabel and
+// RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
+// discovery label. Not present upstream; do not drop when syncing.
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
@@ -83,6 +92,7 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -388,9 +398,64 @@ func (r *FeatureStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		})
 		bldr = bldr.Owns(sm)
 	}
+	if services.HasMlflowCRD() {
+		mlflow := &unstructured.Unstructured{}
+		mlflow.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "mlflow.opendatahub.io",
+			Version: "v1",
+			Kind:    "MLflow",
+		})
+		bldr = bldr.Watches(mlflow,
+			handler.EnqueueRequestsFromMapFunc(r.mapMlflowToFeastRequests),
+			builder.WithPredicates(mlflowStatusChangedPredicate()),
+		)
+	}
 
 	return bldr.Complete(r)
 
+}
+
+// mlflowStatusChangedPredicate triggers the mapper only when the MLflow CR's
+// status changes (readiness transitions) or on create/delete — not on
+// annotation, label, or metadata-only updates.
+func mlflowStatusChangedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(_ event.CreateEvent) bool { return true },
+		DeleteFunc: func(_ event.DeleteEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldU, ok1 := e.ObjectOld.(*unstructured.Unstructured)
+			newU, ok2 := e.ObjectNew.(*unstructured.Unstructured)
+			if !ok1 || !ok2 {
+				return true
+			}
+			oldStatus, _, _ := unstructured.NestedMap(oldU.Object, "status")
+			newStatus, _, _ := unstructured.NestedMap(newU.Object, "status")
+			return !reflect.DeepEqual(oldStatus, newStatus)
+		},
+		GenericFunc: func(_ event.GenericEvent) bool { return true },
+	}
+}
+
+// mapMlflowToFeastRequests re-queues FeatureStores that use MLflow (those that
+// have not explicitly opted out) when the cluster MLflow CR's status changes.
+func (r *FeatureStoreReconciler) mapMlflowToFeastRequests(ctx context.Context, _ client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx)
+	var feastList feastdevv1.FeatureStoreList
+	if err := r.List(ctx, &feastList, client.InNamespace("")); err != nil {
+		logger.Error(err, "could not list FeatureStores for MLflow watch")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(feastList.Items))
+	for i := range feastList.Items {
+		fs := &feastList.Items[i]
+		if fs.Spec.Mlflow != nil && !fs.Spec.Mlflow.Enabled {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(fs),
+		})
+	}
+	return requests
 }
 
 // if a remotely referenced FeatureStore is changed, reconcile any FeatureStores that reference it.
