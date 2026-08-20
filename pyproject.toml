@@ -143,6 +143,24 @@ snowflake = [
 ]
 sqlite_vec = ["sqlite-vec==v0.1.6"]
 mcp = ["fastapi_mcp", "mcp>=1.0,<2"]
+# Runtime dependencies of the standalone `feast mcp` server (feast.mcp), which
+# proxies to a running feature server / registry server. Deliberately separate
+# from the `mcp` extra above: that one powers the in-process fastapi_mcp
+# endpoint on `feast serve` and is pulled into `minimal`, which builds the
+# feature-server image -- FastMCP has no business in that image.
+mcp-server = [
+    "fastmcp>=3.0",
+    "httpx>=0.24",
+    "python-dotenv>=1.0",
+]
+# Adds OTLP log/span export to `feast mcp`. Without these the server still
+# runs and still correlates its logs, using a generated per-request id in
+# place of a real trace id.
+mcp-server-otel = [
+    "feast[mcp-server]",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp>=1.20",
+]
 mlflow = ["mlflow>=2.10.0"]
 
 dbt = ["dbt-artifacts-parser"]
@@ -238,6 +256,9 @@ name = "Feast"
 
 [project.scripts]
 feast = "feast.cli.cli:cli"
+# Standalone entry point for the MCP server; equivalent to `feast mcp`,
+# but skips loading the rest of the Feast CLI.
+feast-mcp = "feast.mcp.server:main"
 
 [build-system]
 requires = [
@@ -308,6 +329,34 @@ conflicts = [
     ],
     [
         { extra = "flink" },
+        { extra = "docs" },
+    ],
+    # FastMCP requires httpx>=0.28.1 and platformdirs>=4, while ci pins
+    # httpx==0.27.2 and virtualenv==20.23.0 (which caps platformdirs<4).
+    # The two cannot be resolved together, so the standalone MCP server is
+    # installed on its own rather than alongside the CI toolchain.
+    [
+        { extra = "mcp-server" },
+        { extra = "ci" },
+    ],
+    [
+        { extra = "mcp-server" },
+        { extra = "dev" },
+    ],
+    [
+        { extra = "mcp-server" },
+        { extra = "docs" },
+    ],
+    [
+        { extra = "mcp-server-otel" },
+        { extra = "ci" },
+    ],
+    [
+        { extra = "mcp-server-otel" },
+        { extra = "dev" },
+    ],
+    [
+        { extra = "mcp-server-otel" },
         { extra = "docs" },
     ],
 ]
