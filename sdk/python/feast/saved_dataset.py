@@ -79,16 +79,27 @@ class SavedDatasetStorage(metaclass=_StorageRegistry):
 
 
 class SavedDatasetColumn:
-    """Schema column definition for a SavedDataset (data-registry assets)."""
+    """Schema column definition for a SavedDataset (data-registry assets).
+
+    Mirrors OpenAPI ``SchemaField`` (name, type, description, nullable).
+    """
 
     name: str
     type: str
     description: str
+    nullable: bool
 
-    def __init__(self, name: str, type: str, description: str = ""):
+    def __init__(
+        self,
+        name: str,
+        type: str,
+        description: str = "",
+        nullable: bool = True,
+    ):
         self.name = name
         self.type = type
         self.description = description
+        self.nullable = nullable
 
     def __eq__(self, other):
         if not isinstance(other, SavedDatasetColumn):
@@ -97,10 +108,11 @@ class SavedDatasetColumn:
             self.name == other.name
             and self.type == other.type
             and self.description == other.description
+            and self.nullable == other.nullable
         )
 
     def __hash__(self):
-        return hash((self.name, self.type, self.description))
+        return hash((self.name, self.type, self.description, self.nullable))
 
     @staticmethod
     def from_proto(column_proto: SavedDatasetColumnProto) -> "SavedDatasetColumn":
@@ -108,6 +120,7 @@ class SavedDatasetColumn:
             name=column_proto.name,
             type=column_proto.type,
             description=column_proto.description,
+            nullable=column_proto.nullable,
         )
 
     def to_proto(self) -> SavedDatasetColumnProto:
@@ -115,6 +128,7 @@ class SavedDatasetColumn:
             name=self.name,
             type=self.type,
             description=self.description,
+            nullable=self.nullable,
         )
 
 
