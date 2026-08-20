@@ -44,8 +44,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
+	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/access"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/authz"
 	feasthandler "github.com/feast-dev/feast/infra/feast-operator/internal/controller/handler"
+	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/registry"
 	feastmetrics "github.com/feast-dev/feast/infra/feast-operator/internal/controller/metrics"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
 	routev1 "github.com/openshift/api/route/v1"
@@ -182,6 +184,142 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		result.RequeueAfter = RequeuePeriodicInterval
 	}
 	return result, recErr
+}
+
+func (r *FeatureStoreReconciler) fetchPermissionsFromRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) ([]registry.PermissionPolicy, error) {
+	logger := log.FromContext(ctx)
+	registryRest := cr.Status.ServiceHostnames.RegistryRest
+	if registryRest == "" {
+		logger.V(1).Info("Skipping permission fetch: registry REST API hostname is not set (ensure RestAPI is enabled)")
+		return nil, nil
+	}
+	project := cr.Status.Applied.FeastProject
+	if project == "" {
+		project = cr.Spec.FeastProject
+	}
+	if project == "" {
+		logger.Info("Skipping permission fetch: feast project name is not set")
+		return nil, nil
+	}
+	intraCommToken, err := r.readIntraCommunicationToken(ctx, cr)
+	if err != nil {
+		return nil, err
+	}
+	useTLS := cr.Status.Applied.Services.Registry != nil &&
+		cr.Status.Applied.Services.Registry.Local != nil &&
+		cr.Status.Applied.Services.Registry.Local.Server != nil &&
+		cr.Status.Applied.Services.Registry.Local.Server.TLS.IsTLS()
+	return registry.ListPermissions(ctx, registryRest, project, intraCommToken, useTLS)
+}
+
+func (r *FeatureStoreReconciler) readIntraCommunicationToken(ctx context.Context, cr *feastdevv1.FeatureStore) (string, error) {
+	cmName := services.GetIntraCommunicationConfigMapName(cr.Name)
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: cr.Namespace}, cm); err != nil {
+		return "", err
+	}
+	return cm.Data["token"], nil
+}
+
+func (r *FeatureStoreReconciler) addToNamespaceRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) {
+	logger := log.FromContext(ctx)
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.AddToNamespaceRegistry(); err != nil {
+		logger.Error(err, "Failed to add feature store to namespace registry")
+	}
+}
+
+func (r *FeatureStoreReconciler) addToOpenLineageDiscovery(ctx context.Context, cr *feastdevv1.FeatureStore) {
+	logger := log.FromContext(ctx)
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.AddToOpenLineageDiscovery(); err != nil {
+		logger.Error(err, "Failed to add feature store to OpenLineage discovery")
+	}
+}
+
+func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespace, name string) {
+	logger := log.FromContext(ctx)
+	otherCount := r.countOtherFeatureStoresInNamespace(ctx, namespace, name)
+	if err := access.RemoveNamespaceLabelIfLast(ctx, r.Client, namespace, otherCount); err != nil {
+		logger.Error(err, "Failed to remove Feast label from namespace")
+	}
+	if err := access.CleanupAutoAccessRBAC(ctx, r.Client, namespace, name); err != nil {
+		logger.Error(err, "Failed to cleanup auto-access RBAC")
+	}
+	clusterCount := r.countOtherFeatureStoresInCluster(ctx, namespace, name)
+	if err := access.CleanupDiscoverClusterRoleIfLast(ctx, r.Client, clusterCount); err != nil {
+		logger.Error(err, "Failed to cleanup discover ClusterRole")
+	}
+	deletedCR := &feastdevv1.FeatureStore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}
+	if err := r.cleanupNamespaceRegistry(ctx, deletedCR); err != nil {
+		logger.Error(err, "Failed to clean up namespace registry entry")
+	}
+	if err := r.cleanupOpenLineageDiscovery(ctx, deletedCR); err != nil {
+		logger.Error(err, "Failed to clean up OpenLineage discovery entry")
+	}
+
+	// Data-registry ClusterRoles are cluster-scoped and don't have owner
+	// references, so they survive CR garbage collection. Clean them up
+	// unconditionally—the helper is a no-op when the roles don't exist.
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: deletedCR,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		logger.Error(err, "Failed to cleanup data registry ClusterRoles")
+	}
+}
+
+func (r *FeatureStoreReconciler) countOtherFeatureStoresInNamespace(ctx context.Context, namespace, excludeName string) int {
+	var list feastdevv1.FeatureStoreList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return -1
+	}
+	count := 0
+	for i := range list.Items {
+		if list.Items[i].Name != excludeName && list.Items[i].DeletionTimestamp == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *FeatureStoreReconciler) countOtherFeatureStoresInCluster(ctx context.Context, namespace, excludeName string) int {
+	var list feastdevv1.FeatureStoreList
+	if err := r.List(ctx, &list); err != nil {
+		return -1
+	}
+	count := 0
+	for i := range list.Items {
+		item := &list.Items[i]
+		if (item.Name != excludeName || item.Namespace != namespace) && item.DeletionTimestamp == nil {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1.FeatureStore) (result ctrl.Result, err error) {

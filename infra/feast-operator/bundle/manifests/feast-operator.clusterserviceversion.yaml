@@ -472,7 +472,6 @@ spec:
                 - name: RELATED_IMAGE_CRON_JOB
                   value: quay.io/openshift/origin-cli:4.17
                 - name: RELATED_IMAGE_KUBE_RBAC_PROXY
-                  value: gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0
                 - name: GOMEMLIMIT
                   value: 230MiB
                 - name: OIDC_ISSUER_URL
@@ -570,4 +569,6 @@ spec:
     name: feature-server
   - image: quay.io/openshift/origin-cli:4.17
     name: cron-job
+  - image: ""
+    name: kube-rbac-proxy
   version: 0.66.0

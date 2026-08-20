@@ -82,7 +82,10 @@ const (
 	dataRegistryClusterRoleSuffix        = "-data-registry"
 	dataRegistryTlsSecretSuffix          = "-data-registry-tls"
 
-	DefaultKubeRBACProxyImage = "gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0"
+	// In disconnected environments RELATED_IMAGE_KUBE_RBAC_PROXY is set by
+	// the OLM CSV to a mirrored registry. The default uses quay.io which is
+	// generally accessible and included in ImageContentSourcePolicy mirrors.
+	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 
 	HttpPort              = 80
 	HttpsPort             = 443
