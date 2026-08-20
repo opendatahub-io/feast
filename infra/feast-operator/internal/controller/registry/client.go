@@ -146,12 +146,8 @@ func BuildIntraCommunicationJWT(intraCommToken string) string {
 // paths. Go's default TLS minimum (1.2) is inherited; no TLS profile fields
 // are hardcoded so the platform's API-server TLS profile is respected.
 func clusterTLSTransport() *http.Transport {
-	rootCAs := clusterCACertPool()
-	if rootCAs == nil {
-		return http.DefaultTransport.(*http.Transport).Clone()
-	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig.RootCAs = rootCAs
+	t.TLSClientConfig.RootCAs = clusterCACertPool()
 	return t
 }
 

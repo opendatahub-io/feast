@@ -73,7 +73,7 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryAuthCM()); err != nil {
 		return err
 	}
-	if err := feast.deleteDataRegistryClusterRoles(); err != nil {
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
 		return err
 	}
 	return nil
@@ -185,6 +185,10 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		},
 	}
 
+	// SSAR env vars are consumed by the Feast Python server (not by kube-rbac-proxy).
+	// The proxy uses auth.yaml for its initial authentication gate, but the server
+	// performs its own SubjectAccessReview calls during cross-namespace search to
+	// determine which namespaces a given user is authorized to browse.
 	return corev1.Container{
 		Name:  DataRegistryContainerName,
 		Image: image,
@@ -466,11 +470,11 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 	return cr
 }
 
-// deleteDataRegistryClusterRoles removes the aggregated ClusterRoles.
+// CleanupDataRegistryClusterRoles removes the aggregated ClusterRoles.
 // ClusterRoles are cluster-scoped and cannot carry namespace-scoped owner
 // references, so we delete by name + managed-by label check instead of
-// using DeleteOwnedFeastObj.
-func (feast *FeastServices) deleteDataRegistryClusterRoles() error {
+// using DeleteOwnedFeastObj. Exported for use by cleanupOnDeletion.
+func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 	for _, suffix := range []string{"viewer", "editor"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
