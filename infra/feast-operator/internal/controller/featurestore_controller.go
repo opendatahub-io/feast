@@ -265,6 +265,21 @@ func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespac
 	if err := r.cleanupOpenLineageDiscovery(ctx, deletedCR); err != nil {
 		logger.Error(err, "Failed to clean up OpenLineage discovery entry")
 	}
+
+	// Data-registry ClusterRoles are cluster-scoped and don't have owner
+	// references, so they survive CR garbage collection. Clean them up
+	// unconditionally—the helper is a no-op when the roles don't exist.
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: deletedCR,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		logger.Error(err, "Failed to cleanup data registry ClusterRoles")
+	}
 }
 
 func (r *FeatureStoreReconciler) cleanupNamespaceRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) {
