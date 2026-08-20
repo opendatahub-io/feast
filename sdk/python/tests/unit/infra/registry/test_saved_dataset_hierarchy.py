@@ -100,7 +100,7 @@ def test_saved_dataset_columns_round_trip(sqlite_registry):
         collection="curated",
         columns=[
             SavedDatasetColumn(name="claim_id", type="string", description="id"),
-            SavedDatasetColumn(name="amount", type="double"),
+            SavedDatasetColumn(name="amount", type="double", nullable=False),
         ],
     )
 
@@ -112,8 +112,10 @@ def test_saved_dataset_columns_round_trip(sqlite_registry):
     assert loaded.description == "test dataset"
     assert loaded.columns == [
         SavedDatasetColumn(name="claim_id", type="string", description="id"),
-        SavedDatasetColumn(name="amount", type="double"),
+        SavedDatasetColumn(name="amount", type="double", nullable=False),
     ]
+    assert loaded.columns[0].nullable is True  # OpenAPI / SDK default
+    assert loaded.columns[1].nullable is False
 
 
 def test_list_saved_datasets_filters_by_namespace_sql(sqlite_registry):
@@ -221,9 +223,16 @@ def test_backfill_skips_rows_with_non_empty_hierarchy():
 
 
 def test_saved_dataset_column_proto_round_trip():
-    column = SavedDatasetColumn(name="x", type="long", description="desc")
+    column = SavedDatasetColumn(
+        name="x", type="long", description="desc", nullable=False
+    )
     restored = SavedDatasetColumn.from_proto(column.to_proto())
     assert restored == column
+    assert restored.nullable is False
+
+    defaulted = SavedDatasetColumn(name="y", type="string")
+    assert defaulted.nullable is True
+    assert SavedDatasetColumn.from_proto(defaulted.to_proto()).nullable is True
 
 
 def test_sql_hierarchy_columns_match_proto_after_apply(sqlite_registry):
