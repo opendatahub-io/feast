@@ -125,7 +125,7 @@ echo "[prebuild-power] Building milvus-lite==$MILVUS_VER ..."
 # Remove gcc-toolset-13; Milvus-Lite build (via Conan) requires standard gcc
 dnf remove -y gcc-toolset-13
 
-dnf install -y perl ncurses-devel wget openblas-devel cargo gcc gcc-c++ libstdc++-static which libaio \
+dnf install -y perl ncurses-devel wget openblas-devel openblas-openmp cargo gcc gcc-c++ libstdc++-static which libaio \
                libtool m4 autoconf automake zlib-devel libffi-devel scl-utils xz
 
 export CC=gcc
