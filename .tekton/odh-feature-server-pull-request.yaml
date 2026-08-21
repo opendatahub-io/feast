@@ -37,13 +37,18 @@ spec:
     value: pull-request
   - name: enable-group-testing
     value: "true"
+  - name: build-platforms
+    value:
+    - linux-extra-fast/amd64
+    - linux-m2xlarge/arm64
+    - linux/ppc64le
   pipelineRef:
     resolver: git
     params:
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/Srihari1192/odh-konflux-central.git
     - name: revision
-      value: main
+      value: addFeastMultiBuildSupport
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
