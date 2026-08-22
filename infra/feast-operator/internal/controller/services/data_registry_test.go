@@ -21,9 +21,9 @@ import (
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/handler"
-	routev1 "github.com/openshift/api/route/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -190,7 +190,7 @@ var _ = Describe("Data Registry", func() {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			"--ignore-paths=/v1/search",
+			"--ignore-paths=/v1/search,/v1/projects",
 		))
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
 			Name: "https", ContainerPort: DataRegistryProxyPort, Protocol: corev1.ProtocolTCP,
@@ -358,7 +358,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(crb.Labels).To(HaveKeyWithValue(ManagedByLabelKey, ManagedByLabelValue))
 
 		// Cleanup
-		Expect(feast.deleteDataRegistryAuthDelegatorBinding()).To(Succeed())
+		Expect(feast.CleanupDataRegistryAuthDelegatorBinding()).To(Succeed())
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryAuthDelegatorCRBName()}, &rbacv1.ClusterRoleBinding{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
@@ -382,7 +382,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(adminCR.Rules[1].Verbs).To(ConsistOf("use"))
 
 		// Cleanup admin
-		Expect(feast.deleteDataRegistryClusterRoles()).To(Succeed())
+		Expect(feast.CleanupDataRegistryClusterRoles()).To(Succeed())
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("admin")}, &rbacv1.ClusterRole{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
