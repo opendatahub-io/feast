@@ -89,6 +89,8 @@ const (
 	dataRegistryAuthDelegatorSuffix = "-data-registry-auth-delegator"
 	dataRegistryCaBundleSuffix      = "-data-registry-ca-bundle"
 
+	dataRegistryAPIGroup = "dataregistry.opendatahub.io"
+
 	DefaultKubeRBACProxyImage = "gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0"
 
 	HttpPort              = 80
@@ -217,6 +219,10 @@ var (
 	DefaultPVCAccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 	NameLabelKey          = feastdevv1.GroupVersion.Group + "/name"
 	ServiceTypeLabelKey   = feastdevv1.GroupVersion.Group + "/service-type"
+
+	// dataRegistryPseudoResources are the pseudo-resources checked by
+	// kube-rbac-proxy SSAR. Must stay in sync with auth.yaml path rewrites.
+	dataRegistryPseudoResources = []string{"registries", "namespaces", "tables", "volumes", "generic-tables"}
 
 	FeastServiceConstants = map[FeastServiceType]deploymentSettings{
 		OfflineFeastType: {
