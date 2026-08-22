@@ -92,10 +92,10 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryCaBundleCM()); err != nil {
 		return err
 	}
-	if err := feast.deleteDataRegistryClusterRoles(); err != nil {
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
 		return err
 	}
-	if err := feast.deleteDataRegistryAuthDelegatorBinding(); err != nil {
+	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
 	}
 	return nil
@@ -259,7 +259,12 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			"--ignore-paths=/v1/search",
+			// /v1/search and /v1/projects bypass proxy auth because they require
+			// server-side per-namespace SSAR filtering that cannot be expressed as a
+			// single resource SAR. The Feast server reads the bearer token from the
+			// request, performs TokenReview + per-namespace SubjectAccessReview, and
+			// returns only authorized results.
+			"--ignore-paths=/v1/search,/v1/projects",
 			"--logtostderr=true",
 			"--v=3",
 		},
@@ -427,6 +432,9 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
       - path: "/v1/[^/]+/namespaces.*"
         resourceAttributes:
           resource: namespaces
+      - path: "/v1/[^/]+/labels.*"
+        resourceAttributes:
+          resource: registries
 `
 
 	cm.Data = map[string]string{
@@ -547,7 +555,7 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 // ClusterRoles are cluster-scoped and cannot carry namespace-scoped owner
 // references, so we delete by name + managed-by label check instead of
 // using DeleteOwnedFeastObj.
-func (feast *FeastServices) deleteDataRegistryClusterRoles() error {
+func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 	for _, suffix := range []string{"viewer", "editor", "admin"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
@@ -640,12 +648,16 @@ func (feast *FeastServices) setDataRegistryRoute(route *routev1.Route) error {
 // (the ConfigMap is populated asynchronously by OpenShift's service-ca
 // controller; the next reconciliation will pick it up).
 func (feast *FeastServices) readServiceCACert() string {
+	logger := log.FromContext(feast.Handler.Context)
 	cm := &corev1.ConfigMap{}
 	key := client.ObjectKey{
 		Name:      feast.dataRegistryCaBundleCMName(),
 		Namespace: feast.Handler.FeatureStore.Namespace,
 	}
 	if err := feast.Handler.Client.Get(feast.Handler.Context, key, cm); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to read Service CA bundle ConfigMap", "name", key.Name)
+		}
 		return ""
 	}
 	return cm.Data["service-ca.crt"]
@@ -749,10 +761,10 @@ func (feast *FeastServices) initDataRegistryAuthDelegatorCRB() *rbacv1.ClusterRo
 	return crb
 }
 
-// deleteDataRegistryAuthDelegatorBinding removes the auth-delegator CRB.
+// CleanupDataRegistryAuthDelegatorBinding removes the auth-delegator CRB.
 // ClusterRoleBindings are cluster-scoped and cannot carry namespace-scoped
 // owner references, so we delete by name + managed-by label check.
-func (feast *FeastServices) deleteDataRegistryAuthDelegatorBinding() error {
+func (feast *FeastServices) CleanupDataRegistryAuthDelegatorBinding() error {
 	crb := &rbacv1.ClusterRoleBinding{}
 	name := feast.dataRegistryAuthDelegatorCRBName()
 	if err := feast.Handler.Client.Get(

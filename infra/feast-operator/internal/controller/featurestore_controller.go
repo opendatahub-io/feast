@@ -291,6 +291,9 @@ func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespac
 	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
 		logger.Error(err, "Failed to cleanup data registry ClusterRoles")
 	}
+	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
+		logger.Error(err, "Failed to cleanup data registry auth-delegator ClusterRoleBinding")
+	}
 }
 
 func (r *FeatureStoreReconciler) countOtherFeatureStoresInNamespace(ctx context.Context, namespace, excludeName string) int {
