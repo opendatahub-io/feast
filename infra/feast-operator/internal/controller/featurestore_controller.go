@@ -150,6 +150,7 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			logger.Error(err, "Failed to add Feast label to namespace")
 		}
 		r.addToNamespaceRegistry(ctx, cr)
+		r.addToOpenLineageDiscovery(ctx, cr)
 		policies, err := r.fetchPermissionsFromRegistry(ctx, cr)
 		if err != nil {
 			logger.Error(err, "Failed to fetch permissions from registry")
@@ -226,6 +227,21 @@ func (r *FeatureStoreReconciler) addToNamespaceRegistry(ctx context.Context, cr 
 	}
 }
 
+func (r *FeatureStoreReconciler) addToOpenLineageDiscovery(ctx context.Context, cr *feastdevv1.FeatureStore) {
+	logger := log.FromContext(ctx)
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.AddToOpenLineageDiscovery(); err != nil {
+		logger.Error(err, "Failed to add feature store to OpenLineage discovery")
+	}
+}
+
 func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespace, name string) {
 	logger := log.FromContext(ctx)
 	otherCount := r.countOtherFeatureStoresInNamespace(ctx, namespace, name)
@@ -239,12 +255,16 @@ func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespac
 	if err := access.CleanupDiscoverClusterRoleIfLast(ctx, r.Client, clusterCount); err != nil {
 		logger.Error(err, "Failed to cleanup discover ClusterRole")
 	}
-	r.cleanupNamespaceRegistry(ctx, &feastdevv1.FeatureStore{
+	deletedCR := &feastdevv1.FeatureStore{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-	})
+	}
+	r.cleanupNamespaceRegistry(ctx, deletedCR)
+	if err := r.cleanupOpenLineageDiscovery(ctx, deletedCR); err != nil {
+		logger.Error(err, "Failed to clean up OpenLineage discovery entry")
+	}
 }
 
 func (r *FeatureStoreReconciler) cleanupNamespaceRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) {
@@ -456,6 +476,20 @@ func (r *FeatureStoreReconciler) mapMlflowToFeastRequests(ctx context.Context, _
 		})
 	}
 	return requests
+}
+
+// cleanupOpenLineageDiscovery removes the feature store instance from the OpenLineage discovery ConfigMap
+func (r *FeatureStoreReconciler) cleanupOpenLineageDiscovery(ctx context.Context, cr *feastdevv1.FeatureStore) error {
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+
+	return feast.RemoveFromOpenLineageDiscovery()
 }
 
 // if a remotely referenced FeatureStore is changed, reconcile any FeatureStores that reference it.

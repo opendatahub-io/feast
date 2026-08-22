@@ -44,6 +44,12 @@ const (
 	NamespaceRegistryDataKey       = "namespaces"
 	DefaultKubernetesNamespace     = "feast-operator-system"
 
+	// OpenLineage discovery ConfigMap constants
+	OpenLineageDiscoveryConfigMapName = "feast-openlineage-config"
+	OpenLineageDiscoveryEndpointsKey  = "endpoints"
+	OpenLineageDiscoveryYamlKey       = "openlineage.yml"
+	OpenLineageDiscoveryUrlKey        = "url"
+
 	// ProtectedProjectAnnotation is the annotation key on a FeatureStore CR
 	// that marks its project as protected. Protected projects are excluded
 	// from project listings and shielded from teardown by other instances.
@@ -234,6 +240,10 @@ var (
 			Args:               []string{"serve_registry", "--rest-api"},
 			TargetHttpPort:     DataRegistryPort,
 			TargetRestHttpPort: DataRegistryPort,
+		LineageFeastType: {
+			Args:            []string{"serve_lineage", "-h", "0.0.0.0"},
+			TargetHttpPort:  6580,
+			TargetHttpsPort: 6581,
 		},
 	}
 
@@ -288,6 +298,19 @@ var (
 				Type:   feastdevv1.UIReadyType,
 				Status: metav1.ConditionFalse,
 				Reason: feastdevv1.UIFailedReason,
+			},
+		},
+		LineageFeastType: {
+			metav1.ConditionTrue: {
+				Type:    feastdevv1.LineageReadyType,
+				Status:  metav1.ConditionTrue,
+				Reason:  feastdevv1.ReadyReason,
+				Message: feastdevv1.LineageReadyMessage,
+			},
+			metav1.ConditionFalse: {
+				Type:   feastdevv1.LineageReadyType,
+				Status: metav1.ConditionFalse,
+				Reason: feastdevv1.LineageFailedReason,
 			},
 		},
 		ClientFeastType: {
@@ -426,11 +449,14 @@ type OpenLineageYamlConfig struct {
 
 // OpenLineageConsumerYamlConfig maps to the openlineage.consumer section of feature_store.yaml.
 type OpenLineageConsumerYamlConfig struct {
-	Enabled          bool              `yaml:"enabled"`
-	StoreType        *string           `yaml:"store_type,omitempty"`
-	ConnectionString *string           `yaml:"connection_string,omitempty"`
-	ApiKey           *string           `yaml:"api_key,omitempty"`
-	NamespaceMapping map[string]string `yaml:"namespace_mapping,omitempty"`
+	Enabled                     bool              `yaml:"enabled"`
+	StoreType                   *string           `yaml:"store_type,omitempty"`
+	ConnectionString            *string           `yaml:"connection_string,omitempty"`
+	ApiKey                      *string           `yaml:"api_key,omitempty"`
+	NamespaceMapping            map[string]string `yaml:"namespace_mapping,omitempty"`
+	RetentionDays               *int32            `yaml:"retention_days,omitempty"`
+	RetentionCheckIntervalHours *int32            `yaml:"retention_check_interval_hours,omitempty"`
+	StandaloneServer            *bool             `yaml:"standalone_server,omitempty"`
 }
 
 // MlflowYamlConfig maps to the mlflow section of feature_store.yaml.
