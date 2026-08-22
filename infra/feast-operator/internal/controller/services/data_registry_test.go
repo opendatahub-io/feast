@@ -167,7 +167,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(envMap[TmpFeatureStoreYamlEnvVar]).NotTo(BeEmpty())
 		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
 		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
-		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io"))
+		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
 		// Multi-tenancy: FEAST_PROJECT must be empty for dynamic routing
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, ""))
@@ -364,10 +364,34 @@ var _ = Describe("Data Registry", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
-	It("creates three ClusterRoles: viewer, editor, and admin", func() {
+	It("creates three ClusterRoles: viewer, editor, and admin with all pseudo-resources", func() {
 		setAnnotation("true")
 
 		Expect(feast.deployDataRegistryClusterRoles()).To(Succeed())
+
+		expectedResources := ConsistOf("registries", "namespaces", "tables", "volumes", "generic-tables")
+
+		// Viewer ClusterRole
+		viewerCR := &rbacv1.ClusterRole{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("viewer")}, viewerCR)).To(Succeed())
+		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-view", "true"))
+		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-edit", "true"))
+		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
+		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-cluster-reader", "true"))
+		Expect(viewerCR.Rules).To(HaveLen(1))
+		Expect(viewerCR.Rules[0].APIGroups).To(ConsistOf("dataregistry.opendatahub.io"))
+		Expect(viewerCR.Rules[0].Resources).To(expectedResources)
+		Expect(viewerCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch"))
+
+		// Editor ClusterRole
+		editorCR := &rbacv1.ClusterRole{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("editor")}, editorCR)).To(Succeed())
+		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-edit", "true"))
+		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
+		Expect(editorCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
+		Expect(editorCR.Rules).To(HaveLen(1))
+		Expect(editorCR.Rules[0].Resources).To(expectedResources)
+		Expect(editorCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch", "create", "update", "patch", "delete"))
 
 		// Admin ClusterRole
 		adminCR := &rbacv1.ClusterRole{}
@@ -375,20 +399,22 @@ var _ = Describe("Data Registry", func() {
 		Expect(adminCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-edit"))
-
-		// Admin gets registries + connections:use (two-verb SSAR)
 		Expect(adminCR.Rules).To(HaveLen(2))
-		Expect(adminCR.Rules[0].Resources).To(ConsistOf("registries"))
+		Expect(adminCR.Rules[0].Resources).To(expectedResources)
+		Expect(adminCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch", "create", "update", "patch", "delete"))
 		Expect(adminCR.Rules[1].Resources).To(ConsistOf("connections"))
 		Expect(adminCR.Rules[1].Verbs).To(ConsistOf("use"))
 
-		// Cleanup admin
+		// Cleanup
 		Expect(feast.CleanupDataRegistryClusterRoles()).To(Succeed())
-		err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("admin")}, &rbacv1.ClusterRole{})
-		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, &rbacv1.ClusterRole{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		}
 	})
 
 	It("creates and cleans up the full resource set via deployDataRegistry", func() {
+		isOpenShift = false
 		drKey := types.NamespacedName{
 			Name:      GetFeastName(featureStore) + "-" + string(DataRegistryFeastType),
 			Namespace: typeNamespacedName.Namespace,
@@ -424,16 +450,20 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
 		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("rewrites"))
 
-		// ClusterRoles: all three (viewer, editor, admin) exist
+		// ClusterRoles: all three (viewer, editor, admin) exist with all pseudo-resources
+		expectedResources := ConsistOf("registries", "namespaces", "tables", "volumes", "generic-tables")
+
 		viewerCR := &rbacv1.ClusterRole{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("viewer")}, viewerCR)).To(Succeed())
 		Expect(viewerCR.Rules).To(HaveLen(1))
 		Expect(viewerCR.Rules[0].APIGroups).To(ConsistOf("dataregistry.opendatahub.io"))
+		Expect(viewerCR.Rules[0].Resources).To(expectedResources)
 		Expect(viewerCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch"))
 		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-view", "true"))
 
 		editorCR := &rbacv1.ClusterRole{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("editor")}, editorCR)).To(Succeed())
+		Expect(editorCR.Rules[0].Resources).To(expectedResources)
 		Expect(editorCR.Rules[0].Verbs).To(ContainElements("create", "update", "patch", "delete"))
 		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-edit", "true"))
 
@@ -441,8 +471,8 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("admin")}, adminCR)).To(Succeed())
 		Expect(adminCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
-		// Admin has both registries and connections:use
 		Expect(adminCR.Rules).To(HaveLen(2))
+		Expect(adminCR.Rules[0].Resources).To(expectedResources)
 		Expect(adminCR.Rules[1].Resources).To(ConsistOf("connections"))
 		Expect(adminCR.Rules[1].Verbs).To(ConsistOf("use"))
 
