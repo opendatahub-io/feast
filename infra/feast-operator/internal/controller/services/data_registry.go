@@ -225,7 +225,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			{Name: TmpFeatureStoreYamlEnvVar, Value: fsYamlB64},
 			{Name: "FEAST_USAGE", Value: "False"},
 			{Name: DataCatalogEnabledEnvVar, Value: "true"},
-			{Name: CatalogSSARApiGroupEnvVar, Value: "dataregistry.opendatahub.io"},
+			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
 			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
 			{Name: FeastProjectEnvVar, Value: ""},
 		},
@@ -416,7 +416,7 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	// because cross-namespace search cannot be scoped to a single resource.
 	authYaml := `authorization:
   resourceAttributes:
-    apiGroup: dataregistry.opendatahub.io
+    apiGroup: ` + dataRegistryAPIGroup + `
     resource: registries
   rewrites:
     byHTTPPath:
@@ -467,8 +467,8 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 			}
 			viewerCR.Rules = []rbacv1.PolicyRule{
 				{
-					APIGroups: []string{"dataregistry.opendatahub.io"},
-					Resources: []string{"registries"},
+					APIGroups: []string{dataRegistryAPIGroup},
+					Resources: dataRegistryPseudoResources,
 					Verbs:     []string{"get", "list", "watch"},
 				},
 			}
@@ -494,8 +494,8 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 			}
 			editorCR.Rules = []rbacv1.PolicyRule{
 				{
-					APIGroups: []string{"dataregistry.opendatahub.io"},
-					Resources: []string{"registries"},
+					APIGroups: []string{dataRegistryAPIGroup},
+					Resources: dataRegistryPseudoResources,
 					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 				},
 			}
@@ -520,12 +520,12 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 			}
 			adminCR.Rules = []rbacv1.PolicyRule{
 				{
-					APIGroups: []string{"dataregistry.opendatahub.io"},
-					Resources: []string{"registries"},
+					APIGroups: []string{dataRegistryAPIGroup},
+					Resources: dataRegistryPseudoResources,
 					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 				},
 				{
-					APIGroups: []string{"dataregistry.opendatahub.io"},
+					APIGroups: []string{dataRegistryAPIGroup},
 					Resources: []string{"connections"},
 					Verbs:     []string{"use"},
 				},

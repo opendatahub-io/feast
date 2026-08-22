@@ -252,6 +252,7 @@ def test_module_level_fips_sets_env_before_pyarrow_import():
     """)
     env = os.environ.copy()
     env.pop("GRPC_SSL_CIPHER_SUITES", None)
+    env["_FEAST_FIPS_REEXEC"] = "1"
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
