@@ -10,10 +10,10 @@ from feast.data_source import DataSource
 from feast.dqm.profilers.profiler import Profile, Profiler
 from feast.importer import import_class
 from feast.protos.feast.core.SavedDataset_pb2 import SavedDataset as SavedDatasetProto
-from feast.protos.feast.core.SavedDataset_pb2 import SavedDatasetMeta, SavedDatasetSpec
 from feast.protos.feast.core.SavedDataset_pb2 import (
     SavedDatasetColumn as SavedDatasetColumnProto,
 )
+from feast.protos.feast.core.SavedDataset_pb2 import SavedDatasetMeta, SavedDatasetSpec
 from feast.protos.feast.core.SavedDataset_pb2 import (
     SavedDatasetStorage as SavedDatasetStorageProto,
 )
