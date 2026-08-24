@@ -23,6 +23,8 @@ from feast.infra.registry.sql import (
     FeastRegistryHierarchySchemaError,
     SqlRegistry,
     SqlRegistryConfig,
+)
+from feast.infra.registry.sql import (
     metadata as registry_metadata,
 )
 from feast.protos.feast.core.SavedDataset_pb2 import SavedDataset as SavedDatasetProto
@@ -142,7 +144,9 @@ def test_list_saved_datasets_filters_by_namespace_sql(sqlite_registry):
 def test_saved_datasets_sql_has_hierarchy_columns_and_index(sqlite_registry):
     engine = sqlite_registry.write_engine
     inspector = inspect(engine)
-    column_names = {column["name"] for column in inspector.get_columns("saved_datasets")}
+    column_names = {
+        column["name"] for column in inspector.get_columns("saved_datasets")
+    }
     assert "namespace" in column_names
     assert "collection" in column_names
 
@@ -159,7 +163,9 @@ def test_ensure_hierarchy_columns_migrates_legacy_table():
     SqlRegistry._ensure_saved_dataset_hierarchy_columns(engine)
 
     inspector = inspect(engine)
-    column_names = {column["name"] for column in inspector.get_columns("saved_datasets")}
+    column_names = {
+        column["name"] for column in inspector.get_columns("saved_datasets")
+    }
     assert "namespace" in column_names
     assert "collection" in column_names
     index_names = {index["name"] for index in inspector.get_indexes("saved_datasets")}
@@ -282,7 +288,9 @@ def test_require_does_not_alter_schema():
         SqlRegistry._require_saved_dataset_hierarchy_columns(engine)
 
     inspector = inspect(engine)
-    column_names = {column["name"] for column in inspector.get_columns("saved_datasets")}
+    column_names = {
+        column["name"] for column in inspector.get_columns("saved_datasets")
+    }
     assert "namespace" not in column_names
     assert "collection" not in column_names
 
