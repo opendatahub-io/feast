@@ -15,13 +15,25 @@
 """Catalog translation helpers. Does not mount Iceberg REST routes (RHAI-390)."""
 
 from feast.api.catalog.catalog_utils import (
+    CATALOG_PROJECT,
+    DEFAULT_COLLECTION,
+    ensure_catalog_project,
+    list_namespaces,
     parse_scoped_name,
+    resolve_namespace,
     scoped_name,
     unscoped_name,
+    validate_namespace_exists,
 )
 
 __all__ = [
+    "CATALOG_PROJECT",
+    "DEFAULT_COLLECTION",
+    "ensure_catalog_project",
+    "list_namespaces",
     "parse_scoped_name",
+    "resolve_namespace",
     "scoped_name",
     "unscoped_name",
+    "validate_namespace_exists",
 ]
