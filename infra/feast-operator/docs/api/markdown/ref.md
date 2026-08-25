@@ -73,6 +73,7 @@ ContainerConfigs k8s container settings for the server
 
 _Appears in:_
 - [CronJobContainerConfigs](#cronjobcontainerconfigs)
+- [McpServerConfig](#mcpserverconfig)
 - [RegistryServerConfigs](#registryserverconfigs)
 - [ServerConfigs](#serverconfigs)
 
@@ -130,6 +131,7 @@ DefaultCtrConfigs k8s container settings that are applied by default
 _Appears in:_
 - [ContainerConfigs](#containerconfigs)
 - [CronJobContainerConfigs](#cronjobcontainerconfigs)
+- [McpServerConfig](#mcpserverconfig)
 - [RegistryServerConfigs](#registryserverconfigs)
 - [ServerConfigs](#serverconfigs)
 
@@ -271,6 +273,11 @@ _Appears in:_
 | `onlineStore` _[OnlineStore](#onlinestore)_ |  |
 | `registry` _[Registry](#registry)_ |  |
 | `ui` _[ServerConfigs](#serverconfigs)_ | Creates a UI server container |
+| `mcpServer` _[McpServerConfig](#mcpserverconfig)_ | McpServer deploys a standalone Feast MCP (Model Context Protocol) server container.
+This runs the `feast mcp` command in its own container, exposed on its own Service and
+port. It proxies to the in-pod online feature server and/or REST registry server.
+This is distinct from the embedded MCP support on the online store (services.onlineStore.serving.mcp)
+and the registry (services.registry.local.server.mcp). |
 | `deploymentStrategy` _[DeploymentStrategy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#deploymentstrategy-v1-apps)_ |  |
 | `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#podsecuritycontext-v1-core)_ |  |
 | `podAnnotations` _object (keys:string, values:string)_ | PodAnnotations are annotations to be applied to the Deployment's PodTemplate metadata.
@@ -573,6 +580,60 @@ _Appears in:_
 | `transport` _string_ | MCP transport protocol. |
 
 
+#### McpServerConfig
+
+
+
+McpServerConfig configures a standalone Feast MCP server container (the `feast mcp` command).
+The server proxies to the online feature server and/or REST registry server over HTTP. Its
+transport, upstream URLs, authentication and observability are read from a feast_mcp.yaml
+config file supplied via a ConfigMap. The operator owns the container's bind host and port
+(used for the generated Service).
+
+NOTE: operator-managed TLS is not supported for the MCP server yet; the `tls` field of the
+embedded server configs is ignored.
+
+_Appears in:_
+- [FeatureStoreServices](#featurestoreservices)
+
+| Field | Description |
+| --- | --- |
+| `image` _string_ |  |
+| `env` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#envvar-v1-core)_ |  |
+| `envFrom` _[EnvFromSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#envfromsource-v1-core)_ |  |
+| `imagePullPolicy` _[PullPolicy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#pullpolicy-v1-core)_ |  |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcerequirements-v1-core)_ |  |
+| `nodeSelector` _map[string]string_ |  |
+| `tls` _[TlsConfigs](#tlsconfigs)_ |  |
+| `logLevel` _string_ | LogLevel sets the logging level for the server
+Allowed values: "debug", "info", "warning", "error", "critical". |
+| `metrics` _boolean_ | Metrics exposes Prometheus-compatible metrics for the Feast server when enabled. |
+| `volumeMounts` _[VolumeMount](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#volumemount-v1-core) array_ | VolumeMounts defines the list of volumes that should be mounted into the feast container.
+This allows attaching persistent storage, config files, secrets, or other resources
+required by the Feast components. Ensure that each volume mount has a corresponding
+volume definition in the Volumes field. |
+| `workerConfigs` _[WorkerConfigs](#workerconfigs)_ | WorkerConfigs defines the worker configuration for the Feast server.
+These options are primarily used for production deployments to optimize performance. |
+| `config` _[McpServerConfigSource](#mcpserverconfigsource)_ | Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`.
+This file drives the MCP transport (http/sse), upstream feature/registry URLs, auth and
+observability. When omitted, `feast mcp` relies on environment variables and defaults. |
+
+
+#### McpServerConfigSource
+
+
+
+McpServerConfigSource references a ConfigMap key holding the feast_mcp.yaml content.
+
+_Appears in:_
+- [McpServerConfig](#mcpserverconfig)
+
+| Field | Description |
+| --- | --- |
+| `configMapRef` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#localobjectreference-v1-core)_ | ConfigMapRef is a reference to a ConfigMap in the same namespace containing the MCP config. |
+| `configMapKey` _string_ | ConfigMapKey is the key in the ConfigMap holding the feast_mcp.yaml content. |
+
+
 #### MlflowConfig
 
 
@@ -865,6 +926,7 @@ OptionalCtrConfigs k8s container settings that are optional
 _Appears in:_
 - [ContainerConfigs](#containerconfigs)
 - [CronJobContainerConfigs](#cronjobcontainerconfigs)
+- [McpServerConfig](#mcpserverconfig)
 - [RegistryServerConfigs](#registryserverconfigs)
 - [ServerConfigs](#serverconfigs)
 
@@ -1106,6 +1168,7 @@ ServerConfigs creates a server for the feast service, with specified container c
 _Appears in:_
 - [FeatureStoreServices](#featurestoreservices)
 - [LineageServerConfig](#lineageserverconfig)
+- [McpServerConfig](#mcpserverconfig)
 - [OfflineStore](#offlinestore)
 - [OnlineStore](#onlinestore)
 - [RegistryServerConfigs](#registryserverconfigs)
@@ -1147,6 +1210,7 @@ _Appears in:_
 | `registryRest` _string_ |  |
 | `ui` _string_ |  |
 | `lineage` _string_ |  |
+| `mcpServer` _string_ |  |
 
 
 #### ServingConfig
@@ -1194,6 +1258,7 @@ default to true when metrics is enabled. |
 TlsConfigs configures server TLS for a feast service. in an openshift cluster, this is configured by default using service serving certificates.
 
 _Appears in:_
+- [McpServerConfig](#mcpserverconfig)
 - [RegistryServerConfigs](#registryserverconfigs)
 - [ServerConfigs](#serverconfigs)
 
@@ -1227,6 +1292,7 @@ WorkerConfigs defines the worker configuration for Feast servers.
 These settings control gunicorn worker processes for production deployments.
 
 _Appears in:_
+- [McpServerConfig](#mcpserverconfig)
 - [RegistryServerConfigs](#registryserverconfigs)
 - [ServerConfigs](#serverconfigs)
 

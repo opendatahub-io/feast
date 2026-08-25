@@ -716,6 +716,23 @@ build-feature-transformation-server-docker: ## Build Feature Transformation Serv
 		-t $(REGISTRY)/feature-transformation-server:$(VERSION) \
 		-f sdk/python/feast/infra/transformation_servers/Dockerfile --load .
 
+push-feast-mcp-docker: ## Push Feast MCP Server Docker image
+	docker push $(REGISTRY)/feast-mcp:$(VERSION)
+
+# Base image for the MCP server. Defaults to the feature-server image built
+# from the same VERSION; override to build against a published tag, e.g.
+# `make build-feast-mcp-docker FEAST_MCP_BASE_TAG=0.65.0`.
+FEAST_MCP_BASE_IMAGE ?= $(REGISTRY)/feature-server
+FEAST_MCP_BASE_TAG ?= $(VERSION)
+
+build-feast-mcp-docker: ## Build Feast MCP Server Docker image
+	docker buildx build $(if $(DOCKER_PLATFORMS),--platform $(DOCKER_PLATFORMS),) \
+		--build-arg BASE_IMAGE=$(FEAST_MCP_BASE_IMAGE) \
+		--build-arg BASE_TAG=$(FEAST_MCP_BASE_TAG) \
+		-t $(REGISTRY)/feast-mcp:$(VERSION) \
+		-f sdk/python/feast/mcp/docker/Dockerfile \
+		$(if $(filter true,$(DOCKER_PUSH)),--push,--load) .
+
 push-feature-server-java-docker: ## Push Feature Server Java Docker image
 	docker push $(REGISTRY)/feature-server-java:$(VERSION)
 

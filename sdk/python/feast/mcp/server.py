@@ -21,6 +21,8 @@ from typing import Optional
 import click
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from feast.mcp.auth import create_oidc_auth
 from feast.mcp.client import FeastClient
@@ -46,6 +48,11 @@ mcp = FastMCP(
         "manage materialization, and browse the feature registry."
     ),
 )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "healthy", "service": "mcp-server"})
 
 
 def _mount_servers(cfg: Config) -> None:
