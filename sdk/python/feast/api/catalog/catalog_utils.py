@@ -36,13 +36,19 @@ MAX_SCOPED_NAME = 255  # saved_datasets.saved_dataset_name VARCHAR(255)
 def _require_part(label: str, value: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{label} must be a string")
-    part = value.strip()
-    if not part:
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise ValueError(f"{label} must not contain whitespace (got {value!r})")
+    if not value:
         raise ValueError(f"{label} must be a non-empty string")
-    if SCOPE_SEP in part:
-        raise ValueError(
-            f"{label} must not contain {SCOPE_SEP!r} (got {value!r})"
-        )
+    if SCOPE_SEP in value:
+        raise ValueError(f"{label} must not contain {SCOPE_SEP!r} (got {value!r})")
+    return value
+
+
+def _require_namespace(namespace: str) -> str:
+    part = _require_part("namespace", namespace)
+    if part != part.lower():
+        raise ValueError(f"namespace must be lowercase (got {namespace!r})")
     return part
 
 
@@ -52,7 +58,7 @@ def scoped_name(namespace: str, collection: str, name: str) -> str:
     Format: ``{namespace}/{collection}/{display_name}``.
     """
     parts = (
-        _require_part("namespace", namespace),
+        _require_namespace(namespace),
         _require_part("collection", collection),
         _require_part("name", name),
     )
@@ -66,14 +72,18 @@ def scoped_name(namespace: str, collection: str, name: str) -> str:
 
 def parse_scoped_name(scoped: str) -> tuple[str, str, str]:
     """Invert scoped_name. Raises ValueError if not exactly three parts."""
-    if not isinstance(scoped, str) or not scoped.strip():
+    if not isinstance(scoped, str) or not scoped:
         raise ValueError("scoped name must be a non-empty string")
     parts = scoped.split(SCOPE_SEP)
-    if len(parts) != 3 or not all(parts):
+    if len(parts) != 3:
         raise ValueError(
             f"scoped name must be namespace/collection/name (got {scoped!r})"
         )
-    return parts[0], parts[1], parts[2]
+    return (
+        _require_namespace(parts[0]),
+        _require_part("collection", parts[1]),
+        _require_part("name", parts[2]),
+    )
 
 
 def unscoped_name(scoped: str) -> str:
