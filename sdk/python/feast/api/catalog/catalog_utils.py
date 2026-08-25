@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation-layer naming (RHAI-384).
+"""Catalog translation-layer helpers (RHAI-384, RHAI-385).
 
 Iceberg REST identity is a tuple (project, collection, table). Feast identity is
 (project, name) and the catalog uses a single Feast project ``data-registry``,
@@ -20,6 +20,9 @@ so SavedDataset.name must carry namespace + collection + display name.
 
 Callers (Iceberg REST, UI, engines) never see the scoped string: prefix on
 write / get / delete, strip with unscoped_name on API responses.
+
+RHAI-385 adds the shared project constant, lazy Feast project creation, and
+collection resolve/list/exists helpers. It does not mount Iceberg REST routes.
 
 Empty collections (RHAI-388): do not store metadata as an unscoped Project tag
 ``_ns_meta_{collection}`` on the shared data-registry project — that key
@@ -29,8 +32,15 @@ collections from SavedDataset.collection filtered by namespace.
 
 from __future__ import annotations
 
+from feast.errors import ProjectObjectNotFoundException
+from feast.infra.registry.base_registry import BaseRegistry
+from feast.project import Project
+
 SCOPE_SEP = "/"
 MAX_SCOPED_NAME = 255  # saved_datasets.saved_dataset_name VARCHAR(255)
+CATALOG_PROJECT = "data-registry"
+DEFAULT_COLLECTION = "default"
+NAMESPACE_SEPARATOR = "\x1f"
 
 
 def _require_part(label: str, value: str) -> str:
@@ -89,3 +99,53 @@ def parse_scoped_name(scoped: str) -> tuple[str, str, str]:
 def unscoped_name(scoped: str) -> str:
     """Display name for Iceberg / API JSON — never includes SCOPE_SEP."""
     return parse_scoped_name(scoped)[2]
+
+
+def ensure_catalog_project(registry: BaseRegistry) -> Project:
+    """Get-or-create the single catalog Feast project. Idempotent."""
+    try:
+        return registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    except ProjectObjectNotFoundException:
+        project = Project(
+            name=CATALOG_PROJECT,
+            description="RHOAI Data Registry catalog",
+        )
+        registry.apply_project(project)
+        return project
+
+
+def resolve_namespace(raw: str | list[str]) -> str:
+    """Iceberg namespace → collection display name. Phase 1: one segment."""
+    parts = list(raw) if isinstance(raw, list) else [raw]
+    if len(parts) != 1:
+        raise ValueError("namespace must be a single collection name")
+    value = parts[0]
+    if not isinstance(value, str) or NAMESPACE_SEPARATOR in value:
+        raise ValueError("nested namespaces are not supported")
+    return _require_part("collection", value)
+
+
+def list_namespaces(registry: BaseRegistry, rhai_ns: str) -> list[str]:
+    """Distinct collection display names for one RHAI tenant, plus ``default``."""
+    ns = _require_namespace(rhai_ns)
+    found = {
+        ds.collection
+        for ds in registry.list_saved_datasets(CATALOG_PROJECT, namespace=ns)
+        if ds.collection
+    }
+    found.add(DEFAULT_COLLECTION)
+    return sorted(found)
+
+
+def validate_namespace_exists(
+    registry: BaseRegistry, rhai_ns: str, collection: str
+) -> bool:
+    """True if the collection exists for this tenant. ``default`` is always True."""
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    if col == DEFAULT_COLLECTION:
+        return True
+    datasets = registry.list_saved_datasets(
+        CATALOG_PROJECT, namespace=ns, collection=col
+    )
+    return any(True for _ in datasets)
