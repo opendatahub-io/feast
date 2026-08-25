@@ -160,6 +160,47 @@ def test_scoped_apply_isolates_collections_in_one_namespace(sqlite_registry):
         project=CATALOG_PROJECT, namespace="demo-user-1"
     )
     assert sorted(d.name for d in rows) == [curated, raw]
-    assert sqlite_registry.list_saved_datasets(
-        project=CATALOG_PROJECT, namespace="demo-user-1", collection="raw"
-    )[0].name == raw
+    assert (
+        sqlite_registry.list_saved_datasets(
+            project=CATALOG_PROJECT, namespace="demo-user-1", collection="raw"
+        )[0].name
+        == raw
+    )
+
+
+@pytest.mark.parametrize(
+    "namespace,collection,name",
+    [
+        ("demo-user-1", "underwriting", " auto-claims "),
+        ("demo-user-1", " underwriting", "risk_scores"),
+        (" demo-user-1", "underwriting", "risk_scores"),
+        ("demo-user-1", "underwriting", "\trisk_scores"),
+        ("demo-user-1", "under writing", "risk_scores"),
+    ],
+)
+def test_scoped_name_rejects_whitespace(namespace, collection, name):
+    with pytest.raises(ValueError, match="whitespace"):
+        scoped_name(namespace, collection, name)
+    with pytest.raises(ValueError, match="whitespace"):
+        parse_scoped_name(f"{namespace}/{collection}/{name}")
+
+
+def test_scoped_name_accepts_exact_display_name():
+    assert (
+        scoped_name("demo-user-1", "raw", "auto-claims")
+        == "demo-user-1/raw/auto-claims"
+    )
+
+
+def test_scoped_name_rejects_mixed_case_namespace():
+    with pytest.raises(ValueError, match="lowercase"):
+        scoped_name("Demo-user", "raw", "t")
+    with pytest.raises(ValueError, match="lowercase"):
+        parse_scoped_name("Demo-user/raw/t")
+
+
+def test_scoped_name_preserves_collection_and_table_case():
+    scoped = scoped_name("demo-user", "Raw", "Risk_Scores")
+    assert scoped == "demo-user/Raw/Risk_Scores"
+    assert parse_scoped_name(scoped) == ("demo-user", "Raw", "Risk_Scores")
+    assert unscoped_name(scoped) == "Risk_Scores"
