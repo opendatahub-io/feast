@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, MutableMapping, Optional
 
 from feast.mcp.observability.config import LoggingConfig
 from feast.mcp.observability.logger import (
@@ -140,7 +140,7 @@ class RequestTracingMiddleware:
 
     async def __call__(
         self,
-        scope: dict,
+        scope: MutableMapping[str, Any],
         receive: Callable[[], Awaitable[Any]],
         send: Callable[[Any], Awaitable[None]],
     ) -> None:
