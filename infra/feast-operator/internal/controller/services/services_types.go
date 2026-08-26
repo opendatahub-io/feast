@@ -26,6 +26,7 @@ import (
 
 const (
 	TmpFeatureStoreYamlEnvVar      = "TMP_FEATURE_STORE_YAML_BASE64"
+	FeatureStoreYamlEnvVar         = "FEATURE_STORE_YAML_BASE64"
 	IntraCommunicationBase64EnvVar = "INTRA_COMMUNICATION_BASE64"
 	intraCommunicationTokenKey     = "token"
 	packagedFeatureRepoEnvVar      = "FEAST_PACKAGED_FEATURE_REPO_PATH"
@@ -60,8 +61,9 @@ const (
 
 	// DataRegistryAnnotation is the annotation key on a FeatureStore CR that
 	// enables Data Registry (catalog-mode) reconciliation. When set to "true",
-	// the operator creates a dedicated data-registry Deployment alongside the
-	// standard feature store Deployment.
+	// the operator switches to an exclusive data-registry mode: standard
+	// online/offline store resources are removed and a single registry-only
+	// Deployment with a kube-rbac-proxy sidecar is deployed instead.
 	DataRegistryAnnotation = "dataregistry.opendatahub.io/enabled"
 
 	// Data Registry env var names injected into the data-registry-server container.
@@ -91,7 +93,12 @@ const (
 
 	dataRegistryAPIGroup = "dataregistry.opendatahub.io"
 
-	DefaultKubeRBACProxyImage = "gcr.io/kubebuilder/kube-rbac-proxy:v0.16.0"
+	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
+
+	DefaultKubeRBACProxyCPURequest    = "50m"
+	DefaultKubeRBACProxyCPULimit      = "100m"
+	DefaultKubeRBACProxyMemoryRequest = "128Mi"
+	DefaultKubeRBACProxyMemoryLimit   = "256Mi"
 
 	HttpPort              = 80
 	HttpsPort             = 443
@@ -220,8 +227,9 @@ var (
 	NameLabelKey          = feastdevv1.GroupVersion.Group + "/name"
 	ServiceTypeLabelKey   = feastdevv1.GroupVersion.Group + "/service-type"
 
-	// dataRegistryPseudoResources are the pseudo-resources checked by
-	// kube-rbac-proxy SSAR. Must stay in sync with auth.yaml path rewrites.
+	// dataRegistryPseudoResources are catalog pseudo-resources granted on the
+	// aggregated ClusterRoles. kube-rbac-proxy's coarse gate uses `registries`;
+	// the rest are consumed by server-side SSAR (namespaces/tables/volumes).
 	dataRegistryPseudoResources = []string{"registries", "namespaces", "tables", "volumes", "generic-tables"}
 
 	FeastServiceConstants = map[FeastServiceType]deploymentSettings{
