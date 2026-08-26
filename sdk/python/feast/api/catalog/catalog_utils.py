@@ -25,13 +25,14 @@ The shared project constant, lazy Feast project creation, and
 collection resolve/list/exists helpers are provided here.
 This module does not mount Iceberg REST routes.
 
-Empty collections: do not store metadata as an unscoped Project tag
-``_ns_meta_{collection}`` on the shared data-registry project — that key
-collides across namespaces. Include namespace in any tag key, or derive
-collections from SavedDataset.collection filtered by namespace.
+Empty collections persist as a scoped Project tag
+``_ns_meta_{namespace}/{collection}`` on the shared ``data-registry`` project.
+Unscoped ``_ns_meta_{collection}`` collides across namespaces — never write it.
 """
 
 from __future__ import annotations
+
+import json
 
 from feast.errors import ProjectObjectNotFoundException
 from feast.infra.registry.base_registry import BaseRegistry
@@ -42,6 +43,7 @@ MAX_SCOPED_NAME = 255  # saved_datasets.saved_dataset_name VARCHAR(255)
 CATALOG_PROJECT = "data-registry"
 DEFAULT_COLLECTION = "default"
 NAMESPACE_SEPARATOR = "\x1f"
+NS_META_PREFIX = "_ns_meta_"
 
 
 def _require_part(label: str, value: str) -> str:
@@ -133,13 +135,18 @@ def resolve_namespace(raw: str | list[str]) -> str:
 
 
 def list_namespaces(registry: BaseRegistry, rhai_ns: str) -> list[str]:
-    """Distinct collection display names for one RHAI tenant, plus ``default``."""
+    """Distinct collection display names for one RHAI tenant, plus ``default``.
+
+    Unions SavedDataset.collection values with scoped ``_ns_meta_{ns}/{collection}``
+    Project tags so empty POST-created collections appear.
+    """
     ns = _require_namespace(rhai_ns)
     found = {
         ds.collection
         for ds in registry.list_saved_datasets(CATALOG_PROJECT, namespace=ns)
         if ds.collection
     }
+    found.update(_ns_meta_collections(registry, ns))
     found.add(DEFAULT_COLLECTION)
     return sorted(found)
 
@@ -152,7 +159,120 @@ def validate_namespace_exists(
     col = _require_part("collection", collection)
     if col == DEFAULT_COLLECTION:
         return True
+    if _has_namespace_meta(registry, ns, col):
+        return True
     datasets = registry.list_saved_datasets(
         CATALOG_PROJECT, namespace=ns, collection=col
     )
     return any(True for _ in datasets)
+
+
+def ns_meta_key(rhai_ns: str, collection: str) -> str:
+    """Scoped Project tag key. Never ``_ns_meta_{collection}`` alone."""
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    return f"{NS_META_PREFIX}{ns}/{col}"
+
+
+def parse_ns_meta_key(key: str) -> tuple[str, str] | None:
+    """Return ``(rhai_ns, collection)`` or None if the key is not a scoped meta tag."""
+    if not isinstance(key, str) or not key.startswith(NS_META_PREFIX):
+        return None
+    rest = key[len(NS_META_PREFIX) :]
+    if rest.count(SCOPE_SEP) != 1:
+        return None
+    ns, col = rest.split(SCOPE_SEP, 1)
+    try:
+        return _require_namespace(ns), _require_part("collection", col)
+    except ValueError:
+        return None
+
+
+def collection_has_assets(
+    registry: BaseRegistry, rhai_ns: str, collection: str
+) -> bool:
+    """True if any SavedDataset exists in this tenant collection (tables/volumes)."""
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    datasets = registry.list_saved_datasets(
+        CATALOG_PROJECT, namespace=ns, collection=col
+    )
+    return any(True for _ in datasets)
+
+
+def get_namespace_properties(
+    registry: BaseRegistry, rhai_ns: str, collection: str
+) -> dict[str, str]:
+    key = ns_meta_key(rhai_ns, collection)
+    project = _get_catalog_project(registry)
+    if project is None:
+        return {}
+    raw = project.tags.get(key)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def set_namespace_properties(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    collection: str,
+    properties: dict[str, str],
+) -> None:
+    ensure_catalog_project(registry)
+    project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    tags = dict(project.tags)
+    tags[ns_meta_key(rhai_ns, collection)] = json.dumps(
+        properties, separators=(",", ":"), sort_keys=True
+    )
+    project.tags = tags
+    registry.apply_project(project)
+
+
+def delete_namespace_meta(
+    registry: BaseRegistry, rhai_ns: str, collection: str
+) -> None:
+    project = _get_catalog_project(registry)
+    if project is None:
+        return
+    key = ns_meta_key(rhai_ns, collection)
+    if key not in project.tags:
+        return
+    tags = dict(project.tags)
+    tags.pop(key, None)
+    project.tags = tags
+    registry.apply_project(project)
+
+
+def _get_catalog_project(registry: BaseRegistry) -> Project | None:
+    try:
+        return registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    except ProjectObjectNotFoundException:
+        return None
+
+
+def _has_namespace_meta(
+    registry: BaseRegistry, rhai_ns: str, collection: str
+) -> bool:
+    project = _get_catalog_project(registry)
+    if project is None:
+        return False
+    return ns_meta_key(rhai_ns, collection) in project.tags
+
+
+def _ns_meta_collections(registry: BaseRegistry, rhai_ns: str) -> set[str]:
+    project = _get_catalog_project(registry)
+    if project is None:
+        return set()
+    found: set[str] = set()
+    for key in project.tags:
+        parsed = parse_ns_meta_key(key)
+        if parsed and parsed[0] == rhai_ns:
+            found.add(parsed[1])
+    return found

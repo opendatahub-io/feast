@@ -33,3 +33,28 @@ class DataRegistryConfig(BaseModel):
     defaults: dict[str, str] = Field(default_factory=dict)
     overrides: dict[str, str] = Field(default_factory=dict)
     endpoints: list[str] = Field(default_factory=list)
+
+
+class CreateNamespaceRequest(BaseModel):
+    namespace: list[str]
+    properties: dict[str, str] = Field(default_factory=dict)
+
+
+class NamespaceResponse(BaseModel):
+    namespace: list[str]
+    properties: dict[str, str] = Field(default_factory=dict)
+
+
+class ListNamespacesResponse(BaseModel):
+    namespaces: list[list[str]]
+
+
+class UpdateNamespacePropertiesRequest(BaseModel):
+    updates: dict[str, str] = Field(default_factory=dict)
+    removals: list[str] = Field(default_factory=list)
+
+
+class UpdateNamespacePropertiesResponse(BaseModel):
+    updated: list[str]
+    removed: list[str]
+    missing: list[str]

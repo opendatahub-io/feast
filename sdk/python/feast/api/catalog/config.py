@@ -31,6 +31,12 @@ from feast.api.catalog.models import DataRegistryConfig
 CATALOG_CONFIG_ENDPOINTS = [
     "GET /v1/config",
     "GET /v1/{prefix}/config",
+    "GET /v1/{prefix}/namespaces",
+    "POST /v1/{prefix}/namespaces",
+    "GET /v1/{prefix}/namespaces/{namespace}",
+    "HEAD /v1/{prefix}/namespaces/{namespace}",
+    "DELETE /v1/{prefix}/namespaces/{namespace}",
+    "POST /v1/{prefix}/namespaces/{namespace}/properties",
 ]
 
 
