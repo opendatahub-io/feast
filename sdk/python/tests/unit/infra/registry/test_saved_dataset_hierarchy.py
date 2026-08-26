@@ -267,6 +267,49 @@ def test_sql_hierarchy_columns_match_proto_after_apply(sqlite_registry):
     assert row.collection == loaded.collection == "curated"
 
 
+def test_reapply_heals_stale_or_empty_hierarchy_sql_columns(sqlite_registry):
+    """Proto-equal re-apply must still repair drifted denormalized SQL columns.
+
+    After additive migration (or a buggy writer), SQL namespace/collection can be
+    empty or stale while the proto already has the correct hierarchy. Equality
+    short-circuit must not skip healing those columns.
+    """
+    dataset = _make_saved_dataset(
+        name="claims",
+        namespace="underwriting",
+        collection="curated",
+    )
+    sqlite_registry.apply_saved_dataset(dataset, project="test_project")
+
+    with sqlite_registry.write_engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE saved_datasets SET namespace = '', collection = 'stale' "
+                "WHERE saved_dataset_name = :name AND project_id = :project"
+            ),
+            {"name": "claims", "project": "test_project"},
+        )
+
+    # Same object (proto equality) — must still rewrite denorm columns.
+    sqlite_registry.apply_saved_dataset(dataset, project="test_project")
+
+    with sqlite_registry.write_engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT namespace, collection FROM saved_datasets "
+                "WHERE saved_dataset_name = :name AND project_id = :project"
+            ),
+            {"name": "claims", "project": "test_project"},
+        ).one()
+
+    assert row.namespace == "underwriting"
+    assert row.collection == "curated"
+    listed = sqlite_registry.list_saved_datasets(
+        project="test_project", namespace="underwriting", collection="curated"
+    )
+    assert [ds.name for ds in listed] == ["claims"]
+
+
 def test_require_hierarchy_raises_on_legacy_schema():
     fd, registry_path = tempfile.mkstemp()
     engine = create_engine(f"sqlite:///{registry_path}")
