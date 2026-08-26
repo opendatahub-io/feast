@@ -93,7 +93,7 @@ registry:
 
 | Value | Behavior |
 |---|---|
-| `auto` (default) | Creates tables if they don't exist. Also runs an additive migration on existing `saved_datasets` tables to add denormalized `namespace` / `collection` columns and `idx_saved_datasets_project_namespace`, then backfills **empty** hierarchy columns from the proto blob (rows that already have non-empty values are left alone). |
+| `auto` (default) | Creates tables if they don't exist. Also runs an additive migration on existing `saved_datasets` tables to add denormalized `namespace` / `collection` columns and `idx_saved_datasets_project_namespace`, then backfills **empty** hierarchy columns from the proto blob (rows that already have non-empty values are left alone). **Rollback / downgrade:** Feast does not drop hierarchy columns automatically. Before downgrading to a build that does not expect them, operators may manually `DROP INDEX idx_saved_datasets_project_namespace` and `DROP COLUMN namespace` / `collection` if desired. |
 | `verify` | Skips DDL. Checks that all expected tables exist on startup; raises an error listing missing tables if any are absent. When a separate `read_path` is configured, the read replica is also verified — a lagging replica (e.g. mid-migration) will block startup. Hierarchy column checks are separate (see below). |
 | `skip` | Skips both creation and verification. Use when schema is managed entirely outside Feast (e.g. by a migration tool). |
 
