@@ -58,8 +58,17 @@ def test_config_endpoints_are_iceberg_prefix_shaped():
     for signature in CATALOG_CONFIG_ENDPOINTS:
         assert "{prefix}" in signature or signature == "GET /v1/config"
         assert "{project}" not in signature
-        assert "/namespaces" not in signature
         assert "/tables" not in signature
+        assert "/volumes" not in signature
+
+
+def test_config_endpoints_include_namespace_crud():
+    assert "GET /v1/{prefix}/namespaces" in CATALOG_CONFIG_ENDPOINTS
+    assert (
+        "POST /v1/{prefix}/namespaces/{namespace}/properties"
+        in CATALOG_CONFIG_ENDPOINTS
+    )
+    assert all("/tables" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
 
 
 def test_empty_warehouse_does_not_set_prefix():

@@ -60,12 +60,17 @@ class NoSuchTableException(IcebergRESTException):
 
 class NamespaceAlreadyExistsException(IcebergRESTException):
     http_status = 409
-    error_type = "NamespaceAlreadyExistsException"
+    error_type = "AlreadyExistsException"
 
 
 class TableAlreadyExistsException(IcebergRESTException):
     http_status = 409
     error_type = "TableAlreadyExistsException"
+
+
+class NamespaceNotEmptyException(IcebergRESTException):
+    http_status = 409
+    error_type = "NamespaceNotEmptyException"
 
 
 class BadRequestException(IcebergRESTException):
