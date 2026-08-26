@@ -184,6 +184,12 @@ func (feast *FeastServices) Deploy() error {
 // Standard online/offline store deployments are skipped; a single
 // registry-only pod with the kube-rbac-proxy sidecar is deployed instead.
 func (feast *FeastServices) deployDataRegistryMode() error {
+	feast.validateDataRegistryAnnotation()
+
+	if err := feast.validateDataRegistrySingleton(); err != nil {
+		return err
+	}
+
 	// Clean up standard-mode resources that are not needed in data-registry mode
 	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
