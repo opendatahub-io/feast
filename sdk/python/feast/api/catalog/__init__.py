@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation helpers. Does not mount Iceberg REST routes (RHAI-390)."""
+"""Catalog translation helpers plus Iceberg config/error types.
+
+Does not mount routes on RestRegistryServer (RHAI-390). Tests include
+``get_config_router()`` on a dedicated FastAPI app.
+"""
 
 from feast.api.catalog.catalog_utils import (
     CATALOG_PROJECT,
@@ -25,13 +29,41 @@ from feast.api.catalog.catalog_utils import (
     unscoped_name,
     validate_namespace_exists,
 )
+from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.catalog.errors import (
+    BadRequestException,
+    IcebergRESTException,
+    NamespaceAlreadyExistsException,
+    NoSuchNamespaceException,
+    NoSuchTableException,
+    NotImplementedException,
+    ServiceFailureException,
+    TableAlreadyExistsException,
+    missing_required_fields,
+    register_error_handlers,
+)
+from feast.api.catalog.models import DataRegistryConfig, ErrorResponse
 
 __all__ = [
+    "CATALOG_CONFIG_ENDPOINTS",
     "CATALOG_PROJECT",
     "DEFAULT_COLLECTION",
+    "BadRequestException",
+    "DataRegistryConfig",
+    "ErrorResponse",
+    "IcebergRESTException",
+    "NamespaceAlreadyExistsException",
+    "NoSuchNamespaceException",
+    "NoSuchTableException",
+    "NotImplementedException",
+    "ServiceFailureException",
+    "TableAlreadyExistsException",
     "ensure_catalog_project",
+    "get_config_router",
     "list_namespaces",
+    "missing_required_fields",
     "parse_scoped_name",
+    "register_error_handlers",
     "resolve_namespace",
     "scoped_name",
     "unscoped_name",
