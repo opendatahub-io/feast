@@ -18,6 +18,10 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"strconv"
+	"strings"
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/handler"
@@ -119,7 +123,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.isDataRegistryEnabled()).To(BeTrue())
 	})
 
-	It("produces a two-container Deployment with localhost binding, --ignore-paths, and empty FEAST_PROJECT", func() {
+	It("produces a two-container Deployment with --ignore-paths and empty FEAST_PROJECT", func() {
 		setAnnotation("true")
 
 		deploy := feast.initDataRegistryDeploy()
@@ -139,6 +143,8 @@ var _ = Describe("Data Registry", func() {
 
 		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
+		Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(
+			"dataregistry.opendatahub.io/auth-config-revision", "static-sar-v1"))
 
 		// Owner reference
 		Expect(deploy.OwnerReferences).To(HaveLen(1))
@@ -152,8 +158,12 @@ var _ = Describe("Data Registry", func() {
 		feastCtr := deploy.Spec.Template.Spec.Containers[0]
 		Expect(feastCtr.Name).To(Equal(DataRegistryContainerName))
 
-		// Localhost binding: -h 127.0.0.1
-		Expect(feastCtr.Command).To(ContainElements("feast", "serve_registry", "--rest-api", "-h", DataRegistryLocalhostAddr))
+		// REST-only: --grpc defaults to true and --port is the gRPC port. Passing
+		// --rest-api --port 6572 starts both servers on 6572 (EADDRINUSE).
+		Expect(feastCtr.Command).To(ContainElements("feast", "serve_registry", "--no-grpc", "--rest-api", "--rest-port"))
+		Expect(feastCtr.Command).NotTo(ContainElement("-h"))
+		Expect(feastCtr.Command).NotTo(ContainElement("--host"))
+		Expect(feastCtr.Command).NotTo(ContainElement("--port"))
 
 		// No container ports exposed externally (traffic goes through proxy)
 		Expect(feastCtr.Ports).To(BeEmpty())
@@ -163,8 +173,13 @@ var _ = Describe("Data Registry", func() {
 		for _, e := range feastCtr.Env {
 			envMap[e.Name] = e.Value
 		}
-		Expect(envMap).To(HaveKey(TmpFeatureStoreYamlEnvVar))
-		Expect(envMap[TmpFeatureStoreYamlEnvVar]).NotTo(BeEmpty())
+		Expect(envMap).To(HaveKey(FeatureStoreYamlEnvVar))
+		Expect(envMap[FeatureStoreYamlEnvVar]).NotTo(BeEmpty())
+		Expect(envMap).NotTo(HaveKey(TmpFeatureStoreYamlEnvVar))
+		// Proxy is the auth gate; Feast kubernetes auth 401s valid SA tokens.
+		fsYaml, err := base64.StdEncoding.DecodeString(envMap[FeatureStoreYamlEnvVar])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(fsYaml)).To(ContainSubstring("type: no_auth"))
 		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
 		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
@@ -172,13 +187,13 @@ var _ = Describe("Data Registry", func() {
 		// Multi-tenancy: FEAST_PROJECT must be empty for dynamic routing
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, ""))
 
-		// Probes target localhost
+		// TCP probe on the REST port (HTTP /v1/config is not a registry route).
 		expectedProbe := intstr.FromInt32(DataRegistryPort)
 		for _, p := range []*corev1.Probe{feastCtr.ReadinessProbe, feastCtr.LivenessProbe, feastCtr.StartupProbe} {
 			Expect(p).NotTo(BeNil())
-			Expect(p.HTTPGet.Path).To(Equal("/v1/config"))
-			Expect(p.HTTPGet.Port).To(Equal(expectedProbe))
-			Expect(p.HTTPGet.Host).To(Equal(DataRegistryLocalhostAddr))
+			Expect(p.TCPSocket).NotTo(BeNil())
+			Expect(p.TCPSocket.Port).To(Equal(expectedProbe))
+			Expect(p.HTTPGet).To(BeNil())
 		}
 
 		// --- kube-rbac-proxy container ---
@@ -186,12 +201,12 @@ var _ = Describe("Data Registry", func() {
 		Expect(proxyCtr.Name).To(Equal(DataRegistryProxyContainerName))
 		Expect(proxyCtr.Image).To(Equal(DefaultKubeRBACProxyImage))
 		Expect(proxyCtr.Args).To(ContainElements(
-			"--secure-listen-address=0.0.0.0:8443",
-			"--upstream=http://127.0.0.1:6572/",
+			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", DataRegistryProxyPort),
+			fmt.Sprintf("--upstream=http://%s:%d/", DataRegistryLocalhostAddr, DataRegistryPort),
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			"--ignore-paths=/v1/search,/v1/projects",
+			"--ignore-paths=/projects,/search,/api/v1/projects,/api/v1/search",
 		))
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
 			Name: "https", ContainerPort: DataRegistryProxyPort, Protocol: corev1.ProtocolTCP,
@@ -209,23 +224,31 @@ var _ = Describe("Data Registry", func() {
 		Expect(proxyCtr.LivenessProbe).NotTo(BeNil())
 		Expect(proxyCtr.LivenessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(DataRegistryProxyPort)))
 
-		// Pod volumes
+		// Pod volumes: auth, tls, and emptyDir for the file registry path.
 		volumes := deploy.Spec.Template.Spec.Volumes
-		Expect(volumes).To(HaveLen(2))
+		Expect(volumes).To(HaveLen(3))
 
-		var authVol, tlsVol *corev1.Volume
+		var authVol, tlsVol, dataVol *corev1.Volume
 		for i := range volumes {
 			switch volumes[i].Name {
 			case "auth-config":
 				authVol = &volumes[i]
 			case "tls-certs":
 				tlsVol = &volumes[i]
+			case strings.TrimPrefix(EphemeralPath, "/"):
+				dataVol = &volumes[i]
 			}
 		}
 		Expect(authVol).NotTo(BeNil())
 		Expect(authVol.ConfigMap.Name).To(Equal(feast.dataRegistryAuthCMName()))
 		Expect(tlsVol).NotTo(BeNil())
 		Expect(tlsVol.Secret.SecretName).To(Equal(feast.dataRegistryTlsSecretName()))
+		Expect(dataVol).NotTo(BeNil())
+		Expect(dataVol.EmptyDir).NotTo(BeNil())
+		Expect(feastCtr.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+			Name:      strings.TrimPrefix(EphemeralPath, "/"),
+			MountPath: EphemeralPath,
+		}))
 	})
 
 	It("creates an HTTPS Service targeting the proxy port", func() {
@@ -254,7 +277,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(svc.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
 
-	It("creates an auth.yaml ConfigMap with per-resource regex mapping", func() {
+	It("creates an auth.yaml ConfigMap with static SAR resourceAttributes", func() {
 		setAnnotation("true")
 
 		cm := feast.initDataRegistryAuthCM()
@@ -264,15 +287,13 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
 
 		authContent := cm.Data["auth.yaml"]
+		Expect(authContent).To(ContainSubstring("namespace: " + featureStore.Namespace))
 		Expect(authContent).To(ContainSubstring("dataregistry.opendatahub.io"))
-		Expect(authContent).To(ContainSubstring("registries"))
-		// Regex path-based resource rewrites
-		Expect(authContent).To(ContainSubstring("rewrites"))
-		Expect(authContent).To(ContainSubstring("byHTTPPath"))
-		Expect(authContent).To(ContainSubstring("tables"))
-		Expect(authContent).To(ContainSubstring("volumes"))
-		Expect(authContent).To(ContainSubstring("generic-tables"))
-		Expect(authContent).To(ContainSubstring("namespaces"))
+		Expect(authContent).To(ContainSubstring("resource: registries"))
+		// kube-rbac-proxy v0.18.1 returns 400 if rewrites is set without
+		// byQueryParameter / byHttpHeader. byHTTPPath is not a supported key.
+		Expect(authContent).NotTo(ContainSubstring("rewrites"))
+		Expect(authContent).NotTo(ContainSubstring("byHTTPPath"))
 
 		// Owner reference
 		Expect(cm.OwnerReferences).To(HaveLen(1))
@@ -413,6 +434,90 @@ var _ = Describe("Data Registry", func() {
 		}
 	})
 
+	It("uses DataRegistryPort constant for --rest-port, not a hardcoded string", func() {
+		setAnnotation("true")
+
+		deploy := feast.initDataRegistryDeploy()
+		Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
+
+		feastCtr := deploy.Spec.Template.Spec.Containers[0]
+		expectedPort := strconv.Itoa(int(DataRegistryPort))
+		Expect(feastCtr.Command).To(ContainElement(expectedPort), "--rest-port flag should use DataRegistryPort constant")
+
+		proxyCtr := deploy.Spec.Template.Spec.Containers[1]
+		expectedUpstream := fmt.Sprintf("--upstream=http://%s:%d/", DataRegistryLocalhostAddr, DataRegistryPort)
+		expectedListen := fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", DataRegistryProxyPort)
+		Expect(proxyCtr.Args).To(ContainElement(expectedUpstream))
+		Expect(proxyCtr.Args).To(ContainElement(expectedListen))
+	})
+
+	It("sets resource requests and limits on the kube-rbac-proxy container", func() {
+		setAnnotation("true")
+
+		deploy := feast.initDataRegistryDeploy()
+		Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
+
+		proxyCtr := deploy.Spec.Template.Spec.Containers[1]
+		Expect(proxyCtr.Name).To(Equal(DataRegistryProxyContainerName))
+
+		Expect(proxyCtr.Resources.Requests).NotTo(BeNil(), "proxy should have resource requests")
+		Expect(proxyCtr.Resources.Limits).NotTo(BeNil(), "proxy should have resource limits")
+		Expect(proxyCtr.Resources.Requests.Cpu().String()).To(Equal(DefaultKubeRBACProxyCPURequest))
+		Expect(proxyCtr.Resources.Requests.Memory().String()).To(Equal(DefaultKubeRBACProxyMemoryRequest))
+		Expect(proxyCtr.Resources.Limits.Cpu().String()).To(Equal(DefaultKubeRBACProxyCPULimit))
+		Expect(proxyCtr.Resources.Limits.Memory().String()).To(Equal(DefaultKubeRBACProxyMemoryLimit))
+	})
+
+	It("rejects a second data-registry-enabled FeatureStore CR (singleton enforcement)", func() {
+		setAnnotation("true")
+
+		otherFS := &feastdevv1.FeatureStore{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dr-otherstore",
+				Namespace: DefaultNs,
+				Annotations: map[string]string{
+					DataRegistryAnnotation: "true",
+				},
+			},
+			Spec: feastdevv1.FeatureStoreSpec{
+				FeastProject: "other-registry",
+				Services: &feastdevv1.FeatureStoreServices{
+					Registry: &feastdevv1.Registry{
+						Local: &feastdevv1.LocalRegistryConfig{
+							Server: &feastdevv1.RegistryServerConfigs{
+								ServerConfigs: feastdevv1.ServerConfigs{
+									ContainerConfigs: feastdevv1.ContainerConfigs{
+										DefaultCtrConfigs: feastdevv1.DefaultCtrConfigs{
+											Image: ptr.To("test-image"),
+										},
+									},
+								},
+								GRPC:    ptr.To(true),
+								RestAPI: ptr.To(false),
+							},
+						},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, otherFS)).To(Succeed())
+
+		err := feast.validateDataRegistrySingleton()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("already enabled"))
+
+		Expect(k8sClient.Delete(ctx, otherFS)).To(Succeed())
+	})
+
+	It("validates the auth.yaml apiGroup matches the dataRegistryAPIGroup constant", func() {
+		setAnnotation("true")
+
+		cm := feast.initDataRegistryAuthCM()
+		Expect(feast.setDataRegistryAuthConfig(cm)).To(Succeed())
+
+		Expect(cm.Data["auth.yaml"]).To(ContainSubstring(dataRegistryAPIGroup))
+	})
+
 	It("creates and cleans up the full resource set via deployDataRegistry", func() {
 		isOpenShift = false
 		drKey := types.NamespacedName{
@@ -444,11 +549,12 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Get(ctx, drKey, svc)).To(Succeed())
 		Expect(svc.Spec.Ports[0].TargetPort).To(Equal(intstr.FromInt32(DataRegistryProxyPort)))
 
-		// Auth ConfigMap exists with regex rewrites
+		// Auth ConfigMap exists with static SAR attributes (no rewrites)
 		cm := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, cmKey, cm)).To(Succeed())
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
-		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("rewrites"))
+		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("resource: registries"))
+		Expect(cm.Data["auth.yaml"]).NotTo(ContainSubstring("rewrites"))
 
 		// ClusterRoles: all three (viewer, editor, admin) exist with all pseudo-resources
 		expectedResources := ConsistOf("registries", "namespaces", "tables", "volumes", "generic-tables")
@@ -515,5 +621,104 @@ var _ = Describe("Data Registry", func() {
 		// Auth-delegator CRB cleaned up
 		err = k8sClient.Get(ctx, crbKey, &rbacv1.ClusterRoleBinding{})
 		Expect(apierrors.IsNotFound(err) || err == nil).To(BeTrue())
+	})
+
+	It("cleanupOnDeletion path removes cluster-scoped resources", func() {
+		setAnnotation("true")
+
+		// Create cluster-scoped resources
+		Expect(feast.deployDataRegistryClusterRoles()).To(Succeed())
+		Expect(feast.deployDataRegistryAuthDelegatorBinding()).To(Succeed())
+
+		// Verify they exist
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			cr := &rbacv1.ClusterRole{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, cr)).To(Succeed())
+		}
+		crb := &rbacv1.ClusterRoleBinding{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryAuthDelegatorCRBName()}, crb)).To(Succeed())
+
+		// Simulate the cleanupOnDeletion path: build a stub FeastServices
+		// with only name/namespace (like the controller does when the CR is gone)
+		stubFeast := &FeastServices{
+			Handler: handler.FeastHandler{
+				Client:  k8sClient,
+				Context: ctx,
+				Scheme:  k8sClient.Scheme(),
+				FeatureStore: &feastdevv1.FeatureStore{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      featureStore.Name,
+						Namespace: featureStore.Namespace,
+					},
+				},
+			},
+		}
+
+		Expect(stubFeast.CleanupDataRegistryClusterRoles()).To(Succeed())
+		Expect(stubFeast.CleanupDataRegistryAuthDelegatorBinding()).To(Succeed())
+
+		// All cluster-scoped resources must be gone
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, &rbacv1.ClusterRole{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "ClusterRole %s should be deleted", suffix)
+		}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryAuthDelegatorCRBName()}, &rbacv1.ClusterRoleBinding{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "auth-delegator CRB should be deleted")
+	})
+
+	It("mode transition: standard resources are cleaned up when entering data-registry mode", func() {
+		isOpenShift = false
+
+		// Simulate standard-mode resources by creating a Deployment and Service
+		// that would normally exist in standard mode.
+		feastDeploy := feast.initFeastDeploy()
+		feastDeploy.Spec = appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "feast"},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "feast"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "feast", Image: "test"}}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, feastDeploy)).To(Succeed())
+
+		standardDeployKey := types.NamespacedName{
+			Name:      feastDeploy.Name,
+			Namespace: feastDeploy.Namespace,
+		}
+
+		// Verify standard Deployment exists
+		Expect(k8sClient.Get(ctx, standardDeployKey, &appsv1.Deployment{})).To(Succeed())
+
+		// Enable data-registry mode
+		setAnnotation("true")
+
+		// Create a SA so deployDataRegistryMode doesn't fail on SA creation
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		// Run deployDataRegistryMode
+		Expect(feast.deployDataRegistryMode()).To(Succeed())
+
+		// Standard Deployment should be deleted or marked for deletion
+		err := k8sClient.Get(ctx, standardDeployKey, &appsv1.Deployment{})
+		deleted := apierrors.IsNotFound(err)
+		if !deleted {
+			d := &appsv1.Deployment{}
+			_ = k8sClient.Get(ctx, standardDeployKey, d)
+			deleted = d.DeletionTimestamp != nil
+		}
+		Expect(deleted).To(BeTrue(), "standard Deployment should be removed in data-registry mode")
+
+		// Data-registry Deployment should exist
+		drKey := types.NamespacedName{
+			Name:      GetFeastName(featureStore) + "-" + string(DataRegistryFeastType),
+			Namespace: typeNamespacedName.Namespace,
+		}
+		drDeploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, drKey, drDeploy)).To(Succeed())
+		Expect(drDeploy.Spec.Template.Spec.Containers).To(HaveLen(2))
 	})
 })

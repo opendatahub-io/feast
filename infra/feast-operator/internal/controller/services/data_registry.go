@@ -17,13 +17,18 @@ limitations under the License.
 package services
 
 import (
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
+	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -37,6 +42,53 @@ import (
 func (feast *FeastServices) isDataRegistryEnabled() bool {
 	annotations := feast.Handler.FeatureStore.GetAnnotations()
 	return annotations[DataRegistryAnnotation] == "true"
+}
+
+// validateDataRegistryAnnotation checks for common annotation misconfigurations
+// (e.g. "True", "yes", "1") and logs a warning so operators can spot typos.
+func (feast *FeastServices) validateDataRegistryAnnotation() {
+	logger := log.FromContext(feast.Handler.Context)
+	annotations := feast.Handler.FeatureStore.GetAnnotations()
+	val, exists := annotations[DataRegistryAnnotation]
+	if !exists {
+		return
+	}
+	if val == "true" {
+		return
+	}
+	lower := strings.ToLower(val)
+	if lower == "true" || val == "yes" || val == "1" {
+		logger.Info("Data registry annotation has a non-canonical value; only exact \"true\" enables it",
+			"annotation", DataRegistryAnnotation, "value", val, "hint", "use \"true\" (lowercase)")
+	}
+}
+
+// validateDataRegistrySingleton ensures only one FeatureStore CR cluster-wide
+// has the data-registry annotation enabled. Returns an error if another CR
+// already has it, preventing race conditions on the shared PostgreSQL backend
+// and duplicate cluster-scoped resources.
+func (feast *FeastServices) validateDataRegistrySingleton() error {
+	var list feastdevv1.FeatureStoreList
+	if err := feast.Handler.Client.List(feast.Handler.Context, &list); err != nil {
+		return fmt.Errorf("failed to list FeatureStore CRs for singleton check: %w", err)
+	}
+	self := feast.Handler.FeatureStore
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.Name == self.Name && item.Namespace == self.Namespace {
+			continue
+		}
+		if item.DeletionTimestamp != nil {
+			continue
+		}
+		if item.Annotations[DataRegistryAnnotation] == "true" {
+			return fmt.Errorf(
+				"data registry is already enabled on FeatureStore %s/%s; only one data-registry instance is allowed cluster-wide",
+				item.Namespace, item.Name,
+			)
+		}
+	}
+	return nil
 }
 
 // deployDataRegistry creates (or updates) the full data-registry resource set
@@ -150,6 +202,11 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: labels,
+				Annotations: map[string]string{
+					// kube-rbac-proxy reads auth.yaml only at process start.
+					// Bump this when SAR config semantics change so pods roll.
+					"dataregistry.opendatahub.io/auth-config-revision": "static-sar-v1",
+				},
 			},
 			Spec: corev1.PodSpec{
 				ServiceAccountName: feast.initFeastSA().Name,
@@ -184,13 +241,16 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 	proxyCtr := feast.buildKubeRBACProxyContainer()
 
 	deploy.Spec.Template.Spec.Containers = []corev1.Container{feastCtr, proxyCtr}
+	// Generated feature_store.yaml points the file registry at /feast-data/registry.db.
+	feast.mountEmptyDirVolumes(&deploy.Spec.Template.Spec)
 
 	return controllerutil.SetControllerReference(cr, deploy, feast.Handler.Scheme)
 }
 
 // buildDataRegistryContainer returns the feast-server container spec.
-// Binds strictly to loopback so all cluster traffic must go through the proxy.
-// FEAST_PROJECT is set to empty string to enable multi-project dynamic routing.
+// feast serve_registry (feature-server 0.66.x) has no --host/-h flag and binds
+// uvicorn to 0.0.0.0. Do not pass a host flag; kube-rbac-proxy remains the
+// cluster-facing listener. FEAST_PROJECT is empty for multi-project routing.
 func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, error) {
 	image := getFeatureServerImage()
 
@@ -199,11 +259,12 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		return corev1.Container{}, err
 	}
 
+	// TCP probe: REST /v1/config does not exist, and kubernetes auth (the
+	// operator default) would 401 any HTTP path without a token. Kubelet
+	// treats 401/404 as probe failure, so the pod never becomes Ready.
 	probeHandler := corev1.ProbeHandler{
-		HTTPGet: &corev1.HTTPGetAction{
-			Path: "/v1/config",
+		TCPSocket: &corev1.TCPSocketAction{
 			Port: intstr.FromInt32(DataRegistryPort),
-			Host: DataRegistryLocalhostAddr,
 		},
 	}
 
@@ -217,12 +278,15 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		Command: []string{
 			feastCommand,
 			"serve_registry",
+			"--no-grpc",
 			"--rest-api",
-			"-h", DataRegistryLocalhostAddr,
-			"-p", "6572",
+			"--rest-port", strconv.Itoa(int(DataRegistryPort)),
 		},
 		Env: []corev1.EnvVar{
-			{Name: TmpFeatureStoreYamlEnvVar, Value: fsYamlB64},
+			// Python create_feature_store() reads FEATURE_STORE_YAML_BASE64 and
+			// materializes feature_store.yaml itself. TMP_ is only consumed by
+			// the standard feast-init container, which this pod does not run.
+			{Name: FeatureStoreYamlEnvVar, Value: fsYamlB64},
 			{Name: "FEAST_USAGE", Value: "False"},
 			{Name: DataCatalogEnabledEnvVar, Value: "true"},
 			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
@@ -254,17 +318,17 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 		Name:  DataRegistryProxyContainerName,
 		Image: getKubeRBACProxyImage(),
 		Args: []string{
-			"--secure-listen-address=0.0.0.0:8443",
-			"--upstream=http://127.0.0.1:6572/",
+			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", DataRegistryProxyPort),
+			fmt.Sprintf("--upstream=http://%s:%d/", DataRegistryLocalhostAddr, DataRegistryPort),
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /v1/search and /v1/projects bypass proxy auth because they require
+			// /projects and /search bypass proxy auth because they require
 			// server-side per-namespace SSAR filtering that cannot be expressed as a
 			// single resource SAR. The Feast server reads the bearer token from the
 			// request, performs TokenReview + per-namespace SubjectAccessReview, and
 			// returns only authorized results.
-			"--ignore-paths=/v1/search,/v1/projects",
+			"--ignore-paths=/projects,/search,/api/v1/projects,/api/v1/search",
 			"--logtostderr=true",
 			"--v=3",
 		},
@@ -273,6 +337,16 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 				Name:          "https",
 				ContainerPort: DataRegistryProxyPort,
 				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(DefaultKubeRBACProxyCPURequest),
+				corev1.ResourceMemory: resource.MustParse(DefaultKubeRBACProxyMemoryRequest),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(DefaultKubeRBACProxyCPULimit),
+				corev1.ResourceMemory: resource.MustParse(DefaultKubeRBACProxyMemoryLimit),
 			},
 		},
 		VolumeMounts: []corev1.VolumeMount{
@@ -409,32 +483,25 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cr := feast.Handler.FeatureStore
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
-	// Path-based resource mapping: the proxy matches incoming URL paths against
-	// these regex patterns and issues SubjectAccessReview checks with the
-	// corresponding resource type. Patterns are evaluated top-to-bottom; the
-	// first match wins. The /v1/search endpoint is excluded via --ignore-paths
-	// because cross-namespace search cannot be scoped to a single resource.
+	// Static SAR attributes are the coarse auth gate for Feast REST
+	// (/entities, /feature_views, …). kube-rbac-proxy maps GET→get and
+	// POST→create on this resource. /projects and /search bypass this gate
+	// via --ignore-paths and use server-side SSAR instead.
+	//
+	// Do not set `rewrites`. kube-rbac-proxy v0.18.1 only supports
+	// byQueryParameter and byHttpHeader. An empty rewrite (including the
+	// unsupported byHTTPPath key) produces no SAR attributes and the proxy
+	// returns HTTP 400 for every authenticated request:
+	// "Bad Request. The request or configuration is malformed."
+	//
+	// Namespace must be set: RoleBindings grant namespaced access. An empty
+	// namespace makes SAR cluster-scoped, which would not match the
+	// RoleBinding.
 	authYaml := `authorization:
   resourceAttributes:
+    namespace: ` + cr.Namespace + `
     apiGroup: ` + dataRegistryAPIGroup + `
     resource: registries
-  rewrites:
-    byHTTPPath:
-      - path: "/v1/[^/]+/namespaces/[^/]+/tables.*"
-        resourceAttributes:
-          resource: tables
-      - path: "/v1/[^/]+/namespaces/[^/]+/volumes.*"
-        resourceAttributes:
-          resource: volumes
-      - path: "/v1/[^/]+/namespaces/[^/]+/generic-tables.*"
-        resourceAttributes:
-          resource: generic-tables
-      - path: "/v1/[^/]+/namespaces.*"
-        resourceAttributes:
-          resource: namespaces
-      - path: "/v1/[^/]+/labels.*"
-        resourceAttributes:
-          resource: registries
 `
 
 	cm.Data = map[string]string{

@@ -48,7 +48,18 @@ func (feast *FeastServices) getServiceFeatureStoreYaml() ([]byte, error) {
 
 func (feast *FeastServices) getServiceRepoConfig() (RepoConfig, error) {
 	odhCaBundleExists := feast.GetCustomCertificatesBundle().IsDefined
-	return getServiceRepoConfig(feast.Handler.FeatureStore, feast.extractConfigFromSecret, feast.extractConfigFromConfigMap, odhCaBundleExists)
+	repoConfig, err := getServiceRepoConfig(feast.Handler.FeatureStore, feast.extractConfigFromSecret, feast.extractConfigFromConfigMap, odhCaBundleExists)
+	if err != nil {
+		return repoConfig, err
+	}
+	if feast.isDataRegistryEnabled() {
+		// kube-rbac-proxy already authenticated and authorized the caller.
+		// Feast kubernetes auth TokenReviews the same bearer token and, on
+		// 0.66.x, raises "Invalid or expired access token" for valid SA
+		// tokens — turning a proxy-allowed GET into HTTP 401.
+		repoConfig.AuthzConfig = AuthzConfig{Type: NoAuthAuthType}
+	}
+	return repoConfig, nil
 }
 
 func (feast *FeastServices) getLineageFeatureStoreYamlBase64() (string, error) {
