@@ -545,19 +545,22 @@ class SqlRegistry(CachingRegistry):
                 SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
             return
 
+        # Compile String(255) with the engine dialect so ALTER matches table metadata
+        # across SQLite / PostgreSQL / MySQL (avoid hard-coding VARCHAR only).
+        type_sql = str(String(255).compile(dialect=engine.dialect))
         with engine.begin() as conn:
             if "column:namespace" in gaps:
                 conn.execute(
                     text(
-                        "ALTER TABLE saved_datasets ADD COLUMN namespace "
-                        "VARCHAR(255) DEFAULT ''"
+                        f"ALTER TABLE saved_datasets ADD COLUMN namespace "
+                        f"{type_sql} DEFAULT ''"
                     )
                 )
             if "column:collection" in gaps:
                 conn.execute(
                     text(
-                        "ALTER TABLE saved_datasets ADD COLUMN collection "
-                        "VARCHAR(255) DEFAULT ''"
+                        f"ALTER TABLE saved_datasets ADD COLUMN collection "
+                        f"{type_sql} DEFAULT ''"
                     )
                 )
             if "index:idx_saved_datasets_project_namespace" in gaps:
@@ -1850,20 +1853,29 @@ class SqlRegistry(CachingRegistry):
                         # Check if the object has actually changed (same as feature views)
                         existing_obj = type(obj).from_proto(deserialized_proto)
                         if existing_obj == obj:
-                            return  # No changes, exit early
+                            # Proto unchanged — still heal denormalized SQL columns when
+                            # they drift from extra_values (e.g. empty after additive
+                            # migration, or stale values left by an older writer).
+                            if not extra_values or all(
+                                row._mapping.get(key) == value
+                                for key, value in extra_values.items()
+                            ):
+                                return
 
-                        # Object has changed, preserve created_timestamp, update last_updated_timestamp
-                        obj.created_timestamp = deserialized_proto.meta.created_timestamp.ToDatetime().replace(
-                            tzinfo=timezone.utc
-                        )
-                        if hasattr(obj, "last_updated_timestamp"):
-                            obj.last_updated_timestamp = update_datetime
-                        if isinstance(obj, (FeatureView, StreamFeatureView)):
-                            obj.update_materialization_intervals(
-                                type(obj)
-                                .from_proto(deserialized_proto)
-                                .materialization_intervals
+                        # Object has changed (or denorm columns need repair): preserve
+                        # created_timestamp, update last_updated_timestamp when proto path ran.
+                        if existing_obj != obj:
+                            obj.created_timestamp = deserialized_proto.meta.created_timestamp.ToDatetime().replace(
+                                tzinfo=timezone.utc
                             )
+                            if hasattr(obj, "last_updated_timestamp"):
+                                obj.last_updated_timestamp = update_datetime
+                            if isinstance(obj, (FeatureView, StreamFeatureView)):
+                                obj.update_materialization_intervals(
+                                    type(obj)
+                                    .from_proto(deserialized_proto)
+                                    .materialization_intervals
+                                )
 
                 values = {
                     proto_field_name: obj.to_proto().SerializeToString(),
