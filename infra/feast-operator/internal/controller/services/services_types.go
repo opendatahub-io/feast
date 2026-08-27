@@ -75,16 +75,17 @@ const (
 	DataRegistryLocalhostAddr       = "127.0.0.1"
 
 	// kube-rbac-proxy sidecar for Data Registry authentication enforcement.
-	kubeRBACProxyImageVar                = "RELATED_IMAGE_KUBE_RBAC_PROXY"
+	// RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE is the platform-shared related
+	// image already present in the Open Data Hub operator CSV, so disconnected
+	// installs inject the mirrored digest. Standalone installs fall back to
+	// DefaultKubeRBACProxyImage when the env var is unset.
+	kubeRBACProxyImageVar                = "RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE"
 	DataRegistryProxyContainerName       = "kube-rbac-proxy"
 	DataRegistryProxyPort          int32 = 8443
 	dataRegistryAuthConfigSuffix         = "-data-registry-auth"
 	dataRegistryClusterRoleSuffix        = "-data-registry"
 	dataRegistryTlsSecretSuffix          = "-data-registry-tls"
 
-	// In disconnected environments RELATED_IMAGE_KUBE_RBAC_PROXY is set by
-	// the OLM CSV to a mirrored registry. The default uses quay.io which is
-	// generally accessible and included in ImageContentSourcePolicy mirrors.
 	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 
 	HttpPort              = 80
