@@ -79,7 +79,7 @@ spec:
           value: feast:latest
         - name: RELATED_IMAGE_CRON_JOB
           value: origin-cli:latest
-        - name: RELATED_IMAGE_KUBE_RBAC_PROXY
+        - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
           value: quay.io/brancz/kube-rbac-proxy:v0.18.1
         # Injected from params.env via kustomize replacements (ODH/RHOAI overlays).
         # Open Data Hub operator sets this from GatewayConfig when the cluster uses external OIDC.
