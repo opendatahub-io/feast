@@ -46,10 +46,16 @@ NAMESPACE_SEPARATOR = "\x1f"
 def _require_part(label: str, value: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{label} must be a string")
-    if value != value.strip() or any(c.isspace() for c in value):
-        raise ValueError(f"{label} must not contain whitespace (got {value!r})")
     if not value:
         raise ValueError(f"{label} must be a non-empty string")
+    if value != value.strip():
+        raise ValueError(
+            f"{label} must not have leading/trailing whitespace (got {value!r})"
+        )
+    if any(c.isspace() for c in value):
+        raise ValueError(
+            f"{label} must not contain internal whitespace (got {value!r})"
+        )
     if SCOPE_SEP in value:
         raise ValueError(f"{label} must not contain {SCOPE_SEP!r} (got {value!r})")
     return value
