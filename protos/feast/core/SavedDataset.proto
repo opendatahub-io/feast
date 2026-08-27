@@ -79,8 +79,8 @@ message SavedDatasetColumn {
   string description = 3;
 
   // Whether the column accepts NULL values (OpenAPI SchemaField.nullable).
-  // SDK defaults this to true when unset by callers.
-  bool nullable = 4;
+  // optional so unset ≠ false: absent means default true (OpenAPI / SDK).
+  optional bool nullable = 4;
 }
 
 message SavedDatasetStorage {

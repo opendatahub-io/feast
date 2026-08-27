@@ -2,10 +2,11 @@ import logging
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Union, cast
+from typing import Any, Callable, Dict, Generator, List, Literal, Optional, Union, cast
 
 from pydantic import StrictInt, StrictStr, field_validator
 from sqlalchemy import (  # type: ignore
@@ -350,9 +351,9 @@ class FeastRegistryHierarchySchemaError(Exception):
     def __init__(self, gaps: List[str], engine_role: str = "registry") -> None:
         super().__init__(
             f"SQL registry {engine_role} is missing saved_datasets hierarchy schema "
-            f"({', '.join(gaps)}). Migrate the writable registry with "
-            "schema_mode='auto' (or apply ALTER TABLE / CREATE INDEX manually), "
-            "and ensure any read replica is migrated before startup."
+            f"({', '.join(gaps)}). Run 'feast registry create-schema' (adds columns "
+            "on existing tables) or use schema_mode='auto', and ensure any read "
+            "replica is migrated before startup."
         )
 
 
@@ -384,11 +385,20 @@ class SqlRegistry(CachingRegistry):
             # Additive migration for existing registries — write engine only.
             self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
         elif registry_config.schema_mode == "verify":
+            # Tables + hierarchy columns/index must already exist. verify never
+            # ALTERs; get/apply would break on a legacy saved_datasets table if we
+            # only checked table names (list has a proto fallback; get does not).
             self._verify_schema(self.write_engine)
+            self._require_saved_dataset_hierarchy_columns(
+                self.write_engine, engine_role="write engine"
+            )
             if self.read_engine is not self.write_engine:
                 self._verify_schema(self.read_engine)
-        # Hierarchy SQL columns: hard-require only when catalog is enabled.
-        # Non-catalog registries warn and fall back to proto-side filtering.
+                self._require_saved_dataset_hierarchy_columns(
+                    self.read_engine, engine_role="read engine"
+                )
+        # Hierarchy SQL columns: hard-require when catalog is enabled (any mode).
+        # Non-catalog auto/skip warn and fall back to proto-side filtering.
         self._has_hierarchy_columns = self._resolve_saved_dataset_hierarchy_schema(
             self.write_engine, engine_role="write engine"
         )
@@ -487,8 +497,8 @@ class SqlRegistry(CachingRegistry):
         logger.warning(
             "saved_datasets is missing hierarchy schema (%s); "
             "namespace/collection SQL filters unavailable until migrated "
-            "(schema_mode='auto' or manual ALTER). Falling back to proto-side "
-            "filtering.",
+            "(schema_mode='auto' or 'feast registry create-schema'). "
+            "Falling back to proto-side filtering.",
             ", ".join(gaps),
         )
         return False
@@ -525,6 +535,57 @@ class SqlRegistry(CachingRegistry):
                 )
 
     @staticmethod
+    @contextmanager
+    def _hierarchy_migration_lock(
+        engine: Engine,
+    ) -> Generator[None, None, None]:
+        """Serialize hierarchy DDL across processes sharing one registry DB.
+
+        Multiple SqlRegistry constructors (catalog, team registry, feature-server,
+        feast apply) can race on the first rollout: two inspect → both ALTER → one
+        fails and that process does not start. PostgreSQL uses advisory locks;
+        MySQL/MariaDB use GET_LOCK. SQLite has no cross-process lock (local file).
+        """
+        if engine.dialect.name == "postgresql":
+            with engine.connect() as lock_conn:
+                lock_conn.execute(
+                    text(
+                        "SELECT pg_advisory_lock(hashtext('feast_saved_datasets_hierarchy'))"
+                    )
+                )
+                lock_conn.commit()
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text(
+                            "SELECT pg_advisory_unlock("
+                            "hashtext('feast_saved_datasets_hierarchy'))"
+                        )
+                    )
+                    lock_conn.commit()
+        elif engine.dialect.name in ("mysql", "mariadb"):
+            with engine.connect() as lock_conn:
+                got = lock_conn.execute(
+                    text("SELECT GET_LOCK('feast_saved_datasets_hierarchy', 60)")
+                ).scalar()
+                lock_conn.commit()
+                if not got:
+                    raise RuntimeError(
+                        "Could not acquire MySQL GET_LOCK for saved_datasets "
+                        "hierarchy migration within 60s"
+                    )
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text("SELECT RELEASE_LOCK('feast_saved_datasets_hierarchy')")
+                    )
+                    lock_conn.commit()
+        else:
+            yield
+
+    @staticmethod
     def _ensure_saved_dataset_hierarchy_columns(engine: Engine) -> None:
         """Add namespace/collection columns + index on existing saved_datasets tables.
 
@@ -533,45 +594,71 @@ class SqlRegistry(CachingRegistry):
         SQL-backed namespace filtering works. Safe/no-op when columns already exist.
         After adding columns (or when empty defaults remain), backfill from
         ``saved_dataset_proto`` only for rows with empty hierarchy SQL values.
-        Intended for the writable registry engine only; call only when
-        ``schema_mode == "auto"``.
+
+        Used by ``schema_mode=auto`` startup and by ``feast registry create-schema``.
+        Takes a Postgres advisory lock (or MySQL ``GET_LOCK``) and uses
+        dialect-appropriate idempotent DDL so concurrent registry processes on a
+        shared DB do not fail the second ALTER.
         """
-        gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
-        if not gaps:
-            # Columns may already exist from a prior migration that left empty
-            # defaults — heal only those empty SQL values from proto.
-            inspector = sa_inspect(engine)
-            if "saved_datasets" in set(inspector.get_table_names()):
+        with SqlRegistry._hierarchy_migration_lock(engine):
+            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+            if not gaps:
+                # Columns may already exist from a prior migration that left empty
+                # defaults — heal only those empty SQL values from proto.
+                inspector = sa_inspect(engine)
+                if "saved_datasets" in set(inspector.get_table_names()):
+                    SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
+                return
+
+            # Compile String(255) with the engine dialect so ALTER matches table metadata
+            # across SQLite / PostgreSQL / MySQL (avoid hard-coding VARCHAR only).
+            type_sql = str(String(255).compile(dialect=engine.dialect))
+            # Re-check gaps after the lock (another process may have migrated).
+            gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
+            if not gaps:
                 SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
-            return
+                return
 
-        # Compile String(255) with the engine dialect so ALTER matches table metadata
-        # across SQLite / PostgreSQL / MySQL (avoid hard-coding VARCHAR only).
-        type_sql = str(String(255).compile(dialect=engine.dialect))
-        with engine.begin() as conn:
-            if "column:namespace" in gaps:
-                conn.execute(
-                    text(
-                        f"ALTER TABLE saved_datasets ADD COLUMN namespace "
-                        f"{type_sql} DEFAULT ''"
-                    )
-                )
-            if "column:collection" in gaps:
-                conn.execute(
-                    text(
-                        f"ALTER TABLE saved_datasets ADD COLUMN collection "
-                        f"{type_sql} DEFAULT ''"
-                    )
-                )
-            if "index:idx_saved_datasets_project_namespace" in gaps:
-                conn.execute(
-                    text(
-                        "CREATE INDEX idx_saved_datasets_project_namespace "
-                        "ON saved_datasets (project_id, namespace)"
-                    )
-                )
+            with engine.begin() as conn:
+                # PostgreSQL supports ADD COLUMN IF NOT EXISTS; SQLite/MySQL do not.
+                # Gaps re-check + PG advisory / MySQL GET_LOCK make plain ADD safe.
+                for col in ("namespace", "collection"):
+                    if f"column:{col}" not in gaps:
+                        continue
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE saved_datasets ADD COLUMN IF NOT EXISTS "
+                                f"{col} {type_sql} DEFAULT ''"
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE saved_datasets ADD COLUMN "
+                                f"{col} {type_sql} DEFAULT ''"
+                            )
+                        )
+                if "index:idx_saved_datasets_project_namespace" in gaps:
+                    # PostgreSQL/SQLite support IF NOT EXISTS; MySQL does not —
+                    # single-flight lock above makes plain CREATE INDEX safe there.
+                    if engine.dialect.name in ("mysql", "mariadb"):
+                        conn.execute(
+                            text(
+                                "CREATE INDEX idx_saved_datasets_project_namespace "
+                                "ON saved_datasets (project_id, namespace)"
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                "CREATE INDEX IF NOT EXISTS "
+                                "idx_saved_datasets_project_namespace "
+                                "ON saved_datasets (project_id, namespace)"
+                            )
+                        )
 
-        SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
+            SqlRegistry._backfill_saved_dataset_hierarchy_columns(engine)
 
     @staticmethod
     def _warn_if_narrow_blob_columns(

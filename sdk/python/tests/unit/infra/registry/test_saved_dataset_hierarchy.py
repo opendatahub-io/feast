@@ -241,6 +241,21 @@ def test_saved_dataset_column_proto_round_trip():
     assert SavedDatasetColumn.from_proto(defaulted.to_proto()).nullable is True
 
 
+def test_saved_dataset_column_nullable_absent_defaults_true():
+    """Unset optional proto bool must not become False (OpenAPI default true)."""
+    from feast.protos.feast.core.SavedDataset_pb2 import (
+        SavedDatasetColumn as SavedDatasetColumnProto,
+    )
+
+    unset = SavedDatasetColumnProto(name="x", type="string")
+    assert not unset.HasField("nullable")
+    assert SavedDatasetColumn.from_proto(unset).nullable is True
+
+    explicit_false = SavedDatasetColumnProto(name="y", type="string", nullable=False)
+    assert explicit_false.HasField("nullable")
+    assert SavedDatasetColumn.from_proto(explicit_false).nullable is False
+
+
 def test_sql_hierarchy_columns_match_proto_after_apply(sqlite_registry):
     """Denormalized SQL columns must stay in sync with proto (source of truth)."""
     dataset = _make_saved_dataset(
@@ -379,8 +394,8 @@ def test_schema_mode_skip_does_not_run_ensure(tmp_path):
 
 
 def test_schema_mode_verify_raises_when_hierarchy_missing(tmp_path, monkeypatch):
-    """verify must not ALTER; with catalog enabled, missing hierarchy fails startup."""
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    """verify must not ALTER; missing hierarchy fails startup (any catalog mode)."""
+    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
     db_file = tmp_path / "verify_legacy.db"
     db_url = f"sqlite:///{db_file}"
     engine = create_engine(db_url)
@@ -400,39 +415,8 @@ def test_schema_mode_verify_raises_when_hierarchy_missing(tmp_path, monkeypatch)
         SqlRegistry(config, "test_project", None)
 
 
-def test_schema_mode_verify_legacy_starts_without_catalog(tmp_path, monkeypatch):
-    """Non-catalog verify: missing hierarchy warns but allows startup + proto filter."""
-    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
-    db_file = tmp_path / "verify_legacy_nocatalog.db"
-    db_url = f"sqlite:///{db_file}"
-    engine = create_engine(db_url)
-    registry_metadata.create_all(engine)
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE saved_datasets"))
-    _create_legacy_saved_datasets_table(engine, with_row=True)
-    engine.dispose()
-
-    config = SqlRegistryConfig(
-        registry_type="sql",
-        path=db_url,
-        schema_mode="verify",
-    )
-    registry = SqlRegistry(config, "test_project", None)
-    try:
-        assert registry._has_hierarchy_columns is False
-        listed = registry.list_saved_datasets(project="test_project")
-        assert [d.name for d in listed] == ["claims"]
-        ns = registry.list_saved_datasets(
-            project="test_project", namespace="underwriting"
-        )
-        assert [d.name for d in ns] == ["claims"]
-        empty = registry.list_saved_datasets(project="test_project", namespace="other")
-        assert empty == []
-    finally:
-        registry.teardown()
-
-
 def test_schema_mode_verify_legacy_raises_with_catalog(tmp_path, monkeypatch):
+    """Catalog + verify: same hard fail when hierarchy columns are missing."""
     monkeypatch.setenv("DATACATALOG_ENABLED", "true")
     db_file = tmp_path / "verify_legacy_catalog.db"
     db_url = f"sqlite:///{db_file}"
@@ -453,8 +437,8 @@ def test_schema_mode_verify_legacy_raises_with_catalog(tmp_path, monkeypatch):
 
 
 def test_read_replica_missing_hierarchy_fails_startup(tmp_path, monkeypatch):
-    """Catalog mode: lagging read schema must fail init, not warn-and-query."""
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    """verify: lagging read schema must fail init (catalog or not)."""
+    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
     write_file = tmp_path / "write.db"
     read_file = tmp_path / "read.db"
     write_url = f"sqlite:///{write_file}"
@@ -481,11 +465,11 @@ def test_read_replica_missing_hierarchy_fails_startup(tmp_path, monkeypatch):
         SqlRegistry(config, "test_project", None)
 
 
-def test_read_replica_missing_hierarchy_warns_without_catalog(tmp_path, monkeypatch):
-    """Non-catalog: lagging read schema warns; list uses proto-side fallback."""
-    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
-    write_file = tmp_path / "write_nc.db"
-    read_file = tmp_path / "read_nc.db"
+def test_read_replica_missing_hierarchy_fails_with_catalog(tmp_path, monkeypatch):
+    """Catalog + verify: lagging read schema fails with read-engine message."""
+    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    write_file = tmp_path / "write_c.db"
+    read_file = tmp_path / "read_c.db"
     write_url = f"sqlite:///{write_file}"
     read_url = f"sqlite:///{read_file}"
 
@@ -497,7 +481,7 @@ def test_read_replica_missing_hierarchy_warns_without_catalog(tmp_path, monkeypa
     registry_metadata.create_all(read_engine)
     with read_engine.begin() as conn:
         conn.execute(text("DROP TABLE saved_datasets"))
-    _create_legacy_saved_datasets_table(read_engine, with_row=True)
+    _create_legacy_saved_datasets_table(read_engine)
     read_engine.dispose()
 
     config = SqlRegistryConfig(
@@ -506,13 +490,5 @@ def test_read_replica_missing_hierarchy_warns_without_catalog(tmp_path, monkeypa
         read_path=read_url,
         schema_mode="verify",
     )
-    registry = SqlRegistry(config, "test_project", None)
-    try:
-        assert registry._has_hierarchy_columns is True
-        assert registry._read_has_hierarchy_columns is False
-        listed = registry.list_saved_datasets(
-            project="test_project", namespace="underwriting"
-        )
-        assert [d.name for d in listed] == ["claims"]
-    finally:
-        registry.teardown()
+    with pytest.raises(FeastRegistryHierarchySchemaError, match="read engine"):
+        SqlRegistry(config, "test_project", None)
