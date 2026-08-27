@@ -147,7 +147,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-08-21T03:30:58Z"
+    createdAt: "2026-08-27T09:01:51Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: feast-operator.v0.66.0
@@ -471,7 +471,7 @@ spec:
                   value: quay.io/feastdev/feature-server:0.66.0
                 - name: RELATED_IMAGE_CRON_JOB
                   value: quay.io/openshift/origin-cli:4.17
-                - name: RELATED_IMAGE_KUBE_RBAC_PROXY
+                - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
                 - name: GOMEMLIMIT
                   value: 230MiB
                 - name: OIDC_ISSUER_URL
@@ -570,5 +570,5 @@ spec:
   - image: quay.io/openshift/origin-cli:4.17
     name: cron-job
   - image: ""
-    name: kube-rbac-proxy
+    name: odh-kube-rbac-proxy-image
   version: 0.66.0
