@@ -185,6 +185,13 @@ def test_scoped_name_rejects_whitespace(namespace, collection, name):
         parse_scoped_name(f"{namespace}/{collection}/{name}")
 
 
+def test_scoped_name_rejects_leading_trailing_vs_internal_whitespace():
+    with pytest.raises(ValueError, match="leading/trailing whitespace"):
+        scoped_name("demo-user-1", "underwriting", " auto-claims ")
+    with pytest.raises(ValueError, match="internal whitespace"):
+        scoped_name("demo-user-1", "under writing", "risk_scores")
+
+
 def test_scoped_name_accepts_exact_display_name():
     assert (
         scoped_name("demo-user-1", "raw", "auto-claims")
