@@ -116,11 +116,17 @@ class SavedDatasetColumn:
 
     @staticmethod
     def from_proto(column_proto: SavedDatasetColumnProto) -> "SavedDatasetColumn":
+        # Proto3 scalar bool defaults to false when unset; OpenAPI SchemaField
+        # defaults nullable to true. optional + HasField preserves explicit false.
+        if column_proto.HasField("nullable"):
+            nullable = column_proto.nullable
+        else:
+            nullable = True
         return SavedDatasetColumn(
             name=column_proto.name,
             type=column_proto.type,
             description=column_proto.description,
-            nullable=column_proto.nullable,
+            nullable=nullable,
         )
 
     def to_proto(self) -> SavedDatasetColumnProto:
