@@ -86,7 +86,7 @@ func ListPermissions(ctx context.Context, registryRestURL, project, intraCommTok
 	}
 	client := &http.Client{
 		Timeout:   requestTimeout,
-		Transport: clusterTLSTransport(),
+		Transport: clusterTLSTransport(ctx),
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -145,23 +145,24 @@ func BuildIntraCommunicationJWT(intraCommToken string) string {
 // system roots plus any CA bundles found at well-known Kubernetes / OpenShift
 // paths. Go's default TLS minimum (1.2) is inherited; no TLS profile fields
 // are hardcoded so the platform's API-server TLS profile is respected.
-func clusterTLSTransport() *http.Transport {
+func clusterTLSTransport(ctx context.Context) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig.RootCAs = clusterCACertPool()
+	t.TLSClientConfig.RootCAs = clusterCACertPool(ctx)
 	return t
 }
 
 // clusterCACertPool returns a *x509.CertPool that merges the system roots
-// with cluster-internal CA bundles. Returns nil when no additional CAs were
-// loaded and the system pool alone is sufficient.
-func clusterCACertPool() *x509.CertPool {
+// with cluster-internal CA bundles. Always returns a non-nil pool.
+func clusterCACertPool(ctx context.Context) *x509.CertPool {
 	rootCAs, err := x509.SystemCertPool()
 	if err != nil || rootCAs == nil {
 		rootCAs = x509.NewCertPool()
 	}
 	for _, p := range caBundlePaths {
 		if pem, err := os.ReadFile(p); err == nil {
-			rootCAs.AppendCertsFromPEM(pem)
+			if !rootCAs.AppendCertsFromPEM(pem) {
+				log.FromContext(ctx).Info("Found CA bundle but failed to parse PEM", "path", p)
+			}
 		}
 	}
 	return rootCAs
