@@ -32,10 +32,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var _ = Describe("Data Registry", func() {
@@ -123,7 +125,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.isDataRegistryEnabled()).To(BeTrue())
 	})
 
-	It("produces a two-container Deployment with --ignore-paths and empty FEAST_PROJECT", func() {
+	It("produces a two-container Deployment with --ignore-paths (no /search) and FEAST_PROJECT=data-registry", func() {
 		setAnnotation("true")
 
 		deploy := feast.initDataRegistryDeploy()
@@ -184,16 +186,18 @@ var _ = Describe("Data Registry", func() {
 		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
-		// Multi-tenancy: FEAST_PROJECT must be empty for dynamic routing
-		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, ""))
+		// FEAST_PROJECT must be "data-registry" (Phase-1 storage model)
+		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
 
-		// TCP probe on the REST port (HTTP /v1/config is not a registry route).
-		expectedProbe := intstr.FromInt32(DataRegistryPort)
+		// HTTP GET /projects probe: no_auth is forced in data-registry mode so the
+		// kubelet can probe without a token; the server returns 200 when ready.
 		for _, p := range []*corev1.Probe{feastCtr.ReadinessProbe, feastCtr.LivenessProbe, feastCtr.StartupProbe} {
 			Expect(p).NotTo(BeNil())
-			Expect(p.TCPSocket).NotTo(BeNil())
-			Expect(p.TCPSocket.Port).To(Equal(expectedProbe))
-			Expect(p.HTTPGet).To(BeNil())
+			Expect(p.HTTPGet).NotTo(BeNil(), "data-registry probe should use HTTPGet, not TCPSocket")
+			Expect(p.HTTPGet.Path).To(Equal("/projects"))
+			Expect(p.HTTPGet.Port).To(Equal(intstr.FromInt32(DataRegistryPort)))
+			Expect(p.HTTPGet.Scheme).To(Equal(corev1.URISchemeHTTP))
+			Expect(p.TCPSocket).To(BeNil(), "TCPSocket probe should not be set (HTTP probe is preferred)")
 		}
 
 		// --- kube-rbac-proxy container ---
@@ -206,8 +210,17 @@ var _ = Describe("Data Registry", func() {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			"--ignore-paths=/projects,/search,/api/v1/projects,/api/v1/search",
+			// /search is NOT in ignore-paths: proxy gates it so unauthenticated callers get 401 (S1 fix).
+			"--ignore-paths=/projects,/api/v1/projects",
+			"--auth-header-fields-enabled",
+			"--auth-header-fields-username=X-Remote-User",
 		))
+		// /search and /api/v1/search must NOT appear in ignore-paths.
+		for _, arg := range proxyCtr.Args {
+			if strings.Contains(arg, "ignore-paths") {
+				Expect(arg).NotTo(ContainSubstring("/search"), "--ignore-paths must not contain /search")
+			}
+		}
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
 			Name: "https", ContainerPort: DataRegistryProxyPort, Protocol: corev1.ProtocolTCP,
 		}))
@@ -666,11 +679,56 @@ var _ = Describe("Data Registry", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "auth-delegator CRB should be deleted")
 	})
 
+	It("uses fixed ClusterRole names independent of the CR name (singleton RBAC)", func() {
+		setAnnotation("true")
+
+		Expect(feast.deployDataRegistryClusterRoles()).To(Succeed())
+
+		Expect(feast.dataRegistryClusterRoleName("viewer")).To(Equal(DataRegistryViewerClusterRoleName))
+		Expect(feast.dataRegistryClusterRoleName("editor")).To(Equal(DataRegistryEditorClusterRoleName))
+		Expect(feast.dataRegistryClusterRoleName("admin")).To(Equal(DataRegistryAdminClusterRoleName))
+
+		// Verify the ClusterRoles are created under the fixed names (not feast-<crName>-data-registry-*)
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			cr := &rbacv1.ClusterRole{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, cr)).To(Succeed())
+			Expect(cr.Name).NotTo(ContainSubstring(featureStore.Name),
+				"ClusterRole name must be fixed and not contain the CR name")
+		}
+
+		Expect(feast.CleanupDataRegistryClusterRoles()).To(Succeed())
+	})
+
+	It("refuses data-registry mode when the CR already owns PVCs", func() {
+		isOpenShift = false
+
+		// Create a PVC that simulates a pre-existing registry PVC owned by this CR.
+		pvc := feast.initPVC(RegistryFeastType)
+		pvc.Spec = corev1.PersistentVolumeClaimSpec{
+			AccessModes: DefaultPVCAccessModes,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(DefaultRegistryStorageRequest),
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, pvc) }()
+
+		// Enabling data-registry mode must be refused with a clear message.
+		setAnnotation("true")
+		err := feast.deployDataRegistryMode()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("cannot enable data-registry mode"))
+		Expect(err.Error()).To(ContainSubstring("existing PVC"))
+	})
+
 	It("mode transition: standard resources are cleaned up when entering data-registry mode", func() {
 		isOpenShift = false
 
-		// Simulate standard-mode resources by creating a Deployment and Service
-		// that would normally exist in standard mode.
+		// Simulate standard-mode resources by creating a Deployment that would
+		// normally exist in standard mode. Set the owner reference so that
+		// DeleteOwnedFeastObj (which only deletes owned objects) can clean it up.
 		feastDeploy := feast.initFeastDeploy()
 		feastDeploy.Spec = appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
@@ -681,6 +739,7 @@ var _ = Describe("Data Registry", func() {
 				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "feast", Image: "test"}}},
 			},
 		}
+		Expect(controllerutil.SetControllerReference(featureStore, feastDeploy, k8sClient.Scheme())).To(Succeed())
 		Expect(k8sClient.Create(ctx, feastDeploy)).To(Succeed())
 
 		standardDeployKey := types.NamespacedName{

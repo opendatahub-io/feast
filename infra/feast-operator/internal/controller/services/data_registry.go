@@ -67,6 +67,14 @@ func (feast *FeastServices) validateDataRegistryAnnotation() {
 // has the data-registry annotation enabled. Returns an error if another CR
 // already has it, preventing race conditions on the shared PostgreSQL backend
 // and duplicate cluster-scoped resources.
+//
+// The check uses two layers:
+//  1. List-based: scan all FeatureStore CRs for a competing annotation.
+//  2. Lock ConfigMap: after the List check passes, attempt to create a
+//     ConfigMap named DataRegistryLockConfigMapName in the operator namespace.
+//     AlreadyExists means a concurrent reconcile of a different CR won the race.
+//     The ConfigMap is deleted by cleanupDataRegistryResources when the
+//     annotation is removed or the CR is deleted.
 func (feast *FeastServices) validateDataRegistrySingleton() error {
 	var list feastdevv1.FeatureStoreList
 	if err := feast.Handler.Client.List(feast.Handler.Context, &list); err != nil {
@@ -87,6 +95,47 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 				item.Namespace, item.Name,
 			)
 		}
+	}
+
+	// Attempt to claim the cluster-wide lock ConfigMap. This mitigates the
+	// sub-second race window where two concurrent first-creates both pass the
+	// List check above before either has written any resources.
+	// Uses CreateOrUpdate so re-reconciles of the same CR are idempotent.
+	operatorNs := os.Getenv("POD_NAMESPACE")
+	if operatorNs == "" {
+		operatorNs = DefaultKubernetesNamespace
+	}
+	lockCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      DataRegistryLockConfigMapName,
+			Namespace: operatorNs,
+		},
+	}
+	lockCM.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	if _, err := controllerutil.CreateOrUpdate(feast.Handler.Context, feast.Handler.Client, lockCM, func() error {
+		if lockCM.Labels == nil {
+			lockCM.Labels = map[string]string{}
+		}
+		existingOwner := lockCM.Labels[NameLabelKey]
+		if existingOwner != "" && existingOwner != self.Name {
+			return fmt.Errorf(
+				"data registry lock ConfigMap %s/%s is owned by FeatureStore %q, not %q",
+				operatorNs, DataRegistryLockConfigMapName, existingOwner, self.Name,
+			)
+		}
+		lockCM.Labels[ManagedByLabelKey] = ManagedByLabelValue
+		lockCM.Labels[NameLabelKey] = self.Name
+		return nil
+	}); err != nil {
+		logger := log.FromContext(feast.Handler.Context)
+		if strings.Contains(err.Error(), "is owned by FeatureStore") {
+			return fmt.Errorf(
+				"data registry lock ConfigMap %s/%s already exists; another data-registry instance may be initializing concurrently",
+				operatorNs, DataRegistryLockConfigMapName,
+			)
+		}
+		logger.Info("Could not acquire data-registry lock ConfigMap (non-fatal, List check is primary guard)",
+			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", err)
 	}
 	return nil
 }
@@ -150,7 +199,36 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
 	}
+	feast.cleanupDataRegistryLockConfigMap()
 	return nil
+}
+
+// cleanupDataRegistryLockConfigMap deletes the singleton lock ConfigMap.
+// Errors are logged but not returned: the lock is advisory and a stale lock
+// can be cleaned up manually. The ConfigMap namespace is derived from the
+// POD_NAMESPACE env var (set by the operator Deployment's downward-API volume)
+// or falls back to DefaultKubernetesNamespace.
+func (feast *FeastServices) cleanupDataRegistryLockConfigMap() {
+	logger := log.FromContext(feast.Handler.Context)
+	operatorNs := os.Getenv("POD_NAMESPACE")
+	if operatorNs == "" {
+		operatorNs = DefaultKubernetesNamespace
+	}
+	lockCM := &corev1.ConfigMap{}
+	if err := feast.Handler.Client.Get(
+		feast.Handler.Context,
+		types.NamespacedName{Name: DataRegistryLockConfigMapName, Namespace: operatorNs},
+		lockCM,
+	); err != nil {
+		return
+	}
+	if lockCM.Labels[ManagedByLabelKey] != ManagedByLabelValue {
+		return
+	}
+	if err := feast.Handler.Client.Delete(feast.Handler.Context, lockCM); err != nil && !apierrors.IsNotFound(err) {
+		logger.Info("Could not delete data-registry lock ConfigMap (non-fatal)",
+			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +328,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 // buildDataRegistryContainer returns the feast-server container spec.
 // feast serve_registry (feature-server 0.66.x) has no --host/-h flag and binds
 // uvicorn to 0.0.0.0. Do not pass a host flag; kube-rbac-proxy remains the
-// cluster-facing listener. FEAST_PROJECT is empty for multi-project routing.
+// cluster-facing listener. FEAST_PROJECT is set to DataRegistryProject (Phase-1 storage model).
 func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, error) {
 	image := getFeatureServerImage()
 
@@ -259,12 +337,18 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		return corev1.Container{}, err
 	}
 
-	// TCP probe: REST /v1/config does not exist, and kubernetes auth (the
-	// operator default) would 401 any HTTP path without a token. Kubelet
-	// treats 401/404 as probe failure, so the pod never becomes Ready.
+	// HTTP probe against GET /projects: data-registry mode always forces no_auth
+	// in feature_store.yaml (repo_config.go:getServiceRepoConfig), so the Feast
+	// server never challenges the kubelet with a 401. A TCP probe only confirms
+	// uvicorn is listening; the HTTP probe confirms the REST API is actually
+	// serving responses, which is the meaningful readiness signal.
+	// /projects is a stable GET endpoint that returns HTTP 200 with an empty
+	// list even before any projects are explicitly registered.
 	probeHandler := corev1.ProbeHandler{
-		TCPSocket: &corev1.TCPSocketAction{
-			Port: intstr.FromInt32(DataRegistryPort),
+		HTTPGet: &corev1.HTTPGetAction{
+			Path:   "/projects",
+			Port:   intstr.FromInt32(DataRegistryPort),
+			Scheme: corev1.URISchemeHTTP,
 		},
 	}
 
@@ -291,7 +375,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			{Name: DataCatalogEnabledEnvVar, Value: "true"},
 			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
 			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
-			{Name: FeastProjectEnvVar, Value: ""},
+			{Name: FeastProjectEnvVar, Value: DataRegistryProject},
 		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:  probeHandler,
@@ -313,6 +397,12 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 // buildKubeRBACProxyContainer returns the kube-rbac-proxy sidecar spec.
 // The proxy listens on 0.0.0.0:8443 (HTTPS) and forwards authenticated
 // requests to the feast-server at 127.0.0.1:6572.
+//
+// TODO: Once the ODH kube-rbac-proxy fork with byPathSegment support
+// merges, replace --ignore-paths with per-path SAR rewrites that extract
+// {project} from the URL and set SAR namespace accordingly for per-tenant
+// namespace authorization. The ODH fork image should also replace the brancz
+// fallback in DefaultKubeRBACProxyImage.
 func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 	return corev1.Container{
 		Name:  DataRegistryProxyContainerName,
@@ -323,12 +413,18 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects and /search bypass proxy auth because they require
-			// server-side per-namespace SSAR filtering that cannot be expressed as a
-			// single resource SAR. The Feast server reads the bearer token from the
-			// request, performs TokenReview + per-namespace SubjectAccessReview, and
-			// returns only authorized results.
-			"--ignore-paths=/projects,/search,/api/v1/projects,/api/v1/search",
+			// /projects bypasses proxy auth because it requires server-side
+			// per-namespace SSAR filtering that cannot be expressed as a single
+			// resource SAR. The Feast server reads the bearer token from the
+			// request, performs TokenReview + per-namespace SubjectAccessReview,
+			// and returns only authorized results.
+			// /search is NOT in ignore-paths: it goes through the proxy SAR gate
+			// so unauthenticated callers get 401 (S1 fix).
+			"--ignore-paths=/projects,/api/v1/projects",
+			// Forward the authenticated username to the upstream server as
+			// X-Remote-User so Python can populate registered_by.
+			"--auth-header-fields-enabled",
+			"--auth-header-fields-username=X-Remote-User",
 			"--logtostderr=true",
 			"--v=3",
 		},
@@ -382,7 +478,7 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 }
 
 func getKubeRBACProxyImage() string {
-	if img, exists := os.LookupEnv(kubeRBACProxyImageVar); exists {
+	if img, exists := os.LookupEnv(kubeRBACProxyImageVar); exists && img != "" {
 		return img
 	}
 	return DefaultKubeRBACProxyImage
@@ -485,14 +581,19 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 
 	// Static SAR attributes are the coarse auth gate for Feast REST
 	// (/entities, /feature_views, …). kube-rbac-proxy maps GET→get and
-	// POST→create on this resource. /projects and /search bypass this gate
-	// via --ignore-paths and use server-side SSAR instead.
+	// POST→create on this resource. /projects bypasses this gate via
+	// --ignore-paths and uses server-side SSAR instead. /search goes through
+	// the proxy gate (no ignore-paths entry) to prevent unauthenticated access.
 	//
 	// Do not set `rewrites`. kube-rbac-proxy v0.18.1 only supports
 	// byQueryParameter and byHttpHeader. An empty rewrite (including the
 	// unsupported byHTTPPath key) produces no SAR attributes and the proxy
 	// returns HTTP 400 for every authenticated request:
 	// "Bad Request. The request or configuration is malformed."
+	//
+	// TODO: Once the ODH fork with byPathSegment support merges,
+	// switch to Format2 auth.yaml that extracts {project} from the URL path
+	// and uses it as the SAR namespace for per-tenant namespace authorization.
 	//
 	// Namespace must be set: RoleBindings grant namespaced access. An empty
 	// namespace makes SAR cluster-scoped, which would not match the
@@ -636,8 +737,7 @@ func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 			}
 			return err
 		}
-		if cr.Labels[ManagedByLabelKey] == ManagedByLabelValue &&
-			cr.Labels[NameLabelKey] == feast.Handler.FeatureStore.Name {
+		if cr.Labels[ManagedByLabelKey] == ManagedByLabelValue {
 			if err := feast.Handler.Client.Delete(feast.Handler.Context, cr); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
@@ -866,7 +966,16 @@ func (feast *FeastServices) dataRegistryTlsSecretName() string {
 }
 
 func (feast *FeastServices) dataRegistryClusterRoleName(suffix string) string {
-	return GetFeastName(feast.Handler.FeatureStore) + dataRegistryClusterRoleSuffix + "-" + suffix
+	switch suffix {
+	case "viewer":
+		return DataRegistryViewerClusterRoleName
+	case "editor":
+		return DataRegistryEditorClusterRoleName
+	case "admin":
+		return DataRegistryAdminClusterRoleName
+	default:
+		return "feast-data-registry-" + suffix
+	}
 }
 
 func (feast *FeastServices) dataRegistryAuthDelegatorCRBName() string {
