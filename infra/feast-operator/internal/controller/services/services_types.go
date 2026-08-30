@@ -78,20 +78,39 @@ const (
 
 	// kube-rbac-proxy sidecar for Data Registry authentication enforcement.
 	// RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE is the platform-shared related
-	// image already present in the Open Data Hub operator CSV, so disconnected
-	// installs inject the mirrored digest. Standalone installs fall back to
-	// DefaultKubeRBACProxyImage when the env var is unset.
+	// image env var present in the ODH CSV, manager.yaml, and params.env overlays,
+	// so disconnected installs inject the mirrored digest. Standalone installs
+	// fall back to DefaultKubeRBACProxyImage when the env var is unset.
 	kubeRBACProxyImageVar                = "RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE"
 	DataRegistryProxyContainerName       = "kube-rbac-proxy"
 	DataRegistryProxyPort          int32 = 8443
 	dataRegistryAuthConfigSuffix         = "-data-registry-auth"
-	dataRegistryClusterRoleSuffix        = "-data-registry"
 	dataRegistryTlsSecretSuffix          = "-data-registry-tls"
 
 	dataRegistryAuthDelegatorSuffix = "-data-registry-auth-delegator"
 	dataRegistryCaBundleSuffix      = "-data-registry-ca-bundle"
 
 	dataRegistryAPIGroup = "dataregistry.opendatahub.io"
+
+	// Fixed ClusterRole names for the data-registry aggregated RBAC.
+	// Names are CR-independent because data-registry is a cluster singleton:
+	// only one FeatureStore may have the data-registry annotation at a time.
+	// Using fixed names avoids dynamic resourceNames in the operator ClusterRole
+	// and prevents Forbidden errors when the OLM-installed operator tries to
+	// get/update/delete a ClusterRole whose name was not pre-listed.
+	DataRegistryViewerClusterRoleName = "feast-data-registry-viewer"
+	DataRegistryEditorClusterRoleName = "feast-data-registry-editor"
+	DataRegistryAdminClusterRoleName  = "feast-data-registry-admin"
+
+	// DataRegistryLockConfigMapName is a cluster-scoped sentinel used to
+	// detect concurrent first-creates of a data-registry CR. The operator
+	// attempts to Create this ConfigMap after the List-based singleton check
+	// passes; AlreadyExists means another CR won the race.
+	DataRegistryLockConfigMapName = "feast-data-registry-lock"
+
+	// DataRegistryProject is the fixed Feast project name used in
+	// data-registry mode (Phase-1 single-project storage model).
+	DataRegistryProject = "data-registry"
 
 	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 
