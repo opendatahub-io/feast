@@ -91,7 +91,7 @@ def _check_access_cached(
     _access_cache[cache_key] = (result, now)
 
     if len(_access_cache) > 10000:
-        _evict_expired_cache(now)
+        _evict_cache(now)
 
     return result
 
@@ -147,9 +147,21 @@ def _token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()[:16]
 
 
-def _evict_expired_cache(now: float):
+_CACHE_MAX = 10000
+_CACHE_TARGET = 7500  # trim to 75 % capacity after eviction
+
+
+def _evict_cache(now: float) -> None:
+    """Remove expired entries first; if the cache is still above _CACHE_TARGET,
+    evict the oldest entries by insertion/refresh timestamp to enforce the cap."""
     expired = [
         k for k, (_, ts) in _access_cache.items() if (now - ts) >= _SSAR_CACHE_TTL
     ]
     for k in expired:
         del _access_cache[k]
+
+    if len(_access_cache) > _CACHE_TARGET:
+        overflow = len(_access_cache) - _CACHE_TARGET
+        oldest = sorted(_access_cache, key=lambda k: _access_cache[k][1])[:overflow]
+        for k in oldest:
+            del _access_cache[k]

@@ -56,6 +56,7 @@ var _ = Describe("Data Registry", func() {
 	}
 
 	BeforeEach(func() {
+		isOpenShift = false
 		ctx = context.Background()
 		typeNamespacedName = types.NamespacedName{
 			Name:      "dr-teststore",

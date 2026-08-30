@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from feast.api.registry.rest.catalog_ssar import (
     extract_bearer_token,
@@ -53,7 +53,7 @@ def get_project_router(grpc_handler) -> APIRouter:
         if is_catalog_ssar_enabled():
             token = extract_bearer_token(request)
             if not token:
-                return {"error": "Authorization bearer token required", "projects": []}
+                raise HTTPException(status_code=401, detail="Bearer token required")
             projects = filter_projects_by_ssar(projects, token)
 
         return {
