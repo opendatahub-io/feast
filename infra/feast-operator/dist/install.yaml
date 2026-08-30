@@ -23550,6 +23550,9 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
+  - feast-data-registry-admin
+  - feast-data-registry-editor
+  - feast-data-registry-viewer
   - feast-discover-namespaces
   - feast-oidc-token-review
   - feast-token-review-cluster-role

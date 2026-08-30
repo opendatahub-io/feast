@@ -190,6 +190,27 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 		return err
 	}
 
+	// PVC safety guard: refuse to switch to data-registry mode if this CR
+	// owns existing PVCs. Enabling data-registry mode would delete the standard
+	// Deployment and Services but the underlying PVC data would be lost.
+	// Users must create a dedicated CR for data-registry mode instead.
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType} {
+		pvc := feast.initPVC(feastType)
+		existing := &corev1.PersistentVolumeClaim{}
+		if err := feast.Handler.Get(feast.Handler.Context,
+			client.ObjectKey{Namespace: pvc.Namespace, Name: pvc.Name}, existing); err == nil {
+			if existing.DeletionTimestamp != nil {
+				// PVC is being deleted; not an obstacle to mode transition.
+				continue
+			}
+			return fmt.Errorf(
+				"cannot enable data-registry mode on FeatureStore %s/%s that owns existing PVC %s; "+
+					"create a dedicated FeatureStore CR for data-registry mode instead",
+				feast.Handler.FeatureStore.Namespace, feast.Handler.FeatureStore.Name, existing.Name,
+			)
+		}
+	}
+
 	// Clean up standard-mode resources that are not needed in data-registry mode
 	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
@@ -1368,8 +1389,14 @@ func (feast *FeastServices) GetFeastServiceName(feastType FeastServiceType) stri
 
 func (feast *FeastServices) GetDeployment() (appsv1.Deployment, error) {
 	deployment := appsv1.Deployment{}
-	obj := feast.GetObjectMeta()
-	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, &deployment)
+	var name string
+	if feast.isDataRegistryEnabled() {
+		name = feast.GetFeastServiceName(DataRegistryFeastType)
+	} else {
+		name = feast.GetObjectMeta().Name
+	}
+	ns := feast.Handler.FeatureStore.Namespace
+	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: ns, Name: name}, &deployment)
 	return deployment, err
 }
 
