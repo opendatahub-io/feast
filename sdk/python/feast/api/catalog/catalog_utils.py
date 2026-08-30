@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation-layer helpers (RHAI-384, RHAI-385).
+"""Catalog translation-layer helpers.
 
 Iceberg REST identity is a tuple (project, collection, table). Feast identity is
 (project, name) and the catalog uses a single Feast project ``data-registry``,
@@ -21,12 +21,13 @@ so SavedDataset.name must carry namespace + collection + display name.
 Callers (Iceberg REST, UI, engines) never see the scoped string: prefix on
 write / get / delete, strip with unscoped_name on API responses.
 
-RHAI-385 adds the shared project constant, lazy Feast project creation, and
-collection resolve/list/exists helpers. It does not mount Iceberg REST routes.
+The shared project constant, lazy Feast project creation, and
+collection resolve/list/exists helpers are provided here.
+This module does not mount Iceberg REST routes.
 
-Empty collections (RHAI-388): do not store metadata as an unscoped Project tag
+Empty collections: do not store metadata as an unscoped Project tag
 ``_ns_meta_{collection}`` on the shared data-registry project — that key
-collides across RHAI namespaces. Include namespace in any tag key, or derive
+collides across namespaces. Include namespace in any tag key, or derive
 collections from SavedDataset.collection filtered by namespace.
 """
 

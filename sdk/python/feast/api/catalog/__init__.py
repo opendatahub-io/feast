@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation helpers. Does not mount Iceberg REST routes (RHAI-390)."""
+"""Catalog translation helpers. Does not mount Iceberg REST routes."""
 
 from feast.api.catalog.catalog_utils import (
     CATALOG_PROJECT,
