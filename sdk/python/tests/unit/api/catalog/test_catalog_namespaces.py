@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or in writing, software
+# Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
@@ -17,6 +17,7 @@ import tempfile
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.pool import NullPool
 
 from feast.api.catalog.catalog_utils import (
     CATALOG_PROJECT,
@@ -107,6 +108,7 @@ def test_n2_create_round_trip_and_scoped_tag(sqlite_registry):
     assert key in project.tags
     assert NS in key
     assert f"_ns_meta_{COL}" not in project.tags
+    assert project.description == "RHOAI Data Registry catalog"
 
 
 def test_n3_duplicate_create_is_409_already_exists(sqlite_registry):
@@ -118,6 +120,22 @@ def test_n3_duplicate_create_is_409_already_exists(sqlite_registry):
     assert error["type"] == "AlreadyExistsException"
     assert error["code"] == 409
     assert "detail" not in response.json()
+
+
+def test_create_when_tables_exist_is_409(sqlite_registry):
+    sqlite_registry.apply_saved_dataset(
+        _make_saved_dataset(
+            scoped_name(NS, COL, "risk_scores"),
+            NS,
+            COL,
+        ),
+        CATALOG_PROJECT,
+    )
+    response = _client(sqlite_registry).post(
+        f"/v1/{NS}/namespaces", json={"namespace": [COL]}
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["type"] == "AlreadyExistsException"
 
 
 def test_n4_same_collection_name_isolated_across_tenants(sqlite_registry):
@@ -282,3 +300,109 @@ def test_missing_create_body_is_iceberg_400(sqlite_registry):
     assert "detail" not in body
     assert body["error"]["type"] == "BadRequestException"
     assert "namespace" in body["error"]["message"]
+
+
+def _threaded_sqlite_registry():
+    fd, registry_path = tempfile.mkstemp()
+    registry = SqlRegistry(
+        SqlRegistryConfig(
+            registry_type="sql",
+            path=f"sqlite:///{registry_path}",
+            purge_feast_metadata=False,
+            sqlalchemy_config_kwargs={
+                "echo": False,
+                "connect_args": {"check_same_thread": False, "timeout": 30},
+                "poolclass": NullPool,
+            },
+        ),
+        "scratch",
+        None,
+    )
+    return registry, registry_path
+
+
+def test_n13_concurrent_create_same_collection_is_200_and_409():
+    import threading
+
+    from feast.api.catalog.catalog_utils import create_namespace_meta
+    from feast.api.catalog.errors import NamespaceAlreadyExistsException
+
+    registry, _path = _threaded_sqlite_registry()
+    try:
+        barrier = threading.Barrier(2)
+        outcomes: list[str] = []
+        errors: list[BaseException] = []
+
+        def worker():
+            barrier.wait()
+            try:
+                create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+                outcomes.append("200")
+            except NamespaceAlreadyExistsException:
+                outcomes.append("409")
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+
+        assert not errors, errors
+        assert sorted(outcomes) == ["200", "409"]
+        project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        assert ns_meta_key(NS, COL) in project.tags
+
+        client = _client(registry)
+        response = client.post(f"/v1/{NS}/namespaces", json={"namespace": [COL]})
+        assert response.status_code == 409
+        assert response.json()["error"]["type"] == "AlreadyExistsException"
+    finally:
+        registry.teardown()
+
+
+def test_n14_concurrent_create_different_collections_both_tags_survive():
+    import threading
+
+    from feast.api.catalog.catalog_utils import create_namespace_meta
+
+    registry, _path = _threaded_sqlite_registry()
+    try:
+        col_a = "underwriting"
+        col_b = "pricing"
+        barrier = threading.Barrier(2)
+        outcomes: list[tuple[str, str]] = []
+        errors: list[BaseException] = []
+
+        def worker(collection: str):
+            barrier.wait()
+            try:
+                create_namespace_meta(registry, NS, collection, {"owner": collection})
+                outcomes.append(("200", collection))
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=(col_a,)),
+            threading.Thread(target=worker, args=(col_b,)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+
+        assert not errors, errors
+        assert len(outcomes) == 2
+        assert all(status == "200" for status, _ in outcomes)
+        assert {c for _, c in outcomes} == {col_a, col_b}
+        project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        assert ns_meta_key(NS, col_a) in project.tags
+        assert ns_meta_key(NS, col_b) in project.tags
+        listed = _client(registry).get(f"/v1/{NS}/namespaces").json()["namespaces"]
+        assert [col_a] in listed
+        assert [col_b] in listed
+    finally:
+        registry.teardown()
