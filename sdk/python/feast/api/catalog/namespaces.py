@@ -26,7 +26,6 @@ from fastapi import APIRouter, Request, Response
 from feast.api.catalog.catalog_utils import (
     DEFAULT_COLLECTION,
     _require_namespace,
-    collection_has_assets,
     create_namespace_meta,
     delete_namespace_meta,
     get_namespace_properties,
@@ -37,7 +36,6 @@ from feast.api.catalog.catalog_utils import (
 )
 from feast.api.catalog.errors import (
     BadRequestException,
-    NamespaceNotEmptyException,
     NoSuchNamespaceException,
     ServiceFailureException,
 )
@@ -131,12 +129,7 @@ def get_namespace_router() -> APIRouter:
         rhai_ns, col = _project_and_collection(project, collection)
         if col == DEFAULT_COLLECTION:
             raise BadRequestException("Cannot drop the default collection")
-        registry = _registry(request)
-        if not validate_namespace_exists(registry, rhai_ns, col):
-            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
-        if collection_has_assets(registry, rhai_ns, col):
-            raise NamespaceNotEmptyException(f"Namespace not empty: {col}")
-        delete_namespace_meta(registry, rhai_ns, col)
+        delete_namespace_meta(_registry(request), rhai_ns, col)
         return Response(status_code=204)
 
     @router.post(
@@ -155,11 +148,8 @@ def get_namespace_router() -> APIRouter:
             raise BadRequestException(
                 "Cannot update and remove the same property: " + ", ".join(overlap)
             )
-        registry = _registry(request)
-        if not validate_namespace_exists(registry, rhai_ns, col):
-            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
         updated, removed, missing = merge_namespace_properties(
-            registry,
+            _registry(request),
             rhai_ns,
             col,
             dict(body.updates),
