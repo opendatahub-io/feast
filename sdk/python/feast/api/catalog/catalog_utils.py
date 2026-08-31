@@ -32,8 +32,14 @@ Unscoped ``_ns_meta_{collection}`` collides across RHAI namespaces — never wri
 from __future__ import annotations
 
 import json
+import threading
+from typing import Any, Callable
 
-from feast.errors import ProjectObjectNotFoundException
+from feast.api.catalog.errors import (
+    NamespaceAlreadyExistsException,
+    ServiceFailureException,
+)
+from feast.errors import ConcurrentVersionConflict, ProjectObjectNotFoundException
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.project import Project
 
@@ -43,6 +49,8 @@ CATALOG_PROJECT = "data-registry"
 DEFAULT_COLLECTION = "default"
 NAMESPACE_SEPARATOR = "\x1f"
 NS_META_PREFIX = "_ns_meta_"
+# File / other registries have no Project row lock. Production catalog is SQL.
+_FALLBACK_PROJECT_LOCK = threading.Lock()
 
 
 def _require_part(label: str, value: str) -> str:
@@ -218,35 +226,141 @@ def get_namespace_properties(
     return {str(k): str(v) for k, v in data.items()}
 
 
+def _saved_datasets_in_collection(
+    registry: BaseRegistry,
+    conn: Any,
+    rhai_ns: str,
+    collection: str,
+) -> bool:
+    """True if any SavedDataset exists in this tenant collection.
+
+    When ``conn`` is the mutate transaction, SELECT on that connection (no
+    second SQLite lock). File-registry fallback uses ``list_saved_datasets``.
+    """
+    if conn is None:
+        return any(
+            True
+            for _ in registry.list_saved_datasets(
+                CATALOG_PROJECT, namespace=rhai_ns, collection=collection
+            )
+        )
+    from sqlalchemy import select as sa_select
+
+    from feast.infra.registry.sql import saved_datasets
+
+    row = conn.execute(
+        sa_select(saved_datasets.c.saved_dataset_name)
+        .where(
+            saved_datasets.c.project_id == CATALOG_PROJECT,
+            saved_datasets.c.namespace == rhai_ns,
+            saved_datasets.c.collection == collection,
+        )
+        .limit(1)
+    ).first()
+    return row is not None
+
+
+def _mutate_catalog_project(
+    registry: BaseRegistry,
+    mutator: Callable[[Project, Any], None],
+    *,
+    create_if_missing: bool = True,
+) -> None:
+    """Run ``mutator(project, conn)`` with SQL compare-and-swap when available."""
+
+    def catalog_mutator(project: Project, conn: Any) -> None:
+        if create_if_missing and not project.description:
+            project.description = "RHOAI Data Registry catalog"
+        mutator(project, conn)
+
+    mutate = getattr(registry, "mutate_project", None)
+    if callable(mutate):
+        try:
+            mutate(
+                CATALOG_PROJECT,
+                catalog_mutator,
+                create_if_missing=create_if_missing,
+            )
+        except ConcurrentVersionConflict as exc:
+            raise ServiceFailureException(str(exc)) from exc
+        return
+    with _FALLBACK_PROJECT_LOCK:
+        try:
+            project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        except ProjectObjectNotFoundException:
+            if not create_if_missing:
+                raise
+            project = Project(
+                name=CATALOG_PROJECT,
+                description="RHOAI Data Registry catalog",
+            )
+            registry.apply_project(project)
+            project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        catalog_mutator(project, None)
+        registry.apply_project(project)
+
+
+def create_namespace_meta(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    collection: str,
+    properties: dict[str, str],
+) -> None:
+    """Persist an empty collection tag. Raises if it already exists.
+
+    Existence is decided inside mutate: tag map, ``default``, and SavedDatasets
+    on the same write connection.
+    """
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    key = ns_meta_key(ns, col)
+    payload = json.dumps(properties, separators=(",", ":"), sort_keys=True)
+
+    def mutator(project: Project, conn: Any) -> None:
+        if col == DEFAULT_COLLECTION or key in project.tags:
+            raise NamespaceAlreadyExistsException(f"Namespace already exists: {col}")
+        if _saved_datasets_in_collection(registry, conn, ns, col):
+            raise NamespaceAlreadyExistsException(f"Namespace already exists: {col}")
+        tags = dict(project.tags)
+        tags[key] = payload
+        project.tags = tags
+
+    _mutate_catalog_project(registry, mutator)
+
+
 def set_namespace_properties(
     registry: BaseRegistry,
     rhai_ns: str,
     collection: str,
     properties: dict[str, str],
 ) -> None:
-    ensure_catalog_project(registry)
-    project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
-    tags = dict(project.tags)
-    tags[ns_meta_key(rhai_ns, collection)] = json.dumps(
-        properties, separators=(",", ":"), sort_keys=True
-    )
-    project.tags = tags
-    registry.apply_project(project)
+    key = ns_meta_key(rhai_ns, collection)
+    payload = json.dumps(properties, separators=(",", ":"), sort_keys=True)
+
+    def mutator(project: Project, conn: Any) -> None:
+        tags = dict(project.tags)
+        tags[key] = payload
+        project.tags = tags
+
+    _mutate_catalog_project(registry, mutator)
 
 
 def delete_namespace_meta(
     registry: BaseRegistry, rhai_ns: str, collection: str
 ) -> None:
-    project = _get_catalog_project(registry)
-    if project is None:
-        return
     key = ns_meta_key(rhai_ns, collection)
-    if key not in project.tags:
+
+    def mutator(project: Project, conn: Any) -> None:
+        if key not in project.tags:
+            return
+        tags = dict(project.tags)
+        tags.pop(key, None)
+        project.tags = tags
+
+    try:
+        _mutate_catalog_project(registry, mutator, create_if_missing=False)
+    except ProjectObjectNotFoundException:
         return
-    tags = dict(project.tags)
-    tags.pop(key, None)
-    project.tags = tags
-    registry.apply_project(project)
 
 
 def _get_catalog_project(registry: BaseRegistry) -> Project | None:
@@ -256,9 +370,7 @@ def _get_catalog_project(registry: BaseRegistry) -> Project | None:
         return None
 
 
-def _has_namespace_meta(
-    registry: BaseRegistry, rhai_ns: str, collection: str
-) -> bool:
+def _has_namespace_meta(registry: BaseRegistry, rhai_ns: str, collection: str) -> bool:
     project = _get_catalog_project(registry)
     if project is None:
         return False

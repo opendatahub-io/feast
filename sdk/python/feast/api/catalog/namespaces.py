@@ -25,19 +25,18 @@ from fastapi import APIRouter, Request, Response
 
 from feast.api.catalog.catalog_utils import (
     DEFAULT_COLLECTION,
+    _require_namespace,
     collection_has_assets,
+    create_namespace_meta,
     delete_namespace_meta,
-    ensure_catalog_project,
     get_namespace_properties,
     list_namespaces,
     resolve_namespace,
     set_namespace_properties,
     validate_namespace_exists,
-    _require_namespace,
 )
 from feast.api.catalog.errors import (
     BadRequestException,
-    NamespaceAlreadyExistsException,
     NamespaceNotEmptyException,
     NoSuchNamespaceException,
     ServiceFailureException,
@@ -100,13 +99,8 @@ def get_namespace_router() -> APIRouter:
         except ValueError as exc:
             raise _as_bad_request(exc) from exc
         registry = _registry(request)
-        ensure_catalog_project(registry)
-        if validate_namespace_exists(registry, rhai_ns, collection):
-            raise NamespaceAlreadyExistsException(
-                f"Namespace already exists: {collection}"
-            )
         properties = dict(body.properties)
-        set_namespace_properties(registry, rhai_ns, collection, properties)
+        create_namespace_meta(registry, rhai_ns, collection, properties)
         return NamespaceResponse(namespace=[collection], properties=properties)
 
     @router.get(

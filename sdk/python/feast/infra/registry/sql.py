@@ -2198,10 +2198,19 @@ class SqlRegistry(CachingRegistry):
             )
             conn.execute(update_stmt)
         else:
-            insert_stmt = insert(feast_metadata).values(
-                values,
-            )
-            conn.execute(insert_stmt)
+            try:
+                with conn.begin_nested():
+                    conn.execute(insert(feast_metadata).values(values))
+            except IntegrityError:
+                conn.execute(
+                    update(feast_metadata)
+                    .where(
+                        feast_metadata.c.metadata_key
+                        == FeastMetadataKeys.LAST_UPDATED_TIMESTAMP.value,
+                        feast_metadata.c.project_id == project,
+                    )
+                    .values(values)
+                )
 
     def _get_last_updated_metadata(self, project: str):
         with self.read_engine.begin() as conn:
@@ -2299,6 +2308,95 @@ class SqlRegistry(CachingRegistry):
     ):
         return self._apply_object(
             projects, project.name, "project_name", project, "project_proto"
+        )
+
+    def mutate_project(
+        self,
+        name: str,
+        mutator: Callable[[Project, Any], None],
+        *,
+        create_if_missing: bool = True,
+    ) -> Project:
+        """Optimistic read-modify-write of one Project proto.
+
+        Compare-and-swap on ``project_proto`` so two writers of different tag
+        keys retry and merge instead of queueing on ``SELECT FOR UPDATE``.
+        Missing row + ``create_if_missing``: insert in this transaction
+        (IntegrityError means another writer inserted first).
+
+        ``mutator(project, conn)`` may raise to abort. ``conn`` is the write
+        connection so callers can SELECT other tables in the same transaction.
+
+        SQLite: ``FOR UPDATE`` is a no-op; this path retries on CAS miss.
+        ``BEGIN IMMEDIATE`` is not used yet (optional later for sqlite writers).
+        """
+        from feast.utils import _utc_now
+
+        class _Retry(Exception):
+            pass
+
+        where_row = (projects.c.project_name == name) & (projects.c.project_id == name)
+        dialect = self.write_engine.dialect.name
+        project: Optional[Project] = None
+
+        for _ in range(16):
+            try:
+                with self.write_engine.begin() as conn:
+                    if dialect == "sqlite":
+                        conn.execute(text("PRAGMA busy_timeout=30000"))
+                    row = conn.execute(select(projects).where(where_row)).first()
+                    if row is None:
+                        if not create_if_missing:
+                            raise ProjectObjectNotFoundException(name)
+                        created = Project(name=name)
+                        try:
+                            with conn.begin_nested():
+                                conn.execute(
+                                    insert(projects).values(
+                                        project_name=name,
+                                        project_id=name,
+                                        project_proto=created.to_proto().SerializeToString(),
+                                        last_updated_timestamp=int(
+                                            _utc_now().timestamp()
+                                        ),
+                                    )
+                                )
+                        except IntegrityError:
+                            pass
+                        row = conn.execute(select(projects).where(where_row)).first()
+                        if row is None:
+                            raise _Retry()
+
+                    old_proto = bytes(row._mapping["project_proto"])
+                    project = Project.from_proto(ProjectProto.FromString(old_proto))
+                    mutator(project, conn)
+
+                    update_datetime = _utc_now()
+                    project.last_updated_timestamp = update_datetime
+                    result = conn.execute(
+                        update(projects)
+                        .where(
+                            where_row,
+                            projects.c.project_proto == old_proto,
+                        )
+                        .values(
+                            project_proto=project.to_proto().SerializeToString(),
+                            last_updated_timestamp=int(update_datetime.timestamp()),
+                        )
+                    )
+                    if result.rowcount != 1:
+                        raise _Retry()
+                    if not self.purge_feast_metadata:
+                        self._set_last_updated_metadata(update_datetime, name, conn)
+                if self.cache_mode == "sync":
+                    self.refresh()
+                assert project is not None
+                return project
+            except _Retry:
+                continue
+
+        raise ConcurrentVersionConflict(
+            f"Could not update project {name}: concurrent writers"
         )
 
     def delete_project(
