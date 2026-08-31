@@ -79,18 +79,18 @@ func (feast *FeastServices) validateDataRegistryNamespace() error {
 	}
 	if ns.Labels[DataRegistryNamespaceLabel] != "true" {
 		return fmt.Errorf(
-			"namespace %q is missing the required label %s=true; "+
-				"label the namespace to allow data-registry CRs: "+
-				"kubectl label namespace %s %s=true",
-			nsName, DataRegistryNamespaceLabel,
+			"namespace %q is not designated for the data registry "+
+				"(missing required label %s=true); "+
+				"the data-registry FeatureStore CR must be created in the namespace "+
+				"labeled by the platform operator (e.g. rhoai-data-registry)",
 			nsName, DataRegistryNamespaceLabel,
 		)
 	}
 	return nil
 }
 
-// validateDataRegistrySingleton ensures only one FeatureStore CR in the
-// namespace has the data-registry annotation enabled. Uses
+// validateDataRegistrySingleton ensures only one FeatureStore CR across the
+// entire cluster has the data-registry annotation enabled. Uses
 // metadata.creationTimestamp as a deterministic tiebreaker: the oldest
 // annotated CR wins, all others are rejected. This eliminates the race
 // window that existed with the old List+Lock approach because
@@ -98,14 +98,13 @@ func (feast *FeastServices) validateDataRegistryNamespace() error {
 func (feast *FeastServices) validateDataRegistrySingleton() error {
 	self := feast.Handler.FeatureStore
 	var list feastdevv1.FeatureStoreList
-	if err := feast.Handler.Client.List(feast.Handler.Context, &list,
-		client.InNamespace(self.Namespace)); err != nil {
+	if err := feast.Handler.Client.List(feast.Handler.Context, &list); err != nil {
 		return fmt.Errorf("failed to list FeatureStore CRs for singleton check: %w", err)
 	}
 
 	for i := range list.Items {
 		item := &list.Items[i]
-		if item.Name == self.Name {
+		if item.Namespace == self.Namespace && item.Name == self.Name {
 			continue
 		}
 		if item.DeletionTimestamp != nil {
@@ -118,8 +117,10 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 		if item.CreationTimestamp.Before(&self.CreationTimestamp) ||
 			(item.CreationTimestamp.Equal(&self.CreationTimestamp) && item.Name < self.Name) {
 			return fmt.Errorf(
-				"data registry is already enabled on FeatureStore %s (created at %s); only one data-registry instance is allowed per namespace",
-				item.Name, item.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
+				"data registry is already enabled on FeatureStore %s/%s (created at %s); "+
+					"only one data-registry instance is allowed cluster-wide",
+				item.Namespace, item.Name,
+				item.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
 			)
 		}
 	}
