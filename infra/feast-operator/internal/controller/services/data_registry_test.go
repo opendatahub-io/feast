@@ -552,6 +552,7 @@ var _ = Describe("Data Registry", func() {
 		err := otherFeast.validateDataRegistrySingleton()
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("already enabled"))
+		Expect(err.Error()).To(ContainSubstring("cluster-wide"))
 	})
 
 	It("allows the oldest annotated CR to win when multiple exist (creationTimestamp tiebreaker)", func() {
@@ -605,6 +606,7 @@ var _ = Describe("Data Registry", func() {
 		err := newerFeast.validateDataRegistrySingleton()
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("already enabled"))
+		Expect(err.Error()).To(ContainSubstring("cluster-wide"))
 		Expect(err.Error()).To(ContainSubstring(featureStore.Name))
 	})
 
@@ -875,7 +877,7 @@ var _ = Describe("Data Registry", func() {
 
 		err := feast.validateDataRegistryNamespace()
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("missing the required label"))
+		Expect(err.Error()).To(ContainSubstring("not designated for the data registry"))
 		Expect(err.Error()).To(ContainSubstring(DataRegistryNamespaceLabel))
 	})
 
@@ -918,7 +920,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set on namespace failure")
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
-		Expect(cond.Message).To(ContainSubstring("missing the required label"))
+		Expect(cond.Message).To(ContainSubstring("not designated for the data registry"))
 	})
 
 	It("sets DataRegistryReady=False condition when singleton validation fails", func() {
@@ -978,6 +980,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
 		Expect(cond.Message).To(ContainSubstring("already enabled"))
+		Expect(cond.Message).To(ContainSubstring("cluster-wide"))
 	})
 
 	It("sets DataRegistryReady=False condition when PVC safety guard fails", func() {
