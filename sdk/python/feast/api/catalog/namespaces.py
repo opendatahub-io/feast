@@ -31,8 +31,8 @@ from feast.api.catalog.catalog_utils import (
     delete_namespace_meta,
     get_namespace_properties,
     list_namespaces,
+    merge_namespace_properties,
     resolve_namespace,
-    set_namespace_properties,
     validate_namespace_exists,
 )
 from feast.api.catalog.errors import (
@@ -158,19 +158,13 @@ def get_namespace_router() -> APIRouter:
         registry = _registry(request)
         if not validate_namespace_exists(registry, rhai_ns, col):
             raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
-        current = get_namespace_properties(registry, rhai_ns, col)
-        updated = sorted(body.updates)
-        removed: list[str] = []
-        missing: list[str] = []
-        for key, value in body.updates.items():
-            current[key] = value
-        for key in body.removals:
-            if key in current:
-                current.pop(key)
-                removed.append(key)
-            else:
-                missing.append(key)
-        set_namespace_properties(registry, rhai_ns, col, current)
+        updated, removed, missing = merge_namespace_properties(
+            registry,
+            rhai_ns,
+            col,
+            dict(body.updates),
+            list(body.removals),
+        )
         return UpdateNamespacePropertiesResponse(
             updated=updated,
             removed=removed,
