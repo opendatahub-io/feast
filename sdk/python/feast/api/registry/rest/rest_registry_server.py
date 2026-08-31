@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from feast import FeatureStore
 from feast.api.registry.rest import register_all_routes
+from feast.api.registry.rest.catalog_integration import add_catalog_routes
 from feast.errors import (
     FeastObjectNotFoundException,
     FeastPermissionError,
@@ -286,6 +287,7 @@ class RestRegistryServer:
 
     def _register_routes(self):
         register_all_routes(self.app, self.grpc_handler, self)
+        add_catalog_routes(self.app, self.registry)
 
     def _add_openapi_security(self):
         if self.app.openapi_schema:
