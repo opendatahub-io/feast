@@ -75,7 +75,7 @@ var _ = Describe("Data Registry", func() {
 				Namespace: typeNamespacedName.Namespace,
 			},
 			Spec: feastdevv1.FeatureStoreSpec{
-				FeastProject: "data-registry",
+				FeastProject: "data_registry",
 				Services: &feastdevv1.FeatureStoreServices{
 					Registry: &feastdevv1.Registry{
 						Local: &feastdevv1.LocalRegistryConfig{
@@ -125,7 +125,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.isDataRegistryEnabled()).To(BeTrue())
 	})
 
-	It("produces a two-container Deployment with --ignore-paths (no /search) and FEAST_PROJECT=data-registry", func() {
+	It("produces a two-container Deployment with --ignore-paths (no /search) and FEAST_PROJECT=data_registry", func() {
 		setAnnotation("true")
 
 		deploy := feast.initDataRegistryDeploy()
@@ -186,7 +186,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
 		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
-		// FEAST_PROJECT must be "data-registry" (Phase-1 storage model)
+		// FEAST_PROJECT must be "data_registry" (Phase-1 storage model)
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
 
 		// HTTP GET /projects probe: no_auth is forced in data-registry mode so the
@@ -213,7 +213,7 @@ var _ = Describe("Data Registry", func() {
 			// /search is NOT in ignore-paths: proxy gates it so unauthenticated callers get 401 (S1 fix).
 			"--ignore-paths=/projects,/api/v1/projects",
 			"--auth-header-fields-enabled",
-			"--auth-header-fields-username=X-Remote-User",
+			"--auth-header-user-field-name=X-Remote-User",
 		))
 		// /search and /api/v1/search must NOT appear in ignore-paths.
 		for _, arg := range proxyCtr.Args {
@@ -493,7 +493,7 @@ var _ = Describe("Data Registry", func() {
 				},
 			},
 			Spec: feastdevv1.FeatureStoreSpec{
-				FeastProject: "other-registry",
+				FeastProject: "other_registry",
 				Services: &feastdevv1.FeatureStoreServices{
 					Registry: &feastdevv1.Registry{
 						Local: &feastdevv1.LocalRegistryConfig{
