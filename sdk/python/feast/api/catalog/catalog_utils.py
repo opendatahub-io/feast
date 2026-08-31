@@ -37,6 +37,8 @@ from typing import Any, Callable
 
 from feast.api.catalog.errors import (
     NamespaceAlreadyExistsException,
+    NamespaceNotEmptyException,
+    NoSuchNamespaceException,
     ServiceFailureException,
 )
 from feast.errors import ConcurrentVersionConflict, ProjectObjectNotFoundException
@@ -272,6 +274,20 @@ def _saved_datasets_in_collection(
     return False
 
 
+def _collection_present_in_mutate(
+    project: Project,
+    registry: BaseRegistry,
+    conn: Any,
+    rhai_ns: str,
+    collection: str,
+    key: str,
+) -> bool:
+    """True if this collection exists as tag, ``default``, or catalog-managed assets."""
+    if collection == DEFAULT_COLLECTION or key in project.tags:
+        return True
+    return _saved_datasets_in_collection(registry, conn, rhai_ns, collection)
+
+
 def _mutate_catalog_project(
     registry: BaseRegistry,
     mutator: Callable[[Project, Any], None],
@@ -366,12 +382,20 @@ def merge_namespace_properties(
 ) -> tuple[list[str], list[str], list[str]]:
     """Apply updates/removals to one collection's JSON inside compare-and-swap.
 
+    Existence (tag, ``default``, or catalog-managed SavedDatasets) is decided on
+    the same write connection. Missing collection is 404 and does not write a
+    tag (so a concurrent DELETE cannot be undone by properties).
+
     Returns ``(updated, removed, missing)`` from the snapshot that was written.
     """
-    key = ns_meta_key(rhai_ns, collection)
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    key = ns_meta_key(ns, col)
     result: dict[str, list[str]] = {"updated": [], "removed": [], "missing": []}
 
     def mutator(project: Project, conn: Any) -> None:
+        if not _collection_present_in_mutate(project, registry, conn, ns, col, key):
+            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
         current: dict[str, str] = {}
         raw = project.tags.get(key)
         if raw:
@@ -405,19 +429,28 @@ def merge_namespace_properties(
 def delete_namespace_meta(
     registry: BaseRegistry, rhai_ns: str, collection: str
 ) -> None:
-    key = ns_meta_key(rhai_ns, collection)
+    """Drop an empty collection tag. Raises if missing or not empty.
+
+    Empty/exists are decided inside mutate: catalog-managed SavedDatasets on the
+    same write connection, then the tag map. Table-only collections are 409.
+    """
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    key = ns_meta_key(ns, col)
 
     def mutator(project: Project, conn: Any) -> None:
+        if _saved_datasets_in_collection(registry, conn, ns, col):
+            raise NamespaceNotEmptyException(f"Namespace not empty: {col}")
         if key not in project.tags:
-            return
+            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
         tags = dict(project.tags)
         tags.pop(key, None)
         project.tags = tags
 
     try:
         _mutate_catalog_project(registry, mutator, create_if_missing=False)
-    except ProjectObjectNotFoundException:
-        return
+    except ProjectObjectNotFoundException as exc:
+        raise NoSuchNamespaceException(f"Namespace does not exist: {col}") from exc
 
 
 def _get_catalog_project(registry: BaseRegistry) -> Project | None:
