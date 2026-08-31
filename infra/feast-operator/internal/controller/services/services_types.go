@@ -102,15 +102,15 @@ const (
 	DataRegistryEditorClusterRoleName = "feast-data-registry-editor"
 	DataRegistryAdminClusterRoleName  = "feast-data-registry-admin"
 
-	// DataRegistryLockConfigMapName is a cluster-scoped sentinel used to
-	// detect concurrent first-creates of a data-registry CR. The operator
-	// attempts to Create this ConfigMap after the List-based singleton check
-	// passes; AlreadyExists means another CR won the race.
-	DataRegistryLockConfigMapName = "feast-data-registry-lock"
-
 	// DataRegistryProject is the fixed Feast project name used in
 	// data-registry mode (Phase-1 single-project storage model).
 	DataRegistryProject = "data_registry"
+
+	// DataRegistryNamespaceLabel is the label that must be present on a
+	// namespace for the operator to allow a data-registry CR in it.
+	// This is more flexible than a hardcoded namespace name because ODH,
+	// RHOAI, and custom installs can each label their chosen namespace.
+	DataRegistryNamespaceLabel = "opendatahub.io/data-registry"
 
 	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 
@@ -376,6 +376,19 @@ var (
 				Type:   feastdevv1.CronJobReadyType,
 				Status: metav1.ConditionFalse,
 				Reason: feastdevv1.CronJobFailedReason,
+			},
+		},
+		DataRegistryFeastType: {
+			metav1.ConditionTrue: {
+				Type:    feastdevv1.DataRegistryReadyType,
+				Status:  metav1.ConditionTrue,
+				Reason:  feastdevv1.ReadyReason,
+				Message: feastdevv1.DataRegistryReadyMessage,
+			},
+			metav1.ConditionFalse: {
+				Type:   feastdevv1.DataRegistryReadyType,
+				Status: metav1.ConditionFalse,
+				Reason: feastdevv1.DataRegistryFailedReason,
 			},
 		},
 	}

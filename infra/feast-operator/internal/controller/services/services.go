@@ -141,10 +141,13 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
-	// Clean up any data-registry resources left from a previous enablement.
+	// Clean up any data-registry resources left from a previous enablement
+	// and remove the DataRegistryReady condition from status.
 	if err := feast.deployDataRegistry(); err != nil {
 		return err
 	}
+	apimeta.RemoveStatusCondition(&feast.Handler.FeatureStore.Status.Conditions,
+		FeastServiceConditions[DataRegistryFeastType][metav1.ConditionTrue].Type)
 	if err := feast.createOrDeleteHPA(); err != nil {
 		return err
 	}
@@ -183,11 +186,19 @@ func (feast *FeastServices) Deploy() error {
 // dataregistry.opendatahub.io/enabled annotation is "true".
 // Standard online/offline store deployments are skipped; a single
 // registry-only pod with the kube-rbac-proxy sidecar is deployed instead.
+//
+// All validation failures and deployment errors are reported via a
+// DataRegistryReady status condition so users can kubectl describe
+// the CR to see exactly why it failed.
 func (feast *FeastServices) deployDataRegistryMode() error {
 	feast.validateDataRegistryAnnotation()
 
+	if err := feast.validateDataRegistryNamespace(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
 	if err := feast.validateDataRegistrySingleton(); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 
 	// PVC safety guard: refuse to switch to data-registry mode if this CR
@@ -200,41 +211,41 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 		if err := feast.Handler.Get(feast.Handler.Context,
 			client.ObjectKey{Namespace: pvc.Namespace, Name: pvc.Name}, existing); err == nil {
 			if existing.DeletionTimestamp != nil {
-				// PVC is being deleted; not an obstacle to mode transition.
 				continue
 			}
-			return fmt.Errorf(
+			err := fmt.Errorf(
 				"cannot enable data-registry mode on FeatureStore %s/%s that owns existing PVC %s; "+
 					"create a dedicated FeatureStore CR for data-registry mode instead",
 				feast.Handler.FeatureStore.Namespace, feast.Handler.FeatureStore.Name, existing.Name,
 			)
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 		}
 	}
 
 	// Clean up standard-mode resources that are not needed in data-registry mode
 	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType, UIFeastType} {
 		if err := feast.removeFeastServiceByType(feastType); err != nil {
-			return err
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 		}
 	}
 
 	if err := feast.createServiceAccount(); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	if err := feast.deployDataRegistry(); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	if err := feast.deployClient(); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	if err := feast.deployNamespaceRegistry(); err != nil {
-		return err
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
-	return nil
+	return feast.setFeastServiceCondition(nil, DataRegistryFeastType)
 }
 
 // reconcileServices validates persistence and deploys or removes each feast

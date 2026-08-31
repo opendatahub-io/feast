@@ -41,6 +41,7 @@ const (
 	ReadyType              = "FeatureStore"
 	AuthorizationReadyType = "Authorization"
 	CronJobReadyType       = "CronJob"
+	DataRegistryReadyType  = "DataRegistry"
 
 	// Feast condition reasons:
 	ReadyReason                  = "Ready"
@@ -53,6 +54,7 @@ const (
 	LineageFailedReason          = "LineageDeploymentFailed"
 	ClientFailedReason           = "ClientDeploymentFailed"
 	CronJobFailedReason          = "CronJobDeploymentFailed"
+	DataRegistryFailedReason     = "DataRegistryDeploymentFailed"
 	KubernetesAuthzFailedReason  = "KubernetesAuthorizationDeploymentFailed"
 	OidcAuthzFailedReason        = "OidcAuthorizationDeploymentFailed"
 
@@ -65,6 +67,7 @@ const (
 	LineageReadyMessage           = "Lineage server installation complete"
 	ClientReadyMessage            = "Client installation complete"
 	CronJobReadyMessage           = "CronJob installation complete"
+	DataRegistryReadyMessage      = "Data Registry installation complete"
 	KubernetesAuthzReadyMessage   = "Kubernetes authorization installation complete"
 	OidcAuthzReadyMessage         = "OIDC authorization installation complete"
 	DeploymentNotAvailableMessage = "Deployment is not available"
