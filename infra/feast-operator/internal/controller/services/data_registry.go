@@ -63,93 +63,65 @@ func (feast *FeastServices) validateDataRegistryAnnotation() {
 	}
 }
 
-// validateDataRegistrySingleton ensures only one FeatureStore CR cluster-wide
-// has the data-registry annotation enabled. Returns an error if another CR
-// already has it, preventing race conditions on the shared PostgreSQL backend
-// and duplicate cluster-scoped resources.
-//
-// The check uses two layers:
-//  1. List-based: scan all FeatureStore CRs for a competing annotation.
-//  2. Lock ConfigMap: after the List check passes, attempt to create a
-//     ConfigMap named DataRegistryLockConfigMapName in the operator namespace.
-//     AlreadyExists means a concurrent reconcile of a different CR won the race.
-//     The ConfigMap is deleted by cleanupDataRegistryResources when the
-//     annotation is removed or the CR is deleted.
+// validateDataRegistryNamespace ensures the namespace hosting the data-registry
+// CR carries the label opendatahub.io/data-registry=true.  A label-based
+// check is more flexible than a hardcoded name: ODH, RHOAI, and custom
+// installs each label their chosen namespace without operator changes.
+func (feast *FeastServices) validateDataRegistryNamespace() error {
+	ns := &corev1.Namespace{}
+	nsName := feast.Handler.FeatureStore.Namespace
+	if err := feast.Handler.Client.Get(
+		feast.Handler.Context,
+		types.NamespacedName{Name: nsName},
+		ns,
+	); err != nil {
+		return fmt.Errorf("failed to read namespace %q for data-registry label check: %w", nsName, err)
+	}
+	if ns.Labels[DataRegistryNamespaceLabel] != "true" {
+		return fmt.Errorf(
+			"namespace %q is missing the required label %s=true; "+
+				"label the namespace to allow data-registry CRs: "+
+				"kubectl label namespace %s %s=true",
+			nsName, DataRegistryNamespaceLabel,
+			nsName, DataRegistryNamespaceLabel,
+		)
+	}
+	return nil
+}
+
+// validateDataRegistrySingleton ensures only one FeatureStore CR in the
+// namespace has the data-registry annotation enabled. Uses
+// metadata.creationTimestamp as a deterministic tiebreaker: the oldest
+// annotated CR wins, all others are rejected. This eliminates the race
+// window that existed with the old List+Lock approach because
+// creationTimestamp is set by the API server and is always unique.
 func (feast *FeastServices) validateDataRegistrySingleton() error {
+	self := feast.Handler.FeatureStore
 	var list feastdevv1.FeatureStoreList
-	if err := feast.Handler.Client.List(feast.Handler.Context, &list); err != nil {
+	if err := feast.Handler.Client.List(feast.Handler.Context, &list,
+		client.InNamespace(self.Namespace)); err != nil {
 		return fmt.Errorf("failed to list FeatureStore CRs for singleton check: %w", err)
 	}
-	self := feast.Handler.FeatureStore
+
 	for i := range list.Items {
 		item := &list.Items[i]
-		if item.Name == self.Name && item.Namespace == self.Namespace {
+		if item.Name == self.Name {
 			continue
 		}
 		if item.DeletionTimestamp != nil {
 			continue
 		}
-		if item.Annotations[DataRegistryAnnotation] == "true" {
+		if item.Annotations[DataRegistryAnnotation] != "true" {
+			continue
+		}
+		// Another annotated CR exists — oldest wins.
+		if item.CreationTimestamp.Before(&self.CreationTimestamp) ||
+			(item.CreationTimestamp.Equal(&self.CreationTimestamp) && item.Name < self.Name) {
 			return fmt.Errorf(
-				"data registry is already enabled on FeatureStore %s/%s; only one data-registry instance is allowed cluster-wide",
-				item.Namespace, item.Name,
+				"data registry is already enabled on FeatureStore %s (created at %s); only one data-registry instance is allowed per namespace",
+				item.Name, item.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
 			)
 		}
-	}
-
-	// Attempt to claim the cluster-wide lock ConfigMap. This mitigates the
-	// sub-second race window where two concurrent first-creates both pass the
-	// List check above before either has written any resources.
-	// Uses CreateOrUpdate so re-reconciles of the same CR are idempotent.
-	operatorNs := os.Getenv("POD_NAMESPACE")
-	if operatorNs == "" {
-		operatorNs = DefaultKubernetesNamespace
-	}
-	lockCM := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      DataRegistryLockConfigMapName,
-			Namespace: operatorNs,
-		},
-	}
-	logger := log.FromContext(feast.Handler.Context)
-
-	// Create-first strategy: bypasses the label-filtered informer cache
-	// which can serve stale entries for ConfigMaps deleted externally.
-	// Create goes directly to the API server; AlreadyExists means it's
-	// genuinely there and we fall back to Get+Update for ownership check.
-	lockCM.Labels = map[string]string{
-		ManagedByLabelKey: ManagedByLabelValue,
-		NameLabelKey:      self.Name,
-	}
-	lockCM.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
-
-	createErr := feast.Handler.Client.Create(feast.Handler.Context, lockCM)
-	if createErr == nil {
-		logger.Info("Created data-registry lock ConfigMap",
-			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "owner", self.Name)
-		return nil
-	}
-
-	if !apierrors.IsAlreadyExists(createErr) {
-		logger.Info("Could not create data-registry lock ConfigMap (non-fatal, List check is primary guard)",
-			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", createErr)
-		return nil
-	}
-
-	// ConfigMap already exists — verify ownership.
-	existing := &corev1.ConfigMap{}
-	if err := feast.Handler.Client.Get(feast.Handler.Context,
-		types.NamespacedName{Name: DataRegistryLockConfigMapName, Namespace: operatorNs}, existing); err != nil {
-		logger.Info("Could not read existing data-registry lock ConfigMap (non-fatal)",
-			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", err)
-		return nil
-	}
-	existingOwner := existing.Labels[NameLabelKey]
-	if existingOwner != "" && existingOwner != self.Name {
-		return fmt.Errorf(
-			"data registry lock ConfigMap %s/%s already exists; another data-registry instance may be initializing concurrently",
-			operatorNs, DataRegistryLockConfigMapName,
-		)
 	}
 	return nil
 }
@@ -213,37 +185,7 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
 	}
-	feast.CleanupDataRegistryLockConfigMap()
 	return nil
-}
-
-// CleanupDataRegistryLockConfigMap deletes the singleton lock ConfigMap.
-// Errors are logged but not returned: the lock is advisory and a stale lock
-// can be cleaned up manually. The ConfigMap namespace is derived from the
-// POD_NAMESPACE env var (set by the operator Deployment's downward-API volume)
-// or falls back to DefaultKubernetesNamespace.
-func (feast *FeastServices) CleanupDataRegistryLockConfigMap() {
-	logger := log.FromContext(feast.Handler.Context)
-	operatorNs := os.Getenv("POD_NAMESPACE")
-	if operatorNs == "" {
-		operatorNs = DefaultKubernetesNamespace
-	}
-	lockCM := &corev1.ConfigMap{}
-	if err := feast.Handler.Client.Get(
-		feast.Handler.Context,
-		types.NamespacedName{Name: DataRegistryLockConfigMapName, Namespace: operatorNs},
-		lockCM,
-	); err != nil {
-		return
-	}
-	self := feast.Handler.FeatureStore
-	if lockCM.Labels[ManagedByLabelKey] != ManagedByLabelValue || lockCM.Labels[NameLabelKey] != self.Name {
-		return
-	}
-	if err := feast.Handler.Client.Delete(feast.Handler.Context, lockCM); err != nil && !apierrors.IsNotFound(err) {
-		logger.Info("Could not delete data-registry lock ConfigMap (non-fatal)",
-			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", err)
-	}
 }
 
 // ---------------------------------------------------------------------------

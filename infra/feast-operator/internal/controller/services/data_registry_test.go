@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -61,6 +62,21 @@ var _ = Describe("Data Registry", func() {
 		feast.refreshFeatureStore(ctx, typeNamespacedName)
 	}
 
+	// labelNamespace adds or removes the data-registry label on the test namespace.
+	labelNamespace := func(ctx context.Context, add bool) {
+		nsObj := &corev1.Namespace{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: DefaultNs}, nsObj)).To(Succeed())
+		if nsObj.Labels == nil {
+			nsObj.Labels = map[string]string{}
+		}
+		if add {
+			nsObj.Labels[DataRegistryNamespaceLabel] = "true"
+		} else {
+			delete(nsObj.Labels, DataRegistryNamespaceLabel)
+		}
+		Expect(k8sClient.Update(ctx, nsObj)).To(Succeed())
+	}
+
 	BeforeEach(func() {
 		isOpenShift = false
 		ctx = context.Background()
@@ -68,6 +84,8 @@ var _ = Describe("Data Registry", func() {
 			Name:      "dr-teststore",
 			Namespace: DefaultNs,
 		}
+		// Label the test namespace so the data-registry CR is allowed here.
+		labelNamespace(ctx, true)
 
 		featureStore = &feastdevv1.FeatureStore{
 			ObjectMeta: metav1.ObjectMeta{
@@ -110,6 +128,7 @@ var _ = Describe("Data Registry", func() {
 	})
 
 	AfterEach(func() {
+		labelNamespace(ctx, false)
 		Expect(k8sClient.Delete(ctx, featureStore)).To(Succeed())
 	})
 
@@ -481,12 +500,14 @@ var _ = Describe("Data Registry", func() {
 		Expect(proxyCtr.Resources.Limits.Memory().String()).To(Equal(DefaultKubeRBACProxyMemoryLimit))
 	})
 
-	It("rejects a second data-registry-enabled FeatureStore CR (singleton enforcement)", func() {
+	It("rejects a newer data-registry-enabled FeatureStore CR (singleton enforcement via creationTimestamp)", func() {
 		setAnnotation("true")
 
+		// Name sorts after "dr-teststore" so featureStore wins the tiebreaker
+		// when creationTimestamps are identical (same second in envtest).
 		otherFS := &feastdevv1.FeatureStore{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "dr-otherstore",
+				Name:      "dr-zzz-otherstore",
 				Namespace: DefaultNs,
 				Annotations: map[string]string{
 					DataRegistryAnnotation: "true",
@@ -514,12 +535,77 @@ var _ = Describe("Data Registry", func() {
 			},
 		}
 		Expect(k8sClient.Create(ctx, otherFS)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, otherFS) }()
 
-		err := feast.validateDataRegistrySingleton()
+		// featureStore wins (name sorts first), so validation passes for it.
+		Expect(feast.validateDataRegistrySingleton()).To(Succeed())
+
+		// otherFS loses, so validation from its perspective must fail.
+		otherFeast := &FeastServices{
+			Handler: handler.FeastHandler{
+				Client:       k8sClient,
+				Context:      ctx,
+				Scheme:       k8sClient.Scheme(),
+				FeatureStore: otherFS,
+			},
+		}
+		err := otherFeast.validateDataRegistrySingleton()
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("already enabled"))
+	})
 
-		Expect(k8sClient.Delete(ctx, otherFS)).To(Succeed())
+	It("allows the oldest annotated CR to win when multiple exist (creationTimestamp tiebreaker)", func() {
+		setAnnotation("true")
+
+		// Name sorts after "dr-teststore" → featureStore wins the tiebreaker.
+		newerFS := &feastdevv1.FeatureStore{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dr-zzz-newer",
+				Namespace: DefaultNs,
+				Annotations: map[string]string{
+					DataRegistryAnnotation: "true",
+				},
+			},
+			Spec: feastdevv1.FeatureStoreSpec{
+				FeastProject: "newer_registry",
+				Services: &feastdevv1.FeatureStoreServices{
+					Registry: &feastdevv1.Registry{
+						Local: &feastdevv1.LocalRegistryConfig{
+							Server: &feastdevv1.RegistryServerConfigs{
+								ServerConfigs: feastdevv1.ServerConfigs{
+									ContainerConfigs: feastdevv1.ContainerConfigs{
+										DefaultCtrConfigs: feastdevv1.DefaultCtrConfigs{
+											Image: ptr.To("test-image"),
+										},
+									},
+								},
+								GRPC:    ptr.To(true),
+								RestAPI: ptr.To(false),
+							},
+						},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, newerFS)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, newerFS) }()
+
+		// The original featureStore wins → passes.
+		Expect(feast.validateDataRegistrySingleton()).To(Succeed())
+
+		// The newer CR is rejected and error references the winning CR.
+		newerFeast := &FeastServices{
+			Handler: handler.FeastHandler{
+				Client:       k8sClient,
+				Context:      ctx,
+				Scheme:       k8sClient.Scheme(),
+				FeatureStore: newerFS,
+			},
+		}
+		err := newerFeast.validateDataRegistrySingleton()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("already enabled"))
+		Expect(err.Error()).To(ContainSubstring(featureStore.Name))
 	})
 
 	It("validates the auth.yaml apiGroup matches the dataRegistryAPIGroup constant", func() {
@@ -779,5 +865,146 @@ var _ = Describe("Data Registry", func() {
 		drDeploy := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, drKey, drDeploy)).To(Succeed())
 		Expect(drDeploy.Spec.Template.Spec.Containers).To(HaveLen(2))
+	})
+
+	It("rejects data-registry CR when namespace lacks the label", func() {
+		setAnnotation("true")
+
+		// Remove the label so validation should fail.
+		labelNamespace(ctx, false)
+
+		err := feast.validateDataRegistryNamespace()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("missing the required label"))
+		Expect(err.Error()).To(ContainSubstring(DataRegistryNamespaceLabel))
+	})
+
+	It("allows data-registry CR when namespace has the label", func() {
+		setAnnotation("true")
+
+		// Label is already set by BeforeEach.
+		Expect(feast.validateDataRegistryNamespace()).To(Succeed())
+	})
+
+	It("sets DataRegistryReady=True condition on successful deployDataRegistryMode", func() {
+		isOpenShift = false
+		setAnnotation("true")
+
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		Expect(feast.deployDataRegistryMode()).To(Succeed())
+
+		// Use feast.Handler.FeatureStore (not the test's featureStore var)
+		// because refreshFeatureStore replaces the pointer.
+		cond := apimeta.FindStatusCondition(feast.Handler.FeatureStore.Status.Conditions, feastdevv1.DataRegistryReadyType)
+		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set")
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal(feastdevv1.ReadyReason))
+		Expect(cond.Message).To(Equal(feastdevv1.DataRegistryReadyMessage))
+	})
+
+	It("sets DataRegistryReady=False condition when namespace validation fails", func() {
+		setAnnotation("true")
+
+		// Remove the label so namespace validation fails.
+		labelNamespace(ctx, false)
+
+		err := feast.deployDataRegistryMode()
+		Expect(err).To(HaveOccurred())
+
+		cond := apimeta.FindStatusCondition(feast.Handler.FeatureStore.Status.Conditions, feastdevv1.DataRegistryReadyType)
+		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set on namespace failure")
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
+		Expect(cond.Message).To(ContainSubstring("missing the required label"))
+	})
+
+	It("sets DataRegistryReady=False condition when singleton validation fails", func() {
+		setAnnotation("true")
+
+		// featureStore was created in BeforeEach and is the oldest annotated CR.
+		// Create a second annotated CR; it's newer. Point feast at the *newer*
+		// CR so that singleton validation rejects it (older CR wins).
+		// Name sorts after "dr-teststore" so featureStore wins the tiebreaker.
+		newerFS := &feastdevv1.FeatureStore{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dr-zzz-singleton-cond",
+				Namespace: DefaultNs,
+				Annotations: map[string]string{
+					DataRegistryAnnotation: "true",
+				},
+			},
+			Spec: feastdevv1.FeatureStoreSpec{
+				FeastProject: "other_project",
+				Services: &feastdevv1.FeatureStoreServices{
+					Registry: &feastdevv1.Registry{
+						Local: &feastdevv1.LocalRegistryConfig{
+							Server: &feastdevv1.RegistryServerConfigs{
+								ServerConfigs: feastdevv1.ServerConfigs{
+									ContainerConfigs: feastdevv1.ContainerConfigs{
+										DefaultCtrConfigs: feastdevv1.DefaultCtrConfigs{
+											Image: ptr.To("test-image"),
+										},
+									},
+								},
+								GRPC:    ptr.To(true),
+								RestAPI: ptr.To(false),
+							},
+						},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, newerFS)).To(Succeed())
+		applySpecToStatus(newerFS)
+		defer func() { _ = k8sClient.Delete(ctx, newerFS) }()
+
+		newerFeast := &FeastServices{
+			Handler: handler.FeastHandler{
+				Client:       k8sClient,
+				Context:      ctx,
+				Scheme:       k8sClient.Scheme(),
+				FeatureStore: newerFS,
+			},
+		}
+
+		err := newerFeast.deployDataRegistryMode()
+		Expect(err).To(HaveOccurred())
+
+		cond := apimeta.FindStatusCondition(newerFeast.Handler.FeatureStore.Status.Conditions, feastdevv1.DataRegistryReadyType)
+		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set on singleton failure")
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
+		Expect(cond.Message).To(ContainSubstring("already enabled"))
+	})
+
+	It("sets DataRegistryReady=False condition when PVC safety guard fails", func() {
+		isOpenShift = false
+
+		// Use OnlineFeastType to avoid colliding with the "refuses data-registry
+		// mode when the CR already owns PVCs" test which uses RegistryFeastType.
+		pvc := feast.initPVC(OnlineFeastType)
+		pvc.Spec = corev1.PersistentVolumeClaimSpec{
+			AccessModes: DefaultPVCAccessModes,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(DefaultOnlineStorageRequest),
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, pvc) }()
+
+		setAnnotation("true")
+		err := feast.deployDataRegistryMode()
+		Expect(err).To(HaveOccurred())
+
+		cond := apimeta.FindStatusCondition(feast.Handler.FeatureStore.Status.Conditions, feastdevv1.DataRegistryReadyType)
+		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set on PVC failure")
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
+		Expect(cond.Message).To(ContainSubstring("cannot enable data-registry mode"))
 	})
 })
