@@ -51,7 +51,12 @@ CASES = [
         409,
         "NamespaceNotEmptyException",
     ),
-    ("table-exists", TableAlreadyExistsException, 409, "TableAlreadyExistsException"),
+    (
+        "table-exists",
+        TableAlreadyExistsException,
+        409,
+        "AlreadyExistsException",
+    ),
     ("bad-request", BadRequestException, 400, "BadRequestException"),
     ("not-implemented", NotImplementedException, 501, "NotImplementedException"),
     ("service-failure", ServiceFailureException, 500, "ServiceFailureException"),

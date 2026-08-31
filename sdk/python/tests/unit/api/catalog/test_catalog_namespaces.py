@@ -327,7 +327,7 @@ def test_n11_multipart_namespace_is_iceberg_400(sqlite_registry):
     assert nested.json()["error"]["type"] == "BadRequestException"
 
 
-def test_n12_config_advertises_namespace_not_tables(sqlite_registry):
+def test_n12_config_advertises_namespace_and_tables(sqlite_registry):
     response = _client(sqlite_registry).get("/v1/config")
     assert response.status_code == 200
     endpoints = response.json()["endpoints"]
@@ -341,7 +341,7 @@ def test_n12_config_advertises_namespace_not_tables(sqlite_registry):
         "POST /v1/{prefix}/namespaces/{namespace}/properties",
     ):
         assert sig in endpoints
-    assert all("/tables" not in sig for sig in endpoints)
+    assert "GET /v1/{prefix}/namespaces/{namespace}/tables" in endpoints
     assert all("/volumes" not in sig for sig in endpoints)
 
 
