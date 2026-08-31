@@ -15,10 +15,9 @@
 """Iceberg REST error types and FastAPI handlers (RHAI-386).
 
 Handlers are registered on the catalog FastAPI app only. Do not call
-``register_error_handlers`` on RestRegistryServer — that would rewrite
-``/api/v1`` bodies. Phase-2 stub routes (RHAI-390) raise
-``NotImplementedException``; concurrent create races (RHAI-389) raise
-``TableAlreadyExistsException``.
+``register_error_handlers`` on RestRegistryServer without a ``/v1`` path
+check — that would rewrite Feast REST bodies. Concurrent create races
+(RHAI-389) raise ``TableAlreadyExistsException``.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ class NamespaceAlreadyExistsException(IcebergRESTException):
 
 class TableAlreadyExistsException(IcebergRESTException):
     http_status = 409
-    error_type = "TableAlreadyExistsException"
+    error_type = "AlreadyExistsException"
 
 
 class NamespaceNotEmptyException(IcebergRESTException):
