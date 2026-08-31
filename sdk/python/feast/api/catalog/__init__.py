@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation helpers plus Iceberg config/error types.
+"""Catalog translation helpers plus Iceberg REST types and routers.
 
 Does not mount routes on RestRegistryServer. Tests include
-``get_config_router()`` and ``get_namespace_router()`` on a dedicated FastAPI app.
+``get_config_router()``, ``get_namespace_router()``, and
+``get_table_router()`` on a dedicated FastAPI app. Mounting on
+RestRegistryServer is RHAI-390 (``add_catalog_routes``).
 """
 
 from feast.api.catalog.catalog_utils import (
@@ -52,14 +54,21 @@ from feast.api.catalog.errors import (
 )
 from feast.api.catalog.models import (
     CreateNamespaceRequest,
+    CreateTableRequest,
     DataRegistryConfig,
     ErrorResponse,
     ListNamespacesResponse,
+    ListTablesResponse,
+    LoadTableResponse,
     NamespaceResponse,
+    RenameTableRequest,
+    TableIdentifier,
     UpdateNamespacePropertiesRequest,
     UpdateNamespacePropertiesResponse,
+    UpdateTableRequest,
 )
 from feast.api.catalog.namespaces import get_namespace_router
+from feast.api.catalog.tables import get_table_router
 
 __all__ = [
     "CATALOG_CONFIG_ENDPOINTS",
@@ -68,10 +77,13 @@ __all__ = [
     "NS_META_PREFIX",
     "BadRequestException",
     "CreateNamespaceRequest",
+    "CreateTableRequest",
     "DataRegistryConfig",
     "ErrorResponse",
     "IcebergRESTException",
     "ListNamespacesResponse",
+    "ListTablesResponse",
+    "LoadTableResponse",
     "NamespaceAlreadyExistsException",
     "NamespaceNotEmptyException",
     "NamespaceResponse",
@@ -79,15 +91,19 @@ __all__ = [
     "NoSuchTableException",
     "NotImplementedException",
     "ServiceFailureException",
+    "RenameTableRequest",
     "TableAlreadyExistsException",
+    "TableIdentifier",
     "UpdateNamespacePropertiesRequest",
     "UpdateNamespacePropertiesResponse",
+    "UpdateTableRequest",
     "collection_has_assets",
     "delete_namespace_meta",
     "ensure_catalog_project",
     "get_config_router",
     "get_namespace_properties",
     "get_namespace_router",
+    "get_table_router",
     "list_namespaces",
     "missing_required_fields",
     "ns_meta_key",

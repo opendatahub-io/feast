@@ -17,8 +17,7 @@
 ``GET /v1/config`` is the engine bootstrap call. ``warehouse`` (or the
 prefixed path) becomes ``overrides.prefix`` so later calls use
 ``/v1/{prefix}/...``. ``endpoints`` lists only routes this package serves;
-CRUD tickets append. Do not mount this router on RestRegistryServer here
-(RHAI-390).
+CRUD tickets append. Mounting on RestRegistryServer is RHAI-390.
 """
 
 from __future__ import annotations
@@ -39,6 +38,13 @@ CATALOG_CONFIG_ENDPOINTS = [
     "HEAD /v1/{prefix}/namespaces/{namespace}",
     "DELETE /v1/{prefix}/namespaces/{namespace}",
     "POST /v1/{prefix}/namespaces/{namespace}/properties",
+    "GET /v1/{prefix}/namespaces/{namespace}/tables",
+    "POST /v1/{prefix}/namespaces/{namespace}/tables",
+    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    "DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    "POST /v1/{prefix}/tables/rename",
 ]
 
 
