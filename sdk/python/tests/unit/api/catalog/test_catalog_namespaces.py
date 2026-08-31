@@ -167,6 +167,21 @@ def test_n5_head_unknown_is_404(sqlite_registry):
     assert response.status_code == 404
 
 
+def test_delete_unknown_is_404(sqlite_registry):
+    response = _client(sqlite_registry).delete(f"/v1/{NS}/namespaces/{COL}")
+    assert response.status_code == 404
+    assert response.json()["error"]["type"] == "NoSuchNamespaceException"
+
+
+def test_properties_unknown_is_404(sqlite_registry):
+    response = _client(sqlite_registry).post(
+        f"/v1/{NS}/namespaces/{COL}/properties",
+        json={"updates": {"owner": "uw"}, "removals": []},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["type"] == "NoSuchNamespaceException"
+
+
 def test_n6_get_and_head_default_on_empty_registry(sqlite_registry):
     client = _client(sqlite_registry)
     got = client.get(f"/v1/{NS}/namespaces/{DEFAULT_COLLECTION}")
@@ -204,6 +219,22 @@ def test_n8_delete_with_asset_is_409_not_empty(sqlite_registry):
     error = response.json()["error"]
     assert error["type"] == "NamespaceNotEmptyException"
     assert error["code"] == 409
+    assert client.get(f"/v1/{NS}/namespaces/{COL}").status_code == 200
+
+
+def test_delete_table_only_collection_is_409(sqlite_registry):
+    sqlite_registry.apply_saved_dataset(
+        _make_saved_dataset(
+            scoped_name(NS, COL, "risk_scores"),
+            NS,
+            COL,
+        ),
+        CATALOG_PROJECT,
+    )
+    client = _client(sqlite_registry)
+    response = client.delete(f"/v1/{NS}/namespaces/{COL}")
+    assert response.status_code == 409
+    assert response.json()["error"]["type"] == "NamespaceNotEmptyException"
     assert client.get(f"/v1/{NS}/namespaces/{COL}").status_code == 200
 
 
@@ -533,5 +564,191 @@ def test_n16_apply_saved_dataset_does_not_drop_namespace_tag():
             if "ok" in created:
                 project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
                 assert ns_meta_key(NS, COL) in project.tags
+        finally:
+            registry.teardown()
+
+
+def test_n17_delete_namespace_meta_with_assets_is_409():
+    from feast.api.catalog.catalog_utils import (
+        create_namespace_meta,
+        delete_namespace_meta,
+    )
+    from feast.api.catalog.errors import NamespaceNotEmptyException
+
+    registry, _path = _threaded_sqlite_registry()
+    try:
+        create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+        registry.apply_saved_dataset(
+            _make_saved_dataset(
+                scoped_name(NS, COL, "risk_scores"),
+                NS,
+                COL,
+            ),
+            CATALOG_PROJECT,
+        )
+        with pytest.raises(NamespaceNotEmptyException):
+            delete_namespace_meta(registry, NS, COL)
+        project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        assert ns_meta_key(NS, COL) in project.tags
+    finally:
+        registry.teardown()
+
+
+def test_n18_concurrent_deletes_are_204_and_404():
+    import threading
+
+    from feast.api.catalog.catalog_utils import (
+        create_namespace_meta,
+        delete_namespace_meta,
+    )
+    from feast.api.catalog.errors import NoSuchNamespaceException
+
+    registry, _path = _threaded_sqlite_registry()
+    try:
+        create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+        barrier = threading.Barrier(2)
+        outcomes: list[str] = []
+        errors: list[BaseException] = []
+
+        def worker():
+            barrier.wait()
+            try:
+                delete_namespace_meta(registry, NS, COL)
+                outcomes.append("204")
+            except NoSuchNamespaceException:
+                outcomes.append("404")
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+        assert not errors, errors
+        assert sorted(outcomes) == ["204", "404"]
+        project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+        assert ns_meta_key(NS, COL) not in project.tags
+    finally:
+        registry.teardown()
+
+
+def test_n19_concurrent_delete_and_properties_does_not_undelete():
+    import threading
+
+    from feast.api.catalog.catalog_utils import (
+        create_namespace_meta,
+        delete_namespace_meta,
+        merge_namespace_properties,
+    )
+    from feast.api.catalog.errors import NoSuchNamespaceException
+
+    for _ in range(20):
+        registry, _path = _threaded_sqlite_registry()
+        try:
+            create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+            barrier = threading.Barrier(2)
+            delete_status: list[str] = []
+            props_status: list[str] = []
+            errors: list[BaseException] = []
+
+            def drop():
+                barrier.wait()
+                try:
+                    delete_namespace_meta(registry, NS, COL)
+                    delete_status.append("204")
+                except NoSuchNamespaceException:
+                    delete_status.append("404")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            def props():
+                barrier.wait()
+                try:
+                    merge_namespace_properties(registry, NS, COL, {"a": "A"}, [])
+                    props_status.append("200")
+                except NoSuchNamespaceException:
+                    props_status.append("404")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=drop),
+                threading.Thread(target=props),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+                assert not thread.is_alive()
+            assert not errors, errors
+            assert delete_status and props_status
+            project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+            assert ns_meta_key(NS, COL) not in project.tags
+            listed = _client(registry).get(f"/v1/{NS}/namespaces").json()["namespaces"]
+            assert [COL] not in listed
+        finally:
+            registry.teardown()
+
+
+def test_n20_concurrent_delete_of_nonempty_stays_409():
+    import threading
+
+    from feast.api.catalog.catalog_utils import (
+        create_namespace_meta,
+        delete_namespace_meta,
+    )
+    from feast.api.catalog.errors import NamespaceNotEmptyException
+
+    for _ in range(20):
+        registry, _path = _threaded_sqlite_registry()
+        try:
+            create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+            registry.apply_saved_dataset(
+                _make_saved_dataset(
+                    scoped_name(NS, COL, "risk_scores"),
+                    NS,
+                    COL,
+                ),
+                CATALOG_PROJECT,
+            )
+            barrier = threading.Barrier(2)
+            outcomes: list[str] = []
+            errors: list[BaseException] = []
+
+            def drop():
+                barrier.wait()
+                try:
+                    delete_namespace_meta(registry, NS, COL)
+                    outcomes.append("204")
+                except NamespaceNotEmptyException:
+                    outcomes.append("409")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            def other_drop():
+                barrier.wait()
+                try:
+                    delete_namespace_meta(registry, NS, COL)
+                    outcomes.append("204")
+                except NamespaceNotEmptyException:
+                    outcomes.append("409")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=drop),
+                threading.Thread(target=other_drop),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+                assert not thread.is_alive()
+            assert not errors, errors
+            assert outcomes == ["409", "409"]
+            project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+            assert ns_meta_key(NS, COL) in project.tags
         finally:
             registry.teardown()
