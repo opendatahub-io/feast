@@ -1895,7 +1895,9 @@ class SqlRegistry(CachingRegistry):
                 self.get_project(project_name, allow_cache=False)
                 return
             except ProjectObjectNotFoundException:
-                self.apply_project(Project(name=project_name), commit=True)
+                self.mutate_project(
+                    project_name, lambda _p, _c: None, create_if_missing=True
+                )
 
     def _apply_object(
         self,
@@ -2016,9 +2018,7 @@ class SqlRegistry(CachingRegistry):
                     )
 
             if not isinstance(obj, Project):
-                self.apply_project(
-                    self.get_project(name=project, allow_cache=False), commit=True
-                )
+                self._cas_touch_project(project, conn)
             if not self.purge_feast_metadata:
                 self._set_last_updated_metadata(update_datetime, project, conn)
 
@@ -2068,9 +2068,7 @@ class SqlRegistry(CachingRegistry):
             rows = conn.execute(stmt)
             if rows.rowcount < 1 and not_found_exception:
                 raise not_found_exception(name, project)
-            self.apply_project(
-                self.get_project(name=project, allow_cache=False), commit=True
-            )
+            self._cas_touch_project(project, conn)
             if not self.purge_feast_metadata:
                 self._set_last_updated_metadata(_utc_now(), project, conn)
 
@@ -2310,6 +2308,38 @@ class SqlRegistry(CachingRegistry):
             projects, project.name, "project_name", project, "project_proto"
         )
 
+    def _cas_touch_project(self, name: str, conn) -> None:
+        """Bump Project last_updated on ``conn`` without replacing tags.
+
+        Used after object apply/delete so a stale ``get_project`` snapshot cannot
+        overwrite catalog ``_ns_meta_*`` keys. Same connection as the object write
+        (nested ``mutate_project`` deadlocks SQLite).
+        """
+        from feast.utils import _utc_now
+
+        where_row = (projects.c.project_name == name) & (projects.c.project_id == name)
+        for _ in range(16):
+            row = conn.execute(select(projects).where(where_row)).first()
+            if row is None:
+                return
+            old_proto = bytes(row._mapping["project_proto"])
+            updated = Project.from_proto(ProjectProto.FromString(old_proto))
+            update_datetime = _utc_now()
+            updated.last_updated_timestamp = update_datetime
+            result = conn.execute(
+                update(projects)
+                .where(where_row, projects.c.project_proto == old_proto)
+                .values(
+                    project_proto=updated.to_proto().SerializeToString(),
+                    last_updated_timestamp=int(update_datetime.timestamp()),
+                )
+            )
+            if result.rowcount == 1:
+                return
+        raise ConcurrentVersionConflict(
+            f"Could not update project {name}: concurrent writers"
+        )
+
     def mutate_project(
         self,
         name: str,
@@ -2337,7 +2367,6 @@ class SqlRegistry(CachingRegistry):
 
         where_row = (projects.c.project_name == name) & (projects.c.project_id == name)
         dialect = self.write_engine.dialect.name
-        project: Optional[Project] = None
 
         for _ in range(16):
             try:
@@ -2368,11 +2397,11 @@ class SqlRegistry(CachingRegistry):
                             raise _Retry()
 
                     old_proto = bytes(row._mapping["project_proto"])
-                    project = Project.from_proto(ProjectProto.FromString(old_proto))
-                    mutator(project, conn)
+                    updated = Project.from_proto(ProjectProto.FromString(old_proto))
+                    mutator(updated, conn)
 
                     update_datetime = _utc_now()
-                    project.last_updated_timestamp = update_datetime
+                    updated.last_updated_timestamp = update_datetime
                     result = conn.execute(
                         update(projects)
                         .where(
@@ -2380,7 +2409,7 @@ class SqlRegistry(CachingRegistry):
                             projects.c.project_proto == old_proto,
                         )
                         .values(
-                            project_proto=project.to_proto().SerializeToString(),
+                            project_proto=updated.to_proto().SerializeToString(),
                             last_updated_timestamp=int(update_datetime.timestamp()),
                         )
                     )
@@ -2390,8 +2419,7 @@ class SqlRegistry(CachingRegistry):
                         self._set_last_updated_metadata(update_datetime, name, conn)
                 if self.cache_mode == "sync":
                     self.refresh()
-                assert project is not None
-                return project
+                return updated
             except _Retry:
                 continue
 

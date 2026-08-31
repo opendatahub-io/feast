@@ -246,6 +246,36 @@ def test_n10_update_properties(sqlite_registry):
     }
 
 
+def test_unmanaged_saved_dataset_does_not_list_or_block_create(sqlite_registry):
+    sqlite_registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name(NS, "ml-leak", "training"),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="file:///tmp/dataset.parquet"),
+            namespace=NS,
+            collection="ml-leak",
+        ),
+        CATALOG_PROJECT,
+    )
+    client = _client(sqlite_registry)
+    listed = client.get(f"/v1/{NS}/namespaces")
+    assert listed.status_code == 200
+    assert listed.json()["namespaces"] == [[DEFAULT_COLLECTION]]
+    assert client.head(f"/v1/{NS}/namespaces/ml-leak").status_code == 404
+    created = client.post(f"/v1/{NS}/namespaces", json={"namespace": ["ml-leak"]})
+    assert created.status_code == 200
+    assert client.get(f"/v1/{NS}/namespaces").json()["namespaces"] == [
+        [DEFAULT_COLLECTION],
+        ["ml-leak"],
+    ]
+    dropped = client.delete(f"/v1/{NS}/namespaces/ml-leak")
+    assert dropped.status_code == 204
+    assert client.get(f"/v1/{NS}/namespaces").json()["namespaces"] == [
+        [DEFAULT_COLLECTION]
+    ]
+
+
 def test_n11_multipart_namespace_is_iceberg_400(sqlite_registry):
     client = _client(sqlite_registry)
     response = client.post(
@@ -406,3 +436,102 @@ def test_n14_concurrent_create_different_collections_both_tags_survive():
         assert [col_b] in listed
     finally:
         registry.teardown()
+
+
+def test_n15_concurrent_property_updates_merge_keys():
+    import threading
+
+    registry, _path = _threaded_sqlite_registry()
+    try:
+        client = _client(registry)
+        assert (
+            client.post(
+                f"/v1/{NS}/namespaces",
+                json={"namespace": [COL], "properties": {"keep": "1"}},
+            ).status_code
+            == 200
+        )
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def worker(key: str, value: str):
+            barrier.wait()
+            try:
+                response = _client(registry).post(
+                    f"/v1/{NS}/namespaces/{COL}/properties",
+                    json={"updates": {key: value}, "removals": []},
+                )
+                assert response.status_code == 200, response.json()
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=("a", "A")),
+            threading.Thread(target=worker, args=("b", "B")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+        assert not errors, errors
+        got = client.get(f"/v1/{NS}/namespaces/{COL}").json()["properties"]
+        assert got["keep"] == "1"
+        assert got["a"] == "A"
+        assert got["b"] == "B"
+    finally:
+        registry.teardown()
+
+
+def test_n16_apply_saved_dataset_does_not_drop_namespace_tag():
+    import threading
+
+    from feast.api.catalog.catalog_utils import create_namespace_meta
+    from feast.api.catalog.errors import NamespaceAlreadyExistsException
+
+    for _ in range(10):
+        registry, _path = _threaded_sqlite_registry()
+        try:
+            barrier = threading.Barrier(2)
+            created: list[str] = []
+            errors: list[BaseException] = []
+
+            def create_ns():
+                barrier.wait()
+                try:
+                    create_namespace_meta(registry, NS, COL, {"owner": "uw"})
+                    created.append("ok")
+                except NamespaceAlreadyExistsException:
+                    created.append("exists")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            def apply_table():
+                barrier.wait()
+                try:
+                    registry.apply_saved_dataset(
+                        _make_saved_dataset(
+                            scoped_name(NS, COL, "risk_scores"),
+                            NS,
+                            COL,
+                        ),
+                        CATALOG_PROJECT,
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=create_ns),
+                threading.Thread(target=apply_table),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+                assert not thread.is_alive()
+            assert not errors, errors
+            if "ok" in created:
+                project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
+                assert ns_meta_key(NS, COL) in project.tags
+        finally:
+            registry.teardown()

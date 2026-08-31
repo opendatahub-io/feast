@@ -49,6 +49,9 @@ CATALOG_PROJECT = "data-registry"
 DEFAULT_COLLECTION = "default"
 NAMESPACE_SEPARATOR = "\x1f"
 NS_META_PREFIX = "_ns_meta_"
+CATALOG_MANAGED_TAG = "_catalog_managed"
+CATALOG_MANAGED_VALUE = "true"
+_CATALOG_MANAGED_TAGS = {CATALOG_MANAGED_TAG: CATALOG_MANAGED_VALUE}
 # File / other registries have no Project row lock. Production catalog is SQL.
 _FALLBACK_PROJECT_LOCK = threading.Lock()
 
@@ -141,17 +144,31 @@ def resolve_namespace(raw: str | list[str]) -> str:
     return _require_part("collection", value)
 
 
+def _catalog_saved_datasets(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    collection: str | None = None,
+):
+    """SavedDatasets stamped ``_catalog_managed=true`` for this tenant."""
+    kwargs: dict[str, Any] = {
+        "namespace": rhai_ns,
+        "tags": _CATALOG_MANAGED_TAGS,
+    }
+    if collection is not None:
+        kwargs["collection"] = collection
+    return registry.list_saved_datasets(CATALOG_PROJECT, **kwargs)
+
+
 def list_namespaces(registry: BaseRegistry, rhai_ns: str) -> list[str]:
     """Distinct collection display names for one RHAI tenant, plus ``default``.
 
-    Unions SavedDataset.collection values with scoped ``_ns_meta_{ns}/{collection}``
-    Project tags so empty POST-created collections appear.
+    Unions catalog-managed SavedDataset.collection values with scoped
+    ``_ns_meta_{ns}/{collection}`` Project tags so empty POST-created
+    collections appear. Unmanaged rows in ``data-registry`` are ignored.
     """
     ns = _require_namespace(rhai_ns)
     found = {
-        ds.collection
-        for ds in registry.list_saved_datasets(CATALOG_PROJECT, namespace=ns)
-        if ds.collection
+        ds.collection for ds in _catalog_saved_datasets(registry, ns) if ds.collection
     }
     found.update(_ns_meta_collections(registry, ns))
     found.add(DEFAULT_COLLECTION)
@@ -168,10 +185,7 @@ def validate_namespace_exists(
         return True
     if _has_namespace_meta(registry, ns, col):
         return True
-    datasets = registry.list_saved_datasets(
-        CATALOG_PROJECT, namespace=ns, collection=col
-    )
-    return any(True for _ in datasets)
+    return any(True for _ in _catalog_saved_datasets(registry, ns, col))
 
 
 def ns_meta_key(rhai_ns: str, collection: str) -> str:
@@ -198,13 +212,10 @@ def parse_ns_meta_key(key: str) -> tuple[str, str] | None:
 def collection_has_assets(
     registry: BaseRegistry, rhai_ns: str, collection: str
 ) -> bool:
-    """True if any SavedDataset exists in this tenant collection (tables/volumes)."""
+    """True if any catalog-managed SavedDataset exists in this tenant collection."""
     ns = _require_namespace(rhai_ns)
     col = _require_part("collection", collection)
-    datasets = registry.list_saved_datasets(
-        CATALOG_PROJECT, namespace=ns, collection=col
-    )
-    return any(True for _ in datasets)
+    return any(True for _ in _catalog_saved_datasets(registry, ns, col))
 
 
 def get_namespace_properties(
@@ -232,32 +243,33 @@ def _saved_datasets_in_collection(
     rhai_ns: str,
     collection: str,
 ) -> bool:
-    """True if any SavedDataset exists in this tenant collection.
+    """True if a catalog-managed SavedDataset exists in this tenant collection.
 
-    When ``conn`` is the mutate transaction, SELECT on that connection (no
-    second SQLite lock). File-registry fallback uses ``list_saved_datasets``.
+    When ``conn`` is the mutate transaction, SELECT proto on that connection
+    (tags are not a SQL column). File-registry fallback uses list + tag filter.
     """
     if conn is None:
-        return any(
-            True
-            for _ in registry.list_saved_datasets(
-                CATALOG_PROJECT, namespace=rhai_ns, collection=collection
-            )
-        )
+        return any(True for _ in _catalog_saved_datasets(registry, rhai_ns, collection))
     from sqlalchemy import select as sa_select
 
     from feast.infra.registry.sql import saved_datasets
+    from feast.protos.feast.core.SavedDataset_pb2 import (
+        SavedDataset as SavedDatasetProto,
+    )
 
-    row = conn.execute(
-        sa_select(saved_datasets.c.saved_dataset_name)
-        .where(
+    rows = conn.execute(
+        sa_select(saved_datasets.c.saved_dataset_proto).where(
             saved_datasets.c.project_id == CATALOG_PROJECT,
             saved_datasets.c.namespace == rhai_ns,
             saved_datasets.c.collection == collection,
         )
-        .limit(1)
-    ).first()
-    return row is not None
+    )
+    for row in rows:
+        proto = SavedDatasetProto.FromString(bytes(row._mapping["saved_dataset_proto"]))
+        tags = dict(proto.spec.tags)
+        if tags.get(CATALOG_MANAGED_TAG) == CATALOG_MANAGED_VALUE:
+            return True
+    return False
 
 
 def _mutate_catalog_project(
@@ -343,6 +355,51 @@ def set_namespace_properties(
         project.tags = tags
 
     _mutate_catalog_project(registry, mutator)
+
+
+def merge_namespace_properties(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    collection: str,
+    updates: dict[str, str],
+    removals: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Apply updates/removals to one collection's JSON inside compare-and-swap.
+
+    Returns ``(updated, removed, missing)`` from the snapshot that was written.
+    """
+    key = ns_meta_key(rhai_ns, collection)
+    result: dict[str, list[str]] = {"updated": [], "removed": [], "missing": []}
+
+    def mutator(project: Project, conn: Any) -> None:
+        current: dict[str, str] = {}
+        raw = project.tags.get(key)
+        if raw:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                current = {str(k): str(v) for k, v in data.items()}
+        for prop_key, value in updates.items():
+            current[prop_key] = value
+        removed: list[str] = []
+        missing: list[str] = []
+        for prop_key in removals:
+            if prop_key in current:
+                current.pop(prop_key)
+                removed.append(prop_key)
+            else:
+                missing.append(prop_key)
+        tags = dict(project.tags)
+        tags[key] = json.dumps(current, separators=(",", ":"), sort_keys=True)
+        project.tags = tags
+        result["updated"] = sorted(updates)
+        result["removed"] = removed
+        result["missing"] = missing
+
+    _mutate_catalog_project(registry, mutator)
+    return result["updated"], result["removed"], result["missing"]
 
 
 def delete_namespace_meta(
