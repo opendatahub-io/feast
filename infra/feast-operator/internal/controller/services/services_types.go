@@ -110,7 +110,7 @@ const (
 
 	// DataRegistryProject is the fixed Feast project name used in
 	// data-registry mode (Phase-1 single-project storage model).
-	DataRegistryProject = "data-registry"
+	DataRegistryProject = "data_registry"
 
 	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 

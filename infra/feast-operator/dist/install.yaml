@@ -24642,6 +24642,10 @@ spec:
           value: registry.k8s.io/kubectl:v1.35.9
         - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
           value: quay.io/brancz/kube-rbac-proxy:v0.18.1
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: GOMEMLIMIT
           value: 230MiB
         - name: OIDC_ISSUER_URL
