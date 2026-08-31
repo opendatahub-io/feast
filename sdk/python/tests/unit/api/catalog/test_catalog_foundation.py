@@ -177,3 +177,20 @@ def test_list_and_exists_see_scoped_ns_meta_tag(sqlite_registry):
     project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
     assert ns_meta_key("demo-user-1", "underwriting") in project.tags
     assert "_ns_meta_underwriting" not in project.tags
+
+
+def test_unmanaged_saved_dataset_is_not_an_iceberg_namespace(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    sqlite_registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name("demo-user-1", "ml-leak", "training"),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="file:///tmp/dataset.parquet"),
+            namespace="demo-user-1",
+            collection="ml-leak",
+        ),
+        CATALOG_PROJECT,
+    )
+    assert list_namespaces(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
+    assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "ml-leak")
