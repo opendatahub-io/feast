@@ -111,31 +111,45 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 			Namespace: operatorNs,
 		},
 	}
+	logger := log.FromContext(feast.Handler.Context)
+
+	// Create-first strategy: bypasses the label-filtered informer cache
+	// which can serve stale entries for ConfigMaps deleted externally.
+	// Create goes directly to the API server; AlreadyExists means it's
+	// genuinely there and we fall back to Get+Update for ownership check.
+	lockCM.Labels = map[string]string{
+		ManagedByLabelKey: ManagedByLabelValue,
+		NameLabelKey:      self.Name,
+	}
 	lockCM.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
-	if _, err := controllerutil.CreateOrUpdate(feast.Handler.Context, feast.Handler.Client, lockCM, func() error {
-		if lockCM.Labels == nil {
-			lockCM.Labels = map[string]string{}
-		}
-		existingOwner := lockCM.Labels[NameLabelKey]
-		if existingOwner != "" && existingOwner != self.Name {
-			return fmt.Errorf(
-				"data registry lock ConfigMap %s/%s is owned by FeatureStore %q, not %q",
-				operatorNs, DataRegistryLockConfigMapName, existingOwner, self.Name,
-			)
-		}
-		lockCM.Labels[ManagedByLabelKey] = ManagedByLabelValue
-		lockCM.Labels[NameLabelKey] = self.Name
+
+	createErr := feast.Handler.Client.Create(feast.Handler.Context, lockCM)
+	if createErr == nil {
+		logger.Info("Created data-registry lock ConfigMap",
+			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "owner", self.Name)
 		return nil
-	}); err != nil {
-		logger := log.FromContext(feast.Handler.Context)
-		if strings.Contains(err.Error(), "is owned by FeatureStore") {
-			return fmt.Errorf(
-				"data registry lock ConfigMap %s/%s already exists; another data-registry instance may be initializing concurrently",
-				operatorNs, DataRegistryLockConfigMapName,
-			)
-		}
-		logger.Info("Could not acquire data-registry lock ConfigMap (non-fatal, List check is primary guard)",
+	}
+
+	if !apierrors.IsAlreadyExists(createErr) {
+		logger.Info("Could not create data-registry lock ConfigMap (non-fatal, List check is primary guard)",
+			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", createErr)
+		return nil
+	}
+
+	// ConfigMap already exists — verify ownership.
+	existing := &corev1.ConfigMap{}
+	if err := feast.Handler.Client.Get(feast.Handler.Context,
+		types.NamespacedName{Name: DataRegistryLockConfigMapName, Namespace: operatorNs}, existing); err != nil {
+		logger.Info("Could not read existing data-registry lock ConfigMap (non-fatal)",
 			"name", DataRegistryLockConfigMapName, "namespace", operatorNs, "error", err)
+		return nil
+	}
+	existingOwner := existing.Labels[NameLabelKey]
+	if existingOwner != "" && existingOwner != self.Name {
+		return fmt.Errorf(
+			"data registry lock ConfigMap %s/%s already exists; another data-registry instance may be initializing concurrently",
+			operatorNs, DataRegistryLockConfigMapName,
+		)
 	}
 	return nil
 }
@@ -199,16 +213,16 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
 	}
-	feast.cleanupDataRegistryLockConfigMap()
+	feast.CleanupDataRegistryLockConfigMap()
 	return nil
 }
 
-// cleanupDataRegistryLockConfigMap deletes the singleton lock ConfigMap.
+// CleanupDataRegistryLockConfigMap deletes the singleton lock ConfigMap.
 // Errors are logged but not returned: the lock is advisory and a stale lock
 // can be cleaned up manually. The ConfigMap namespace is derived from the
 // POD_NAMESPACE env var (set by the operator Deployment's downward-API volume)
 // or falls back to DefaultKubernetesNamespace.
-func (feast *FeastServices) cleanupDataRegistryLockConfigMap() {
+func (feast *FeastServices) CleanupDataRegistryLockConfigMap() {
 	logger := log.FromContext(feast.Handler.Context)
 	operatorNs := os.Getenv("POD_NAMESPACE")
 	if operatorNs == "" {
@@ -222,7 +236,8 @@ func (feast *FeastServices) cleanupDataRegistryLockConfigMap() {
 	); err != nil {
 		return
 	}
-	if lockCM.Labels[ManagedByLabelKey] != ManagedByLabelValue {
+	self := feast.Handler.FeatureStore
+	if lockCM.Labels[ManagedByLabelKey] != ManagedByLabelValue || lockCM.Labels[NameLabelKey] != self.Name {
 		return
 	}
 	if err := feast.Handler.Client.Delete(feast.Handler.Context, lockCM); err != nil && !apierrors.IsNotFound(err) {
@@ -424,8 +439,7 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
 			"--auth-header-fields-enabled",
-			"--auth-header-fields-username=X-Remote-User",
-			"--logtostderr=true",
+			"--auth-header-user-field-name=X-Remote-User",
 			"--v=3",
 		},
 		Ports: []corev1.ContainerPort{
@@ -723,7 +737,11 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 // ClusterRoles are cluster-scoped and cannot carry namespace-scoped owner
 // references, so we delete by name + managed-by label check instead of
 // using DeleteOwnedFeastObj.
+// Only deletes ClusterRoles owned by this FeatureStore (name label match)
+// to avoid a standard CR's reconcile deleting roles created by the
+// data-registry CR.
 func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
+	self := feast.Handler.FeatureStore
 	for _, suffix := range []string{"viewer", "editor", "admin"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
@@ -737,7 +755,7 @@ func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 			}
 			return err
 		}
-		if cr.Labels[ManagedByLabelKey] == ManagedByLabelValue {
+		if cr.Labels[ManagedByLabelKey] == ManagedByLabelValue && cr.Labels[NameLabelKey] == self.Name {
 			if err := feast.Handler.Client.Delete(feast.Handler.Context, cr); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}

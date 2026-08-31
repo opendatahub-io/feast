@@ -23732,6 +23732,10 @@ spec:
         - name: RELATED_IMAGE_CRON_JOB
           value: quay.io/openshift/origin-cli:4.17
         - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: GOMEMLIMIT
           value: 230MiB
         - name: OIDC_ISSUER_URL

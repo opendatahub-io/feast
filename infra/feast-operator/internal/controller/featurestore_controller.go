@@ -283,6 +283,7 @@ func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespac
 	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		logger.Error(err, "Failed to cleanup data registry auth-delegator ClusterRoleBinding")
 	}
+	feast.CleanupDataRegistryLockConfigMap()
 }
 
 func (r *FeatureStoreReconciler) cleanupNamespaceRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) {
