@@ -31,7 +31,6 @@ from feast.api.catalog.errors import (
     NoSuchTableException,
     NotImplementedException,
     ServiceFailureException,
-    TableAlreadyExistsException,
     missing_required_fields,
     register_error_handlers,
 )
@@ -50,12 +49,6 @@ CASES = [
         NamespaceNotEmptyException,
         409,
         "NamespaceNotEmptyException",
-    ),
-    (
-        "table-exists",
-        TableAlreadyExistsException,
-        409,
-        "AlreadyExistsException",
     ),
     ("bad-request", BadRequestException, 400, "BadRequestException"),
     ("not-implemented", NotImplementedException, 501, "NotImplementedException"),

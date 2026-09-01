@@ -16,8 +16,7 @@
 
 Handlers are registered on the catalog FastAPI app only. Do not call
 ``register_error_handlers`` on RestRegistryServer without a ``/v1`` path
-check — that would rewrite Feast REST bodies. Concurrent create races
-(RHAI-389) raise ``TableAlreadyExistsException``.
+check — that would rewrite Feast REST bodies.
 """
 
 from __future__ import annotations
@@ -58,11 +57,6 @@ class NoSuchTableException(IcebergRESTException):
 
 
 class NamespaceAlreadyExistsException(IcebergRESTException):
-    http_status = 409
-    error_type = "AlreadyExistsException"
-
-
-class TableAlreadyExistsException(IcebergRESTException):
     http_status = 409
     error_type = "AlreadyExistsException"
 

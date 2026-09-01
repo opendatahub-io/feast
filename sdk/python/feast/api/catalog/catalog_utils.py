@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import threading
-import uuid
 from typing import Any, Callable
 
 from feast.api.catalog.errors import (
@@ -41,7 +40,6 @@ from feast.api.catalog.errors import (
     NamespaceNotEmptyException,
     NoSuchNamespaceException,
     ServiceFailureException,
-    TableAlreadyExistsException,
 )
 from feast.errors import ConcurrentVersionConflict, ProjectObjectNotFoundException
 from feast.infra.registry.base_registry import BaseRegistry
@@ -55,10 +53,6 @@ NAMESPACE_SEPARATOR = "\x1f"
 NS_META_PREFIX = "_ns_meta_"
 CATALOG_MANAGED_TAG = "_catalog_managed"
 CATALOG_MANAGED_VALUE = "true"
-# Mutate-project compare-and-swap matches whole ``project_proto``. Table create
-# must change that blob (not only insert ``saved_datasets``) so a concurrent
-# empty-collection DELETE cannot 204 after this insert commits.
-_TABLE_WRITE_CAS_TAG = "_catalog_last_table_write"
 _CATALOG_MANAGED_TAGS = {CATALOG_MANAGED_TAG: CATALOG_MANAGED_VALUE}
 # File / other registries have no Project row lock. Production catalog is SQL.
 _FALLBACK_PROJECT_LOCK = threading.Lock()
@@ -332,93 +326,6 @@ def _mutate_catalog_project(
             project = registry.get_project(CATALOG_PROJECT, allow_cache=False)
         catalog_mutator(project, None)
         registry.apply_project(project)
-
-
-def _insert_catalog_saved_dataset(conn: Any, saved_dataset: Any) -> None:
-    """INSERT one SavedDataset on the mutate connection. Unique → 409, no skip."""
-    from sqlalchemy import insert as sa_insert
-    from sqlalchemy import select as sa_select
-    from sqlalchemy.exc import IntegrityError
-
-    from feast.infra.registry.sql import saved_datasets
-    from feast.utils import _utc_now
-
-    name = saved_dataset.name
-    display = unscoped_name(name)
-    collection = saved_dataset.collection or ""
-    update_datetime = _utc_now()
-    saved_dataset.created_timestamp = update_datetime
-    saved_dataset.last_updated_timestamp = update_datetime
-    obj_proto = saved_dataset.to_proto()
-    if hasattr(obj_proto, "meta") and hasattr(obj_proto.meta, "created_timestamp"):
-        if not obj_proto.meta.HasField("created_timestamp"):
-            obj_proto.meta.created_timestamp.FromDatetime(update_datetime)
-
-    existing = conn.execute(
-        sa_select(saved_datasets.c.saved_dataset_name).where(
-            saved_datasets.c.saved_dataset_name == name,
-            saved_datasets.c.project_id == CATALOG_PROJECT,
-        )
-    ).first()
-    if existing:
-        raise TableAlreadyExistsException(
-            f"Table already exists: {collection}.{display}"
-        )
-    values = {
-        "saved_dataset_name": name,
-        "project_id": CATALOG_PROJECT,
-        "namespace": saved_dataset.namespace or "",
-        "collection": collection,
-        "last_updated_timestamp": int(update_datetime.timestamp()),
-        "saved_dataset_proto": obj_proto.SerializeToString(),
-    }
-    try:
-        conn.execute(sa_insert(saved_datasets).values(values))
-    except IntegrityError as exc:
-        raise TableAlreadyExistsException(
-            f"Table already exists: {collection}.{display}"
-        ) from exc
-
-
-def create_catalog_table(
-    registry: BaseRegistry,
-    rhai_ns: str,
-    collection: str,
-    saved_dataset: Any,
-) -> None:
-    """Create an Iceberg table if the collection exists (OpenAPI).
-
-    Collection exists-check and SavedDataset INSERT run inside one
-    ``mutate_project`` on the write connection. Do not go through
-    ``apply_saved_dataset`` (second transaction; IntegrityError skip;
-    nested mutate deadlocks sqlite). Does not write a collection tag.
-    ``default`` is always valid. Missing non-default collection is 404
-    and does not create a tag.
-    """
-    ns = _require_namespace(rhai_ns)
-    col = _require_part("collection", collection)
-    key = ns_meta_key(ns, col)
-
-    def mutator(project: Project, conn: Any) -> None:
-        if conn is None:
-            raise ServiceFailureException(
-                "catalog table create requires a SQL registry"
-            )
-        if not _collection_present_in_mutate(project, registry, conn, ns, col, key):
-            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
-        _insert_catalog_saved_dataset(conn, saved_dataset)
-        tags = dict(project.tags)
-        tags[_TABLE_WRITE_CAS_TAG] = uuid.uuid4().hex
-        project.tags = tags
-
-    try:
-        _mutate_catalog_project(
-            registry,
-            mutator,
-            create_if_missing=(col == DEFAULT_COLLECTION),
-        )
-    except ProjectObjectNotFoundException as exc:
-        raise NoSuchNamespaceException(f"Namespace does not exist: {col}") from exc
 
 
 def create_namespace_meta(
