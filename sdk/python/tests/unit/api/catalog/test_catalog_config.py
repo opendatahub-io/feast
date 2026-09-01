@@ -23,7 +23,7 @@ def _client() -> TestClient:
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(get_config_router())
-    return TestClient(app)
+    return TestClient(app, raise_server_exceptions=False)
 
 
 def test_get_v1_config_shape():
@@ -75,3 +75,23 @@ def test_empty_warehouse_does_not_set_prefix():
     response = _client().get("/v1/config", params={"warehouse": ""})
     assert response.status_code == 200
     assert response.json()["overrides"] == {}
+
+
+def _assert_iceberg_400(response) -> None:
+    assert response.status_code == 400
+    body = response.json()
+    assert "detail" not in body
+    error = body["error"]
+    assert error["type"] == "BadRequestException"
+    assert error["code"] == 400
+    assert "lowercase" in error["message"].lower()
+
+
+def test_warehouse_mixed_case_is_400_not_prefix():
+    response = _client().get("/v1/config", params={"warehouse": "Demo-User"})
+    _assert_iceberg_400(response)
+
+
+def test_path_project_mixed_case_is_400_not_prefix():
+    response = _client().get("/v1/Demo-User/config")
+    _assert_iceberg_400(response)
