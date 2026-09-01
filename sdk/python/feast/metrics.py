@@ -287,6 +287,18 @@ offline_store_row_count = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# Data catalog asset gauge — tracks registered catalog assets when the server
+# runs in DATACATALOG_ENABLED mode.  Phase 2 readiness: the gauge updates
+# when SavedDatasets carry a ``_catalog_managed=true`` tag.
+# ---------------------------------------------------------------------------
+datacatalog_assets_total = Gauge(
+    "datacatalog_assets_total",
+    "Number of registered catalog assets",
+    ["asset_type"],
+    multiprocess_mode="liveall",
+)
+
+# ---------------------------------------------------------------------------
 # Audit logger — separate from the main feast logger so operators can
 # route SOX-style audit entries to a dedicated sink.
 # ---------------------------------------------------------------------------
