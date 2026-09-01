@@ -16,8 +16,11 @@
 
 ``GET /v1/config`` is the engine bootstrap call. ``warehouse`` (or the
 prefixed path) becomes ``overrides.prefix`` so later calls use
-``/v1/{prefix}/...``. ``endpoints`` lists only routes this package serves;
-CRUD tickets append. Mounting on RestRegistryServer is RHAI-390.
+``/v1/{prefix}/...``. ``endpoints`` lists catalog operations that are
+implemented as **read**. Table create/update/drop/rename and LoadTable
+exist as routes but return 501 and are not advertised: no credential
+vending (DCH); engines talk to object storage themselves. Namespace CRUD
+is advertised. Mounting on RestRegistryServer is RHAI-390.
 """
 
 from __future__ import annotations
@@ -39,12 +42,7 @@ CATALOG_CONFIG_ENDPOINTS = [
     "DELETE /v1/{prefix}/namespaces/{namespace}",
     "POST /v1/{prefix}/namespaces/{namespace}/properties",
     "GET /v1/{prefix}/namespaces/{namespace}/tables",
-    "POST /v1/{prefix}/namespaces/{namespace}/tables",
-    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
     "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}",
-    "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}",
-    "DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}",
-    "POST /v1/{prefix}/tables/rename",
 ]
 
 

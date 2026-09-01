@@ -19,11 +19,6 @@ from feast import FeatureStore
 from feast.api.registry.rest.rest_registry_server import RestRegistryServer
 from feast.repo_config import RepoConfig
 
-SCHEMA = {
-    "type": "struct",
-    "fields": [{"id": 1, "name": "user_id", "required": True, "type": "long"}],
-}
-
 
 @pytest.fixture
 def sql_repo_config(tmp_path):
@@ -69,12 +64,9 @@ def test_s3_flag_on_table_create(sql_repo_config, monkeypatch):
     monkeypatch.setenv("DATACATALOG_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
-    created = client.post(
-        "/v1/demo-user-1/namespaces/default/tables",
-        json={"name": "events", "schema": SCHEMA, "location": "s3://bucket/e/"},
-    )
-    assert created.status_code == 200, created.text
-    assert created.json()["config"] == {}
+    created = client.post("/v1/demo-user-1/namespaces/default/tables")
+    assert created.status_code == 501, created.text
+    assert created.json()["error"]["type"] == "NotImplementedException"
 
 
 def test_s5_flag_on_feast_validation_body_unchanged(sql_repo_config, monkeypatch):
@@ -92,7 +84,7 @@ def test_s6_flag_on_catalog_missing_body_is_iceberg_400(sql_repo_config, monkeyp
     monkeypatch.setenv("DATACATALOG_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
-    response = client.post("/v1/demo-user-1/namespaces/default/tables", json={})
+    response = client.post("/v1/demo-user-1/namespaces", json={})
     assert response.status_code == 400
     body = response.json()
     assert "detail" not in body
