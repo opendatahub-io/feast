@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
+from feast.api.catalog.catalog_utils import _require_namespace
+from feast.api.catalog.errors import BadRequestException
 from feast.api.catalog.models import DataRegistryConfig
 
 # Iceberg clients match ``{prefix}`` in these strings, not OpenAPI ``{project}``.
@@ -38,6 +40,20 @@ CATALOG_CONFIG_ENDPOINTS = [
     "DELETE /v1/{prefix}/namespaces/{namespace}",
     "POST /v1/{prefix}/namespaces/{namespace}/properties",
 ]
+
+
+def _as_bad_request(exc: ValueError) -> BadRequestException:
+    return BadRequestException(str(exc))
+
+
+def _config_prefix(raw: str | None) -> str | None:
+    """Validate Iceberg ``{prefix}`` (K8s / RHOAI namespace). Empty stays unset."""
+    if not raw:
+        return None
+    try:
+        return _require_namespace(raw)
+    except ValueError as exc:
+        raise _as_bad_request(exc) from exc
 
 
 def catalog_config(*, prefix: str | None = None) -> DataRegistryConfig:
@@ -58,10 +74,10 @@ def get_config_router() -> APIRouter:
     def get_bootstrap_config(
         warehouse: str | None = Query(default=None),
     ) -> DataRegistryConfig:
-        return catalog_config(prefix=warehouse)
+        return catalog_config(prefix=_config_prefix(warehouse))
 
     @router.get("/v1/{project}/config", response_model=DataRegistryConfig)
     def get_project_config(project: str) -> DataRegistryConfig:
-        return catalog_config(prefix=project)
+        return catalog_config(prefix=_config_prefix(project))
 
     return router
