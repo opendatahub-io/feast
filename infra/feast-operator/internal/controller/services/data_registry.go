@@ -134,7 +134,27 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 // When the annotation is removed or absent, all resources are cleaned up.
 func (feast *FeastServices) deployDataRegistry() error {
 	if !feast.isDataRegistryEnabled() {
-		return feast.cleanupDataRegistryResources()
+		if err := feast.cleanupDataRegistryResources(); err != nil {
+			return err
+		}
+		// Remove the finalizer once all cluster-scoped resources have been cleaned up.
+		cr := feast.Handler.FeatureStore
+		if controllerutil.ContainsFinalizer(cr, DataRegistryFinalizer) {
+			controllerutil.RemoveFinalizer(cr, DataRegistryFinalizer)
+			return feast.Handler.Client.Update(feast.Handler.Context, cr)
+		}
+		return nil
+	}
+
+	// Ensure the finalizer is present so that cluster-scoped resources are
+	// cleaned up even if the operator pod restarts between the CR deletion and
+	// the cleanup controller call.
+	cr := feast.Handler.FeatureStore
+	if !controllerutil.ContainsFinalizer(cr, DataRegistryFinalizer) {
+		controllerutil.AddFinalizer(cr, DataRegistryFinalizer)
+		if err := feast.Handler.Client.Update(feast.Handler.Context, cr); err != nil {
+			return err
+		}
 	}
 
 	if err := feast.deployDataRegistryAuthConfig(); err != nil {
@@ -156,6 +176,12 @@ func (feast *FeastServices) deployDataRegistry() error {
 		return err
 	}
 	if err := feast.createDataRegistryRoute(); err != nil {
+		return err
+	}
+	if err := feast.createOrDeleteDataRegistryServiceMonitor(); err != nil {
+		return err
+	}
+	if err := feast.createOrDeleteDataRegistryPrometheusRule(); err != nil {
 		return err
 	}
 	return nil
@@ -185,6 +211,18 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	}
 	if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		return err
+	}
+	// Explicit cleanup for namespace-scoped monitoring resources that have
+	// owner references (GC handles them too, but be explicit for faster cleanup).
+	// Guard on hasServiceMonitorCRD: when the monitoring CRD is absent, the
+	// API server returns NoKindMatchError on Get/Delete, not NotFound.
+	if hasServiceMonitorCRD {
+		if err := feast.deleteDataRegistryServiceMonitor(); err != nil {
+			return err
+		}
+		if err := feast.deleteDataRegistryPrometheusRule(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -324,6 +362,13 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			"--rest-api",
 			"--rest-port", strconv.Itoa(int(DataRegistryPort)),
 		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          metricsPortName,
+				ContainerPort: MetricsPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
 		Env: []corev1.EnvVar{
 			// Python create_feature_store() reads FEATURE_STORE_YAML_BASE64 and
 			// materializes feature_store.yaml itself. TMP_ is only consumed by
@@ -334,6 +379,16 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
 			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
 			{Name: FeastProjectEnvVar, Value: DataRegistryProject},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(DefaultDataRegistryCPURequest),
+				corev1.ResourceMemory: resource.MustParse(DefaultDataRegistryMemoryRequest),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(DefaultDataRegistryCPULimit),
+				corev1.ResourceMemory: resource.MustParse(DefaultDataRegistryMemoryLimit),
+			},
 		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:  probeHandler,
@@ -492,6 +547,12 @@ func (feast *FeastServices) setDataRegistryService(svc *corev1.Service) error {
 				Port:       int32(HttpsPort),
 				Protocol:   corev1.ProtocolTCP,
 				TargetPort: intstr.FromInt32(DataRegistryProxyPort),
+			},
+			{
+				Name:       metricsPortName,
+				Port:       MetricsPort,
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromInt32(MetricsPort),
 			},
 		},
 	}

@@ -72,6 +72,7 @@ class RestRegistryServer:
         )
         self._add_exception_handlers()
         self._add_logging_middleware()
+        self._add_catalog_observability()
         self._add_openapi_security()
         self._init_auth()
         self._register_routes()
@@ -283,6 +284,79 @@ class RestRegistryServer:
             recent_visits_limit=self.recent_visits_limit,
             log_patterns=self.log_patterns,
         )
+
+    def _add_catalog_observability(self) -> None:
+        """Start Prometheus metrics and add structured logging in catalog mode.
+
+        When ``DATACATALOG_ENABLED=true``, this method:
+
+        1. Starts the Prometheus HTTP server on :8000 so that the in-cluster
+           ServiceMonitor can scrape ``/metrics`` directly (bypasses
+           kube-rbac-proxy). The standard ``feast_feature_server_*`` metrics
+           that Feast already records are exported — no duplicate datacatalog-
+           prefixed counters are needed.
+        2. Adds a structured-JSON logging middleware that emits a log line
+           per request with correlation fields (request_id, user, namespace,
+           endpoint, method, status, duration_ms).
+
+        No-op when ``DATACATALOG_ENABLED`` is not ``"true"``.
+        """
+        import os
+
+        if os.environ.get("DATACATALOG_ENABLED", "").lower() != "true":
+            return
+
+        import json as _json
+        import time as _time
+        import uuid as _uuid
+
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        from feast.metrics import start_metrics_server
+
+        catalog_log = logging.getLogger("feast.datacatalog")
+
+        class _CatalogLoggingMiddleware(BaseHTTPMiddleware):
+            """Structured JSON access log for every catalog request."""
+
+            async def dispatch(self, request, call_next):
+                request_id = request.headers.get("X-Request-ID", str(_uuid.uuid4()))
+                user = request.headers.get("X-Remote-User", "unknown")
+                namespace = request.headers.get("X-Namespace", "")
+                start = _time.monotonic()
+                response = await call_next(request)
+                duration_ms = (_time.monotonic() - start) * 1000
+                catalog_log.info(
+                    _json.dumps(
+                        {
+                            "event": "catalog_request",
+                            "request_id": request_id,
+                            "user": user,
+                            "namespace": namespace,
+                            "endpoint": request.url.path,
+                            "method": request.method,
+                            "status": response.status_code,
+                            "duration_ms": round(duration_ms, 2),
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                return response
+
+        self.app.add_middleware(_CatalogLoggingMiddleware)
+
+        try:
+            start_metrics_server(
+                store=self.store,
+                port=8000,
+                start_resource_monitoring=True,
+                start_freshness_monitoring=False,
+            )
+            logger.info("Catalog mode: Prometheus metrics server started on :8000")
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "Catalog mode: failed to start Prometheus metrics server: %s", exc
+            )
 
     def _register_routes(self):
         register_all_routes(self.app, self.grpc_handler, self)

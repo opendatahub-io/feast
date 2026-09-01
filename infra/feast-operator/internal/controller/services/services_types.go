@@ -112,12 +112,23 @@ const (
 	// RHOAI, and custom installs can each label their chosen namespace.
 	DataRegistryNamespaceLabel = "opendatahub.io/data-registry"
 
+	// DataRegistryFinalizer is added to the FeatureStore CR when the data-registry
+	// annotation is enabled. It prevents the CR from being garbage-collected before
+	// the operator can clean up cluster-scoped resources (ClusterRoles, CRBs)
+	// that do not carry owner references and would otherwise be orphaned.
+	DataRegistryFinalizer = "dataregistry.opendatahub.io/cleanup"
+
 	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 
 	DefaultKubeRBACProxyCPURequest    = "50m"
 	DefaultKubeRBACProxyCPULimit      = "100m"
 	DefaultKubeRBACProxyMemoryRequest = "128Mi"
 	DefaultKubeRBACProxyMemoryLimit   = "256Mi"
+
+	DefaultDataRegistryCPURequest    = "100m"
+	DefaultDataRegistryCPULimit      = "500m"
+	DefaultDataRegistryMemoryRequest = "256Mi"
+	DefaultDataRegistryMemoryLimit   = "512Mi"
 
 	HttpPort              = 80
 	HttpsPort             = 443

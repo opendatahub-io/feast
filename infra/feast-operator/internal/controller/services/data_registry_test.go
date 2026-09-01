@@ -50,15 +50,20 @@ var _ = Describe("Data Registry", func() {
 	)
 
 	setAnnotation := func(value string) {
-		if featureStore.Annotations == nil {
-			featureStore.Annotations = map[string]string{}
+		// Re-read the latest CR to avoid conflict with deployDataRegistry()
+		// which may have updated the CR (e.g. added a finalizer).
+		latest := &feastdevv1.FeatureStore{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, latest)).To(Succeed())
+		if latest.Annotations == nil {
+			latest.Annotations = map[string]string{}
 		}
 		if value == "" {
-			delete(featureStore.Annotations, DataRegistryAnnotation)
+			delete(latest.Annotations, DataRegistryAnnotation)
 		} else {
-			featureStore.Annotations[DataRegistryAnnotation] = value
+			latest.Annotations[DataRegistryAnnotation] = value
 		}
-		Expect(k8sClient.Update(ctx, featureStore)).To(Succeed())
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		featureStore = latest
 		feast.refreshFeatureStore(ctx, typeNamespacedName)
 	}
 
@@ -129,7 +134,18 @@ var _ = Describe("Data Registry", func() {
 
 	AfterEach(func() {
 		labelNamespace(ctx, false)
-		Expect(k8sClient.Delete(ctx, featureStore)).To(Succeed())
+		// Fetch the latest CR to remove the finalizer before deletion.
+		// deployDataRegistry() adds a finalizer that prevents the CR from
+		// being garbage-collected; without this, subsequent tests fail with
+		// "object is being deleted" on Create.
+		latest := &feastdevv1.FeatureStore{}
+		if err := k8sClient.Get(ctx, typeNamespacedName, latest); err == nil {
+			if controllerutil.ContainsFinalizer(latest, DataRegistryFinalizer) {
+				controllerutil.RemoveFinalizer(latest, DataRegistryFinalizer)
+				Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+			}
+			Expect(k8sClient.Delete(ctx, latest)).To(Succeed())
+		}
 	})
 
 	It("is disabled by default and only activates on exact 'true' annotation", func() {
@@ -186,8 +202,11 @@ var _ = Describe("Data Registry", func() {
 		Expect(feastCtr.Command).NotTo(ContainElement("--host"))
 		Expect(feastCtr.Command).NotTo(ContainElement("--port"))
 
-		// No container ports exposed externally (traffic goes through proxy)
-		Expect(feastCtr.Ports).To(BeEmpty())
+		// Metrics port exposed directly (bypasses kube-rbac-proxy)
+		Expect(feastCtr.Ports).To(HaveLen(1))
+		Expect(feastCtr.Ports[0].Name).To(Equal(metricsPortName))
+		Expect(feastCtr.Ports[0].ContainerPort).To(Equal(MetricsPort))
+		Expect(feastCtr.Ports[0].Protocol).To(Equal(corev1.ProtocolTCP))
 
 		// Env vars
 		envMap := map[string]string{}
@@ -299,10 +318,13 @@ var _ = Describe("Data Registry", func() {
 		Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 		Expect(svc.Spec.Selector).To(HaveKeyWithValue(NameLabelKey, featureStore.Name))
 		Expect(svc.Spec.Selector).To(HaveKeyWithValue(ServiceTypeLabelKey, string(DataRegistryFeastType)))
-		Expect(svc.Spec.Ports).To(HaveLen(1))
+		Expect(svc.Spec.Ports).To(HaveLen(2))
 		Expect(svc.Spec.Ports[0].Port).To(Equal(int32(HttpsPort)))
 		Expect(svc.Spec.Ports[0].TargetPort).To(Equal(intstr.FromInt32(DataRegistryProxyPort)))
 		Expect(svc.Spec.Ports[0].Name).To(Equal(HttpsScheme))
+		Expect(svc.Spec.Ports[1].Name).To(Equal(metricsPortName))
+		Expect(svc.Spec.Ports[1].Port).To(Equal(MetricsPort))
+		Expect(svc.Spec.Ports[1].TargetPort).To(Equal(intstr.FromInt32(MetricsPort)))
 
 		// Owner reference
 		Expect(svc.OwnerReferences).To(HaveLen(1))
@@ -1009,5 +1031,131 @@ var _ = Describe("Data Registry", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal(feastdevv1.DataRegistryFailedReason))
 		Expect(cond.Message).To(ContainSubstring("cannot enable data-registry mode"))
+	})
+
+	// ---------------------------------------------------------------------------
+	// RHAI-407: Finalizer lifecycle tests
+	// ---------------------------------------------------------------------------
+
+	It("adds DataRegistryFinalizer when catalog annotation is enabled", func() {
+		isOpenShift = false
+
+		setAnnotation("true")
+
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		Expect(feast.deployDataRegistry()).To(Succeed())
+
+		// Re-fetch the CR from the fake client to see the updated finalizers.
+		updated := &feastdevv1.FeatureStore{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(controllerutil.ContainsFinalizer(updated, DataRegistryFinalizer)).To(BeTrue(),
+			"DataRegistryFinalizer should be added when annotation is enabled")
+	})
+
+	It("removes DataRegistryFinalizer when catalog annotation is removed", func() {
+		isOpenShift = false
+
+		setAnnotation("true")
+
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		// First enable — adds finalizer and deploys resources.
+		Expect(feast.deployDataRegistry()).To(Succeed())
+		feast.refreshFeatureStore(ctx, typeNamespacedName)
+		Expect(controllerutil.ContainsFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)).To(BeTrue())
+
+		// Remove annotation — triggers cleanup and finalizer removal.
+		setAnnotation("")
+		Expect(feast.deployDataRegistry()).To(Succeed())
+
+		updated := &feastdevv1.FeatureStore{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(controllerutil.ContainsFinalizer(updated, DataRegistryFinalizer)).To(BeFalse(),
+			"DataRegistryFinalizer should be removed after annotation is cleared")
+	})
+
+	It("cleans up cluster-scoped resources when finalizer is handled on CR deletion", func() {
+		isOpenShift = false
+
+		setAnnotation("true")
+
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		// Deploy so ClusterRoles exist.
+		Expect(feast.deployDataRegistry()).To(Succeed())
+
+		// Verify ClusterRoles were created.
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			cr := feast.initDataRegistryClusterRole(suffix)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name}, cr)).To(Succeed())
+		}
+
+		// Simulate the finalizer handling path (what Reconcile does on deletion).
+		feast.refreshFeatureStore(ctx, typeNamespacedName)
+		Expect(controllerutil.ContainsFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)).To(BeTrue())
+
+		Expect(feast.CleanupDataRegistryClusterRoles()).To(Succeed())
+		Expect(feast.CleanupDataRegistryAuthDelegatorBinding()).To(Succeed())
+		controllerutil.RemoveFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)
+		Expect(k8sClient.Update(ctx, feast.Handler.FeatureStore)).To(Succeed())
+
+		// Verify ClusterRoles are gone.
+		for _, suffix := range []string{"viewer", "editor", "admin"} {
+			cr := feast.initDataRegistryClusterRole(suffix)
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name}, cr)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+				"ClusterRole %s should have been deleted", cr.Name)
+		}
+
+		// Verify finalizer was removed.
+		updated := &feastdevv1.FeatureStore{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(controllerutil.ContainsFinalizer(updated, DataRegistryFinalizer)).To(BeFalse())
+	})
+
+	It("exposes metrics port on data-registry container and Service", func() {
+		isOpenShift = false
+		setAnnotation("true")
+
+		// Verify container has metrics port.
+		ctr, err := feast.buildDataRegistryContainer()
+		Expect(err).NotTo(HaveOccurred())
+		var metricsPort *corev1.ContainerPort
+		for i := range ctr.Ports {
+			if ctr.Ports[i].Name == metricsPortName {
+				metricsPort = &ctr.Ports[i]
+				break
+			}
+		}
+		Expect(metricsPort).NotTo(BeNil(), "feast-server container should expose 'metrics' port")
+		Expect(metricsPort.ContainerPort).To(Equal(MetricsPort))
+		Expect(metricsPort.Protocol).To(Equal(corev1.ProtocolTCP))
+
+		// Verify container has resource requests/limits set.
+		Expect(ctr.Resources.Requests).To(HaveKey(corev1.ResourceCPU))
+		Expect(ctr.Resources.Requests).To(HaveKey(corev1.ResourceMemory))
+		Expect(ctr.Resources.Limits).To(HaveKey(corev1.ResourceCPU))
+		Expect(ctr.Resources.Limits).To(HaveKey(corev1.ResourceMemory))
+
+		// Verify Service has metrics port.
+		svc := feast.initDataRegistrySvc()
+		Expect(feast.setDataRegistryService(svc)).To(Succeed())
+		var svcMetricsPort *corev1.ServicePort
+		for i := range svc.Spec.Ports {
+			if svc.Spec.Ports[i].Name == metricsPortName {
+				svcMetricsPort = &svc.Spec.Ports[i]
+				break
+			}
+		}
+		Expect(svcMetricsPort).NotTo(BeNil(), "data-registry Service should expose 'metrics' port")
+		Expect(svcMetricsPort.Port).To(Equal(MetricsPort))
+		Expect(svcMetricsPort.TargetPort).To(Equal(intstr.FromInt32(MetricsPort)))
 	})
 })
