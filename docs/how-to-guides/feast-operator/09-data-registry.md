@@ -21,6 +21,34 @@ spec:
   feastProject: data_registry
 ```
 
+{% hint style="info" %}
+The example above uses the minimal configuration. All standalone FeatureStore
+customizations (registry backend, persistence, resources, TLS, etc.) are also
+available for data-registry CRs. For instance, to use a SQL-backed registry:
+
+```yaml
+apiVersion: feast.dev/v1
+kind: FeatureStore
+metadata:
+  name: data-registry
+  annotations:
+    dataregistry.opendatahub.io/enabled: "true"
+spec:
+  feastProject: data_registry
+  services:
+    registry:
+      local:
+        persistence:
+          store:
+            type: sql
+            secretRef:
+              name: registry-db-secret
+```
+
+See [Guide 1 — Basic](01-basic.md) and [Guide 5 — Security](05-security.md)
+for the full set of configuration options.
+{% endhint %}
+
 Two prerequisites must be met before the annotation takes effect:
 
 1. **Namespace label** — the namespace must carry `opendatahub.io/data-registry=true`.

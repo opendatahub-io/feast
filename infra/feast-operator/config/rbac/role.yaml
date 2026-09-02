@@ -211,6 +211,8 @@ rules:
   - clusterroles
   verbs:
   - create
+  - get
+  - list
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
@@ -224,7 +226,6 @@ rules:
   - clusterroles
   verbs:
   - delete
-  - get
   - update
 - apiGroups:
   - rbac.authorization.k8s.io
