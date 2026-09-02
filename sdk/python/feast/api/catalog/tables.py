@@ -26,6 +26,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response
 
 from feast.api.catalog.catalog_utils import (
+    CATALOG_MANAGED_TAG,
+    CATALOG_MANAGED_VALUE,
     CATALOG_PROJECT,
     _require_namespace,
     _require_part,
@@ -98,7 +100,11 @@ def _require_collection(
 
 def _is_iceberg_table(dataset: SavedDataset) -> bool:
     tags = dataset.tags or {}
-    return tags.get("format") == "iceberg" and tags.get("asset_type") == "table"
+    return (
+        tags.get(CATALOG_MANAGED_TAG) == CATALOG_MANAGED_VALUE
+        and tags.get("format") == "iceberg"
+        and tags.get("asset_type") == "table"
+    )
 
 
 def _get_iceberg_table(

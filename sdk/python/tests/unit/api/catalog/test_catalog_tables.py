@@ -252,6 +252,29 @@ def test_t15_list_skips_volumes(sqlite_registry):
     assert listed.json()["identifiers"] == [{"namespace": [COL], "name": TABLE}]
 
 
+def test_list_skips_iceberg_tags_without_catalog_managed(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    sqlite_registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name(NS, COL, "unmanaged"),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="s3://bucket/unmanaged/"),
+            namespace=NS,
+            collection=COL,
+            tags={"asset_type": "table", "format": "iceberg"},
+        ),
+        CATALOG_PROJECT,
+    )
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert listed.json() == {"identifiers": []}
+    assert (
+        client.head(f"/v1/{NS}/namespaces/{COL}/tables/unmanaged").status_code
+        == 404
+    )
+
+
 def test_list_skips_untagged_saved_dataset(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
