@@ -78,19 +78,23 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 						Name:    "v1",
 						Served:  true,
 						Storage: true,
-						Schema: &apiextensionsv1.CustomResourceValidation{
-							OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-								Type: "object",
-								Properties: map[string]apiextensionsv1.JSONSchemaProps{
-									"spec": {
-										Type: "object",
-									},
-									"status": {
-										Type: "object",
+						Schema: func() *apiextensionsv1.CustomResourceValidation {
+							preserveUnknown := true
+							return &apiextensionsv1.CustomResourceValidation{
+								OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+									Type: "object",
+									Properties: map[string]apiextensionsv1.JSONSchemaProps{
+										"spec": {
+											Type:                   "object",
+											XPreserveUnknownFields: &preserveUnknown,
+										},
+										"status": {
+											Type: "object",
+										},
 									},
 								},
-							},
-						},
+							}
+						}(),
 					},
 				},
 				Scope: apiextensionsv1.NamespaceScoped,
@@ -198,6 +202,20 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				services.FeatureStoreYamlCmKey: testYAMLContent,
 			},
 		}
+	}
+
+	createNotebookWithSpec := func(name, ns string, labels, annotations map[string]string) *unstructured.Unstructured {
+		notebook := createUnstructuredNotebook(name, ns, labels, annotations)
+		_ = unstructured.SetNestedSlice(notebook.Object, []interface{}{
+			map[string]interface{}{
+				"name":         "main",
+				"image":        "test-image:latest",
+				"env":          []interface{}{},
+				"volumeMounts": []interface{}{},
+			},
+		}, "spec", "template", "spec", "containers")
+		_ = unstructured.SetNestedSlice(notebook.Object, []interface{}{}, "spec", "template", "spec", "volumes")
+		return notebook
 	}
 
 	Context("Reconcile", func() {
@@ -379,8 +397,8 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				Namespace: namespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).To(HaveKey(projectName))
-			Expect(cm.Data[projectName]).To(Equal(testYAMLContent))
+			Expect(cm.Data).To(HaveKey(services.FeatureStoreYamlCmKey))
+			Expect(cm.Data[services.FeatureStoreYamlCmKey]).To(Equal(testYAMLContent))
 			Expect(cm.Labels[services.ManagedByLabelKey]).To(Equal(services.ManagedByLabelValue))
 			Expect(cm.Labels["source-resource"]).To(Equal(notebookName))
 			Expect(cm.Labels["source-kind"]).To(Equal("Notebook"))
@@ -458,10 +476,8 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				Namespace: namespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).To(HaveKey(projectName))
-			Expect(cm.Data).To(HaveKey(projectName2))
-			Expect(cm.Data[projectName]).To(Equal(testYAMLContent))
-			Expect(cm.Data[projectName2]).To(Equal(testYAMLContent2))
+			Expect(cm.Data).To(HaveKey(services.FeatureStoreYamlCmKey))
+			Expect(cm.Data[services.FeatureStoreYamlCmKey]).To(Equal(testYAMLContent2))
 		})
 
 		It("should handle project not found in FeatureStore", func() {
@@ -491,7 +507,7 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				Namespace: namespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).NotTo(HaveKey("non-existent-project"))
+			Expect(cm.Data).NotTo(HaveKey(services.FeatureStoreYamlCmKey))
 		})
 
 		It("should update ConfigMap when project annotation changes", func() {
@@ -564,8 +580,8 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				Namespace: namespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).To(HaveKey(projectName))
-			Expect(cm.Data).NotTo(HaveKey(projectName2))
+			Expect(cm.Data).To(HaveKey(services.FeatureStoreYamlCmKey))
+			Expect(cm.Data[services.FeatureStoreYamlCmKey]).To(Equal(testYAMLContent))
 
 			notebook.SetAnnotations(map[string]string{
 				NotebookFeastConfigAnnotation: projectName2,
@@ -581,9 +597,8 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 				Namespace: namespace,
 			}, cm)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cm.Data).NotTo(HaveKey(projectName))
-			Expect(cm.Data).To(HaveKey(projectName2))
-			Expect(cm.Data[projectName2]).To(Equal(testYAMLContent2))
+			Expect(cm.Data).To(HaveKey(services.FeatureStoreYamlCmKey))
+			Expect(cm.Data[services.FeatureStoreYamlCmKey]).To(Equal(testYAMLContent2))
 		})
 	})
 
@@ -628,6 +643,243 @@ var _ = Describe("NotebookConfigMap Controller", func() {
 			_, err := reconciler.getClientConfigYAMLForProject(ctx, projectName)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get client ConfigMap"))
+		})
+	})
+
+	Context("Volume mount injection", func() {
+		It("should add volume, volumeMount, and env var to Notebook", func() {
+			fs := createFeatureStore(featureStoreName, namespace, projectName)
+			Expect(k8sClient.Create(ctx, fs)).To(Succeed())
+			setFeatureStoreStatus(fs, projectName, clientConfigMapName)
+			Expect(k8sClient.Status().Update(ctx, fs)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, fs)
+			}()
+
+			clientCM := createClientConfigMap(clientConfigMapName, namespace)
+			Expect(k8sClient.Create(ctx, clientCM)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, clientCM)
+			}()
+
+			notebook := createNotebookWithSpec(notebookName, namespace, map[string]string{
+				NotebookFeastIntegrationLabel: TrueValue,
+			}, map[string]string{
+				NotebookFeastConfigAnnotation: projectName,
+			})
+			Expect(k8sClient.Create(ctx, notebook)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, notebook)
+			}()
+
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      notebookName,
+					Namespace: namespace,
+				},
+			}
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			updatedNotebook := &unstructured.Unstructured{}
+			updatedNotebook.SetGroupVersionKind(notebookGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: notebookName, Namespace: namespace}, updatedNotebook)).To(Succeed())
+
+			volumes, _, _ := unstructured.NestedSlice(updatedNotebook.Object, "spec", "template", "spec", "volumes")
+			Expect(volumes).To(ContainElement(HaveKeyWithValue("name", NotebookFeastVolumeName)))
+
+			containers, _, _ := unstructured.NestedSlice(updatedNotebook.Object, "spec", "template", "spec", "containers")
+			Expect(containers).To(HaveLen(1))
+			container := containers[0].(map[string]interface{})
+
+			mounts := container["volumeMounts"].([]interface{})
+			Expect(mounts).To(ContainElement(And(
+				HaveKeyWithValue("name", NotebookFeastVolumeName),
+				HaveKeyWithValue("mountPath", NotebookFeastMountPath),
+			)))
+
+			envVars := container["env"].([]interface{})
+			Expect(envVars).To(ContainElement(And(
+				HaveKeyWithValue("name", NotebookFeastRepoPathEnvVar),
+				HaveKeyWithValue("value", NotebookFeastMountPath),
+			)))
+		})
+
+		It("should be idempotent when volume mounts already exist", func() {
+			fs := createFeatureStore(featureStoreName, namespace, projectName)
+			Expect(k8sClient.Create(ctx, fs)).To(Succeed())
+			setFeatureStoreStatus(fs, projectName, clientConfigMapName)
+			Expect(k8sClient.Status().Update(ctx, fs)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, fs)
+			}()
+
+			clientCM := createClientConfigMap(clientConfigMapName, namespace)
+			Expect(k8sClient.Create(ctx, clientCM)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, clientCM)
+			}()
+
+			notebook := createNotebookWithSpec(notebookName, namespace, map[string]string{
+				NotebookFeastIntegrationLabel: TrueValue,
+			}, map[string]string{
+				NotebookFeastConfigAnnotation: projectName,
+			})
+			Expect(k8sClient.Create(ctx, notebook)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, notebook)
+			}()
+
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      notebookName,
+					Namespace: namespace,
+				},
+			}
+
+			// First reconcile — adds mounts
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			// Re-fetch for second reconcile
+			notebook2 := &unstructured.Unstructured{}
+			notebook2.SetGroupVersionKind(notebookGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: notebookName, Namespace: namespace}, notebook2)).To(Succeed())
+			rv1 := notebook2.GetResourceVersion()
+
+			// Second reconcile — no-op
+			result, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			// Resource version unchanged means no patch was applied
+			notebook3 := &unstructured.Unstructured{}
+			notebook3.SetGroupVersionKind(notebookGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: notebookName, Namespace: namespace}, notebook3)).To(Succeed())
+			Expect(notebook3.GetResourceVersion()).To(Equal(rv1))
+		})
+
+		It("should remove volume mounts when integration label is removed", func() {
+			fs := createFeatureStore(featureStoreName, namespace, projectName)
+			Expect(k8sClient.Create(ctx, fs)).To(Succeed())
+			setFeatureStoreStatus(fs, projectName, clientConfigMapName)
+			Expect(k8sClient.Status().Update(ctx, fs)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, fs)
+			}()
+
+			clientCM := createClientConfigMap(clientConfigMapName, namespace)
+			Expect(k8sClient.Create(ctx, clientCM)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, clientCM)
+			}()
+
+			notebook := createNotebookWithSpec(notebookName, namespace, map[string]string{
+				NotebookFeastIntegrationLabel: TrueValue,
+			}, map[string]string{
+				NotebookFeastConfigAnnotation: projectName,
+			})
+			Expect(k8sClient.Create(ctx, notebook)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, notebook)
+			}()
+
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      notebookName,
+					Namespace: namespace,
+				},
+			}
+
+			// First reconcile — adds mounts
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			// Remove the integration label
+			updatedNotebook := &unstructured.Unstructured{}
+			updatedNotebook.SetGroupVersionKind(notebookGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: notebookName, Namespace: namespace}, updatedNotebook)).To(Succeed())
+			updatedNotebook.SetLabels(nil)
+			Expect(k8sClient.Update(ctx, updatedNotebook)).To(Succeed())
+
+			// Reconcile again — should remove mounts
+			result, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			finalNotebook := &unstructured.Unstructured{}
+			finalNotebook.SetGroupVersionKind(notebookGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: notebookName, Namespace: namespace}, finalNotebook)).To(Succeed())
+
+			volumes, _, _ := unstructured.NestedSlice(finalNotebook.Object, "spec", "template", "spec", "volumes")
+			for _, v := range volumes {
+				vol := v.(map[string]interface{})
+				Expect(vol["name"]).NotTo(Equal(NotebookFeastVolumeName))
+			}
+
+			containers, _, _ := unstructured.NestedSlice(finalNotebook.Object, "spec", "template", "spec", "containers")
+			Expect(containers).To(HaveLen(1))
+			container := containers[0].(map[string]interface{})
+
+			mounts, _ := container["volumeMounts"].([]interface{})
+			for _, m := range mounts {
+				mount := m.(map[string]interface{})
+				Expect(mount["name"]).NotTo(Equal(NotebookFeastVolumeName))
+			}
+
+			envVars, _ := container["env"].([]interface{})
+			for _, e := range envVars {
+				env := e.(map[string]interface{})
+				Expect(env["name"]).NotTo(Equal(NotebookFeastRepoPathEnvVar))
+			}
+		})
+
+		It("should skip volume mount injection for notebooks without pod spec", func() {
+			fs := createFeatureStore(featureStoreName, namespace, projectName)
+			Expect(k8sClient.Create(ctx, fs)).To(Succeed())
+			setFeatureStoreStatus(fs, projectName, clientConfigMapName)
+			Expect(k8sClient.Status().Update(ctx, fs)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, fs)
+			}()
+
+			clientCM := createClientConfigMap(clientConfigMapName, namespace)
+			Expect(k8sClient.Create(ctx, clientCM)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, clientCM)
+			}()
+
+			notebook := createUnstructuredNotebook(notebookName, namespace, map[string]string{
+				NotebookFeastIntegrationLabel: TrueValue,
+			}, map[string]string{
+				NotebookFeastConfigAnnotation: projectName,
+			})
+			Expect(k8sClient.Create(ctx, notebook)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, notebook)
+			}()
+
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      notebookName,
+					Namespace: namespace,
+				},
+			}
+			result, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			// ConfigMap should still be created
+			cm := &corev1.ConfigMap{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      notebookName + NotebookConfigMapNameSuffix,
+				Namespace: namespace,
+			}, cm)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cm.Data).To(HaveKey(services.FeatureStoreYamlCmKey))
 		})
 	})
 })
