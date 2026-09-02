@@ -74,8 +74,8 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services;configmaps;persistentvolumeclaims,verbs=get;list;create;update;watch;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;create;update;watch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;create;update;watch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=create
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-editor;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;create
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-editor;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;update;delete
 // namespaces update is required by access.EnsureNamespaceLabel and
 // RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
