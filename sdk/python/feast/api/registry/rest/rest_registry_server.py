@@ -72,6 +72,7 @@ class RestRegistryServer:
         )
         self._add_exception_handlers()
         self._add_logging_middleware()
+        self._add_catalog_observability()
         self._add_openapi_security()
         self._init_auth()
         self._register_routes()
@@ -283,6 +284,35 @@ class RestRegistryServer:
             recent_visits_limit=self.recent_visits_limit,
             log_patterns=self.log_patterns,
         )
+
+    def _add_catalog_observability(self) -> None:
+        """Start the Prometheus metrics HTTP server in catalog mode.
+
+        When ``DATACATALOG_ENABLED=true``, starts ``/metrics`` on port 8000 so
+        the in-cluster ServiceMonitor can scrape directly (bypasses
+        kube-rbac-proxy). Exports standard ``feast_feature_server_*`` metrics.
+
+        No-op when ``DATACATALOG_ENABLED`` is not ``"true"``.
+        """
+        import os
+
+        if os.environ.get("DATACATALOG_ENABLED", "").lower() != "true":
+            return
+
+        from feast.metrics import start_metrics_server
+
+        try:
+            start_metrics_server(
+                store=self.store,
+                port=8000,
+                start_resource_monitoring=True,
+                start_freshness_monitoring=False,
+            )
+            logger.info("Catalog mode: Prometheus metrics server started on :8000")
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "Catalog mode: failed to start Prometheus metrics server: %s", exc
+            )
 
     def _register_routes(self):
         register_all_routes(self.app, self.grpc_handler, self)

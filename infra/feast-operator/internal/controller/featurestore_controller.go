@@ -37,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	handler "sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -121,6 +122,31 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if cr.DeletionTimestamp != nil {
 		if r.Metrics != nil {
 			r.Metrics.DeleteFeatureStore(cr.Namespace, cr.Name)
+		}
+		// Handle the data-registry finalizer before namespace-scoped GC:
+		// cluster-scoped ClusterRoles and CRBs have no owner references and would
+		// be orphaned if we skipped this step and the pod restarted.
+		if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
+			feast := services.FeastServices{
+				Handler: feasthandler.FeastHandler{
+					Client:       r.Client,
+					Context:      ctx,
+					FeatureStore: cr,
+					Scheme:       r.Scheme,
+				},
+			}
+			if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+				logger.Error(err, "Failed to cleanup data registry ClusterRoles during finalizer handling")
+				return ctrl.Result{}, err
+			}
+			if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
+				logger.Error(err, "Failed to cleanup data registry auth-delegator binding during finalizer handling")
+				return ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
+			if err := r.Update(ctx, cr); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		r.cleanupOnDeletion(ctx, cr.Namespace, cr.Name)
 		return ctrl.Result{}, nil
