@@ -181,9 +181,6 @@ func (feast *FeastServices) deployDataRegistry() error {
 	if err := feast.createOrDeleteDataRegistryServiceMonitor(); err != nil {
 		return err
 	}
-	if err := feast.createOrDeleteDataRegistryPrometheusRule(); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -218,9 +215,6 @@ func (feast *FeastServices) cleanupDataRegistryResources() error {
 	// API server returns NoKindMatchError on Get/Delete, not NotFound.
 	if hasServiceMonitorCRD {
 		if err := feast.deleteDataRegistryServiceMonitor(); err != nil {
-			return err
-		}
-		if err := feast.deleteDataRegistryPrometheusRule(); err != nil {
 			return err
 		}
 	}
