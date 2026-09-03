@@ -286,18 +286,11 @@ class RestRegistryServer:
         )
 
     def _add_catalog_observability(self) -> None:
-        """Start Prometheus metrics and add structured logging in catalog mode.
+        """Start the Prometheus metrics HTTP server in catalog mode.
 
-        When ``DATACATALOG_ENABLED=true``, this method:
-
-        1. Starts the Prometheus HTTP server on :8000 so that the in-cluster
-           ServiceMonitor can scrape ``/metrics`` directly (bypasses
-           kube-rbac-proxy). The standard ``feast_feature_server_*`` metrics
-           that Feast already records are exported — no duplicate datacatalog-
-           prefixed counters are needed.
-        2. Adds a structured-JSON logging middleware that emits a log line
-           per request with correlation fields (request_id, user, namespace,
-           endpoint, method, status, duration_ms).
+        When ``DATACATALOG_ENABLED=true``, starts ``/metrics`` on port 8000 so
+        the in-cluster ServiceMonitor can scrape directly (bypasses
+        kube-rbac-proxy). Exports standard ``feast_feature_server_*`` metrics.
 
         No-op when ``DATACATALOG_ENABLED`` is not ``"true"``.
         """
@@ -306,44 +299,7 @@ class RestRegistryServer:
         if os.environ.get("DATACATALOG_ENABLED", "").lower() != "true":
             return
 
-        import json as _json
-        import time as _time
-        import uuid as _uuid
-
-        from starlette.middleware.base import BaseHTTPMiddleware
-
         from feast.metrics import start_metrics_server
-
-        catalog_log = logging.getLogger("feast.datacatalog")
-
-        class _CatalogLoggingMiddleware(BaseHTTPMiddleware):
-            """Structured JSON access log for every catalog request."""
-
-            async def dispatch(self, request, call_next):
-                request_id = request.headers.get("X-Request-ID", str(_uuid.uuid4()))
-                user = request.headers.get("X-Remote-User", "unknown")
-                namespace = request.headers.get("X-Namespace", "")
-                start = _time.monotonic()
-                response = await call_next(request)
-                duration_ms = (_time.monotonic() - start) * 1000
-                catalog_log.info(
-                    _json.dumps(
-                        {
-                            "event": "catalog_request",
-                            "request_id": request_id,
-                            "user": user,
-                            "namespace": namespace,
-                            "endpoint": request.url.path,
-                            "method": request.method,
-                            "status": response.status_code,
-                            "duration_ms": round(duration_ms, 2),
-                        },
-                        separators=(",", ":"),
-                    )
-                )
-                return response
-
-        self.app.add_middleware(_CatalogLoggingMiddleware)
 
         try:
             start_metrics_server(
