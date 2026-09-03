@@ -93,7 +93,6 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -462,14 +461,6 @@ func (r *FeatureStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			Kind:    "ServiceMonitor",
 		})
 		bldr = bldr.Owns(sm)
-
-		pr := &unstructured.Unstructured{}
-		pr.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "monitoring.coreos.com",
-			Version: "v1",
-			Kind:    "PrometheusRule",
-		})
-		bldr = bldr.Owns(pr)
 	}
 	if services.HasMlflowCRD() {
 		mlflow := &unstructured.Unstructured{}
