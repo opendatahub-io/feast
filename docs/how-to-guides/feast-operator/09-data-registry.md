@@ -77,7 +77,6 @@ When enabled, the operator creates the following resources:
 | ConfigMap (CA bundle) | `feast-{cr-name}-data-registry-cabundle` | Namespaced |
 | Route | `feast-{cr-name}-data-registry` (ReEncrypt) | Namespaced |
 | ServiceMonitor | `feast-{cr-name}-data-registry` | Namespaced |
-| PrometheusRule | `feast-{cr-name}-data-registry` | Namespaced |
 | ClusterRole (viewer) | `feast-data-registry-viewer` | Cluster |
 | ClusterRole (editor) | `feast-data-registry-editor` | Cluster |
 | ClusterRole (admin) | `feast-data-registry-admin` | Cluster |
@@ -143,15 +142,26 @@ annotation. No manual certificate management is required.
 
 ## Observability
 
-When the ServiceMonitor CRD is available on the cluster, the operator creates:
+Data Registry monitoring follows the same model as the [online feature server](03-serving-and-observability.md)
+and the [Feast feature server monitoring guide](https://feast.dev/blog/feast-feature-server-monitoring/):
 
-- **ServiceMonitor** scraping `:8000/metrics` every 30 seconds
-- **PrometheusRule** with two alerts:
-  - `DataCatalogHighErrorRate` — 5xx rate > 5% for 5m (critical)
-  - `DataCatalogSearchLatencyHigh` — p95 > 500ms for 10m (warning)
+- The feast-server starts a Prometheus metrics endpoint on **`:8000/metrics`** when
+  `DATACATALOG_ENABLED=true` (automatic in data-registry mode).
+- The operator exposes port `8000` on the Service (named `metrics`) so Prometheus can scrape
+  directly — **no bearer token required** (metrics bypass kube-rbac-proxy).
+- When the `ServiceMonitor` CRD is available, the operator creates a **ServiceMonitor** targeting
+  the `metrics` port at `/metrics` (same pattern as the online store).
 
-The feast-server emits structured JSON logs on the `feast.datacatalog` logger when
-`DATACATALOG_ENABLED=true`.
+The operator does **not** create `PrometheusRule` resources. Customers define their own alert
+rules and tune thresholds for their environment. Example alerts you may want to author:
+
+| Alert | Expression (example) | Severity |
+|---|---|---|
+| High 5xx rate | `sum(rate(feast_feature_server_request_total{status=~"5.."}[5m])) / sum(rate(feast_feature_server_request_total[5m])) > 0.05` | critical |
+| High search latency | `histogram_quantile(0.95, sum(rate(feast_feature_server_request_latency_seconds_bucket{endpoint="/search"}[5m])) by (le)) > 0.5` | warning |
+
+See [Guide 3 — Serving & Observability](03-serving-and-observability.md) for standard Feast metrics
+and Grafana dashboard patterns.
 
 ---
 
@@ -182,7 +192,7 @@ kubectl annotate featurestore data-registry dataregistry.opendatahub.io/enabled-
 ```
 
 The operator cleans up all data-registry resources (Deployment, Service, ConfigMaps, Route,
-ClusterRoles, ClusterRoleBinding, ServiceMonitor, PrometheusRule) and removes the finalizer.
+ClusterRoles, ClusterRoleBinding, ServiceMonitor) and removes the finalizer.
 
 ---
 
