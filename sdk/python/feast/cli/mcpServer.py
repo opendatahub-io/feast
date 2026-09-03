@@ -31,10 +31,8 @@ def _load_mcp_cli() -> click.Command:
         raise _McpServerUnavailable(
             f"The standalone MCP server could not be imported: {exc}.\n"
             "It needs FastMCP, which is not part of the base Feast install.\n"
-            "Install it with:\n"
-            "    pip install 'feast[mcp-server]'\n"
-            "or, for OTLP log and trace export:\n"
-            "    pip install 'feast[mcp-server-otel]'"
+            "Install the optional 'feast[mcp-server]' extra,\n"
+            "or for OTLP log and trace export, the 'feast[mcp-server-otel]' extra."
         )
 
 

@@ -5,7 +5,5 @@ feature server and/or REST registry server over HTTP. Distinct from
 :mod:`feast.infra.mcp_servers`, which mounts an OpenAPI-derived MCP endpoint
 *inside* the feature server via ``fastapi_mcp``.
 
-Requires the optional ``mcp-server`` extra::
-
-    pip install 'feast[mcp-server]'
+Requires the optional ``mcp-server`` extra (``feast[mcp-server]``).
 """

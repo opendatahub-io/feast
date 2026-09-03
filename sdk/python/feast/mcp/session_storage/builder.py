@@ -25,9 +25,7 @@ def build_store(config: SessionStorageConfig) -> AsyncKeyValue:
     except ImportError as exc:
         extra = config.requires_extra
         hint = (
-            f" Install it with: pip install 'py-key-value-aio[{extra}]'"
-            if extra
-            else ""
+            f" Install the optional 'py-key-value-aio[{extra}]' extra." if extra else ""
         )
         raise ImportError(
             f"Session storage backend {config.backend!r} requires an optional "

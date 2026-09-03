@@ -97,7 +97,7 @@ def _load_yaml(path: str | Path) -> dict:
     except ImportError:
         raise ImportError(
             f"PyYAML is required to load config file '{path}'. "
-            "Install with: pip install pyyaml"
+            "Install the PyYAML package (included in the feast[mcp-server] extra)."
         )
     with open(path) as f:
         return yaml.safe_load(f) or {}

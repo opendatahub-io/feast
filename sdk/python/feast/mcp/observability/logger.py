@@ -158,7 +158,7 @@ def _build_otel_handler(config: LoggingConfig) -> Optional[logging.Handler]:
     except ImportError:
         root.warning(
             "OTEL logging requested but the OpenTelemetry SDK is not installed; "
-            "logging to stdio only. Install with: pip install 'feast-mcp[otel]'"
+            "logging to stdio only. Install the optional 'feast-mcp[otel]' extra."
         )
         return None
 
@@ -184,7 +184,7 @@ def _build_otel_handler(config: LoggingConfig) -> Optional[logging.Handler]:
     except ImportError:
         root.warning(
             "OTEL exporter for protocol %r is not installed; logging to stdio "
-            "only. Install with: pip install 'feast-mcp[otel]'",
+            "only. Install the optional 'feast-mcp[otel]' extra.",
             proto,
         )
         return None

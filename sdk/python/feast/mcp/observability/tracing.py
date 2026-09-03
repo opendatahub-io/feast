@@ -63,8 +63,8 @@ def _build_span_exporter(config: LoggingConfig, root: logging.Logger):
     except ImportError:
         root.warning(
             "OTEL span exporter for protocol %r is not installed; spans will "
-            "not be exported (request logs still get a trace id). Install with: "
-            "pip install 'feast-mcp[otel]'",
+            "not be exported (request logs still get a trace id). "
+            "Install the optional 'feast-mcp[otel]' extra.",
             proto,
         )
         return None
@@ -92,7 +92,7 @@ def configure_tracing(config: LoggingConfig):
         root.warning(
             "OTEL tracing requested but the OpenTelemetry SDK is not installed; "
             "request logs will use a generated id instead of a real trace id. "
-            "Install with: pip install 'feast-mcp[otel]'"
+            "Install the optional 'feast-mcp[otel]' extra."
         )
         return None
 
