@@ -1,0 +1,48 @@
+# Config for the standalone Feast MCP server (`feast mcp --config feast_mcp.yaml`).
+#
+# Resolution order is CLI > environment > this file > defaults. Note that the
+# environment outranks this file: a FEAST_MCP_TRANSPORT in your shell will
+# silently override `server.transport` below.
+
+server:
+  # stdio speaks MCP over the process's stdin/stdout -- use it when an IDE
+  # client spawns `feast mcp` itself. http serves the endpoint at /mcp.
+  transport: http           # stdio | http | streamable-http | sse
+  host: 0.0.0.0
+  port: 8000
+  # workers: 4              # gunicorn; requires http transport, not sse
+
+# At least one of features.url / registry.url is required. Each one that is
+# set mounts its tool namespace; each one omitted mounts nothing.
+features:
+  url: http://localhost:6566        # feast serve
+registry:
+  url: http://localhost:6572        # feast serve_registry --rest-api
+
+timeout: 30
+
+observability:
+  level: INFO               # DEBUG | INFO | WARNING | ERROR
+  format: text              # text | json
+  # otel_endpoint: http://localhost:4317
+  # otel_protocol: grpc     # grpc | http
+  # otel_service_name: feast-mcp
+
+# The MCP server enforces no RBAC of its own -- it forwards the caller's bearer
+# token to Feast, which applies its own permission model. `passthrough` (the
+# default) accepts connections without a token, which is what this local demo
+# wants. Switch to `oidc` to give IDE clients a browser login flow.
+#
+# auth:
+#   mode: oidc
+#   discovery_url: https://keycloak.example.com/realms/feast/.well-known/openid-configuration
+#   client_id: feast-mcp
+#   base_url: http://localhost:8000
+
+# Required for OIDC with more than one replica: /callback may otherwise land on
+# a replica that never saw the /authorize.
+#
+# session_storage:
+#   backend: redis          # redis | valkey | postgresql | mongodb | disk | memory
+#   options:
+#     url: redis://localhost:6379
