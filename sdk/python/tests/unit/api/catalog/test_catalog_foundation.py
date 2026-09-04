@@ -21,10 +21,17 @@ from feast.api.catalog import (
     DEFAULT_COLLECTION,
     ensure_catalog_project,
     list_namespaces,
+    ns_meta_key,
     resolve_namespace,
     scoped_name,
+    set_namespace_properties,
     validate_namespace_exists,
 )
+from feast.api.catalog.catalog_utils import (
+    create_namespace_meta,
+    delete_namespace_meta,
+)
+from feast.api.catalog.errors import NoSuchNamespaceException
 from feast.errors import ProjectObjectNotFoundException
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
@@ -159,3 +166,70 @@ def test_validate_namespace_exists_scoped_collection_is_per_tenant(sqlite_regist
     )
     assert validate_namespace_exists(sqlite_registry, "demo-user-1", "underwriting")
     assert not validate_namespace_exists(sqlite_registry, "demo-user-2", "underwriting")
+
+
+def test_list_and_exists_see_scoped_ns_meta_tag(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    create_namespace_meta(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+    )
+    assert list_namespaces(sqlite_registry, "demo-user-1") == [
+        DEFAULT_COLLECTION,
+        "underwriting",
+    ]
+    assert validate_namespace_exists(sqlite_registry, "demo-user-1", "underwriting")
+    assert not validate_namespace_exists(sqlite_registry, "demo-user-2", "underwriting")
+    project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert ns_meta_key("demo-user-1", "underwriting") in project.tags
+    assert "_ns_meta_underwriting" not in project.tags
+
+
+def test_unmanaged_saved_dataset_is_not_an_iceberg_namespace(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    sqlite_registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name("demo-user-1", "ml-leak", "training"),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="file:///tmp/dataset.parquet"),
+            namespace="demo-user-1",
+            collection="ml-leak",
+        ),
+        CATALOG_PROJECT,
+    )
+    assert list_namespaces(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
+    assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "ml-leak")
+
+
+def test_set_namespace_properties_requires_existing_collection(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    with pytest.raises(NoSuchNamespaceException):
+        set_namespace_properties(
+            sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+        )
+    create_namespace_meta(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+    )
+    set_namespace_properties(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "data-team"}
+    )
+    project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert (
+        project.tags[ns_meta_key("demo-user-1", "underwriting")]
+        == '{"owner":"data-team"}'
+    )
+
+
+def test_set_namespace_properties_after_delete_does_not_undelete(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    create_namespace_meta(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+    )
+    delete_namespace_meta(sqlite_registry, "demo-user-1", "underwriting")
+    with pytest.raises(NoSuchNamespaceException):
+        set_namespace_properties(
+            sqlite_registry, "demo-user-1", "underwriting", {"owner": "resurrect"}
+        )
+    assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "underwriting")
+    project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert ns_meta_key("demo-user-1", "underwriting") not in project.tags
