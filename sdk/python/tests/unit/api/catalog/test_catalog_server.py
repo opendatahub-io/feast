@@ -33,7 +33,6 @@ def sql_repo_config(tmp_path):
             "provider": "local",
             "offline_store": {"type": "file"},
             "online_store": {"type": "sqlite", "path": ":memory:"},
-            "entity_key_serialization_version": 3,
         }
     )
 
