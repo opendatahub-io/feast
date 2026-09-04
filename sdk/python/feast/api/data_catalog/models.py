@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IcebergError(BaseModel):
@@ -67,3 +67,114 @@ class TableIdentifier(BaseModel):
 
 class ListTablesResponse(BaseModel):
     identifiers: list[TableIdentifier]
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[str]
+
+
+class SchemaField(BaseModel):
+    name: str
+    type: str
+    description: str = ""
+    nullable: bool = True
+
+
+class VolumeInfo(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    name: str
+    catalog_name: str = Field(serialization_alias="catalog-name")
+    schema_name: str = Field(serialization_alias="schema-name")
+    volume_type: str = Field(serialization_alias="volume-type")
+    storage_location: str = Field(serialization_alias="storage-location")
+    comment: str | None = None
+    owner: str | None = None
+    created_at: str | None = Field(default=None, serialization_alias="created-at")
+    updated_at: str | None = Field(default=None, serialization_alias="updated-at")
+    labels: list[str] | None = None
+    properties: dict[str, str] = Field(default_factory=dict)
+    config: dict[str, str] = Field(default_factory=dict)
+
+
+class CreateVolumeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    location: str | None = None
+    storage_location: str | None = Field(default=None, alias="storage-location")
+    volume_type: str | None = Field(default=None, alias="volume-type")
+    content_type: str | None = None
+    comment: str | None = None
+    description: str | None = None
+    owner: str | None = None
+    labels: list[str] | None = None
+    properties: dict[str, str] = Field(default_factory=dict)
+
+
+class UpdateVolumeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    comment: str | None = None
+    owner: str | None = None
+    storage_location: str | None = Field(default=None, alias="storage-location")
+    properties: dict[str, str] | None = None
+
+
+class ListVolumesResponse(BaseModel):
+    volumes: list[VolumeInfo]
+
+
+class CreateGenericTableRequest(BaseModel):
+    name: str
+    format: str | None = None
+    location: str | None = None
+    description: str | None = None
+    purpose: str | None = None
+    license: str | None = None
+    maturity: str | None = None
+    domain: str | None = None
+    pii: str | None = None
+    owner: str | None = None
+    labels: list[str] | None = None
+    schema_fields: list[SchemaField] | None = None
+    properties: dict[str, str] = Field(default_factory=dict)
+
+
+class UpdateGenericTableRequest(BaseModel):
+    description: str | None = None
+    format: str | None = None
+    location: str | None = None
+    purpose: str | None = None
+    license: str | None = None
+    maturity: str | None = None
+    domain: str | None = None
+    pii: str | None = None
+    owner: str | None = None
+    add_labels: list[str] | None = None
+    remove_labels: list[str] | None = None
+    schema_fields: list[SchemaField] | None = None
+    properties: dict[str, str] | None = None
+
+
+class AssetResponse(BaseModel):
+    name: str
+    asset_type: str
+    uuid: str | None = None
+    format: str | None = None
+    location: str | None = None
+    content_type: str | None = None
+    columns: list[SchemaField] | None = None
+    collection: str | None = None
+    owner: str | None = None
+    description: str | None = None
+    labels: list[str] | None = None
+    properties: dict[str, str] | None = None
+    registered_by: str | None = None
+    updated_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class AssetListResponse(BaseModel):
+    assets: list[AssetResponse]

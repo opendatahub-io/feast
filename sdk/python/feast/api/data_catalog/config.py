@@ -12,28 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Iceberg REST config endpoints.
+"""Iceberg REST config endpoints (RHAI-387) plus RHOAI extensions (RHAI-376).
 
 ``GET /v1/config`` is the engine bootstrap call. ``warehouse`` (or the
 prefixed path) becomes ``overrides.prefix`` so later calls use
-``/v1/{prefix}/...``. ``endpoints`` lists data-catalog operations that are
-implemented as **read**. Table create/update/drop/rename and LoadTable
-exist as routes but return 501 and are not advertised: no credential
-vending (DCH); engines talk to object storage themselves. Namespace CRUD
-is advertised. Mounting on RestRegistryServer is separate.
+``/v1/{prefix}/...``. ``endpoints`` lists operations that actually serve.
+Iceberg table create/update/drop/rename and LoadTable exist as routes but
+return 501 and are not advertised. Namespace CRUD and RHOAI volume /
+generic-table catalog registration are advertised. Mounting on
+RestRegistryServer is RHAI-390.
+
+Authentication and authorization are handled by ``kube-rbac-proxy`` in
+front of the Feast container — these handlers trust that the request has
+already passed RBAC. Rate limiting is managed at the ingress / gateway
+layer, not inside Python handlers.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
-from feast.api.data_catalog.catalog_utils import _http_namespace
-from feast.api.data_catalog.models import DataRegistryConfig
+from feast.api.data_catalog.catalog_utils import _http_namespace, list_catalog_projects
+from feast.api.data_catalog.models import DataRegistryConfig, ProjectListResponse
 
 # Iceberg clients match ``{prefix}`` in these strings, not OpenAPI ``{project}``.
 CATALOG_CONFIG_ENDPOINTS = [
     "GET /v1/config",
     "GET /v1/{prefix}/config",
+    "GET /v1/projects",
     "GET /v1/{prefix}/namespaces",
     "POST /v1/{prefix}/namespaces",
     "GET /v1/{prefix}/namespaces/{namespace}",
@@ -42,6 +48,17 @@ CATALOG_CONFIG_ENDPOINTS = [
     "POST /v1/{prefix}/namespaces/{namespace}/properties",
     "GET /v1/{prefix}/namespaces/{namespace}/tables",
     "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}",
+    "GET /v1/{prefix}/namespaces/{namespace}/volumes",
+    "POST /v1/{prefix}/namespaces/{namespace}/volumes",
+    "GET /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
+    "HEAD /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
+    "PUT /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
+    "DELETE /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
+    "GET /v1/{prefix}/namespaces/{namespace}/generic-tables",
+    "POST /v1/{prefix}/namespaces/{namespace}/generic-tables",
+    "GET /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
+    "PATCH /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
+    "DELETE /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
 ]
 
 
@@ -70,10 +87,29 @@ def get_config_router() -> APIRouter:
     def get_data_catalog_config(
         warehouse: str | None = Query(default=None),
     ) -> DataRegistryConfig:
+        """Return bootstrap configuration for Iceberg engine clients.
+
+        Auth: ``kube-rbac-proxy`` · Rate limit: ingress/gateway.
+        """
         return data_catalog_config(prefix=_config_prefix(warehouse))
 
     @router.get("/v1/{project}/config", response_model=DataRegistryConfig)
     def get_data_catalog_prefixed_config(project: str) -> DataRegistryConfig:
+        """Return project-scoped configuration.
+
+        Auth: ``kube-rbac-proxy`` · Rate limit: ingress/gateway.
+        """
         return data_catalog_config(prefix=_config_prefix(project))
+
+    @router.get("/v1/projects", response_model=ProjectListResponse)
+    def list_projects(request: Request) -> ProjectListResponse:
+        """List RHOAI namespaces that have at least one catalog asset.
+
+        Auth: ``kube-rbac-proxy`` · Rate limit: ingress/gateway.
+        """
+        registry = getattr(request.app.state, "registry", None)
+        if registry is None:
+            return ProjectListResponse(projects=[])
+        return ProjectListResponse(projects=list_catalog_projects(registry))
 
     return router
