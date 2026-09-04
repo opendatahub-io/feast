@@ -93,6 +93,10 @@ from feast.version_utils import (
     version_tag,
 )
 
+# Feast project that holds Data Registry catalog rows. Do not import
+# feast.api.catalog from this module (that package imports sql tables).
+_DATA_REGISTRY_PROJECT = "data-registry"
+
 metadata = MetaData()
 
 # Serialized protos (and their accompanying metadata blobs) can grow well past
@@ -2017,7 +2021,10 @@ class SqlRegistry(CachingRegistry):
                         project,
                     )
 
-            if not isinstance(obj, Project):
+            if (
+                not isinstance(obj, Project)
+                and project == _DATA_REGISTRY_PROJECT
+            ):
                 self._cas_touch_project(project, conn)
             if not self.purge_feast_metadata:
                 self._set_last_updated_metadata(update_datetime, project, conn)
@@ -2068,7 +2075,8 @@ class SqlRegistry(CachingRegistry):
             rows = conn.execute(stmt)
             if rows.rowcount < 1 and not_found_exception:
                 raise not_found_exception(name, project)
-            self._cas_touch_project(project, conn)
+            if project == _DATA_REGISTRY_PROJECT:
+                self._cas_touch_project(project, conn)
             if not self.purge_feast_metadata:
                 self._set_last_updated_metadata(_utc_now(), project, conn)
 
@@ -2311,9 +2319,10 @@ class SqlRegistry(CachingRegistry):
     def _cas_touch_project(self, name: str, conn: Any) -> None:
         """Bump Project last_updated on ``conn`` without replacing tags.
 
-        Used after object apply/delete so a stale ``get_project`` snapshot cannot
-        overwrite catalog ``_ns_meta_*`` keys. Same connection as the object write
-        (nested ``mutate_project`` deadlocks SQLite).
+        Called after apply/delete only for Feast project ``data-registry`` so a
+        stale ``get_project`` snapshot cannot overwrite catalog ``_ns_meta_*``
+        keys. Other Feast projects skip this extra UPDATE. Same connection as
+        the object write (nested ``mutate_project`` deadlocks SQLite).
         """
         from feast.utils import _utc_now
 
