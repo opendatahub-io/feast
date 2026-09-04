@@ -27,6 +27,11 @@ from feast.api.catalog import (
     set_namespace_properties,
     validate_namespace_exists,
 )
+from feast.api.catalog.catalog_utils import (
+    create_namespace_meta,
+    delete_namespace_meta,
+)
+from feast.api.catalog.errors import NoSuchNamespaceException
 from feast.errors import ProjectObjectNotFoundException
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
@@ -165,7 +170,7 @@ def test_validate_namespace_exists_scoped_collection_is_per_tenant(sqlite_regist
 
 def test_list_and_exists_see_scoped_ns_meta_tag(sqlite_registry):
     ensure_catalog_project(sqlite_registry)
-    set_namespace_properties(
+    create_namespace_meta(
         sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
     )
     assert list_namespaces(sqlite_registry, "demo-user-1") == [
@@ -194,3 +199,37 @@ def test_unmanaged_saved_dataset_is_not_an_iceberg_namespace(sqlite_registry):
     )
     assert list_namespaces(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
     assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "ml-leak")
+
+
+def test_set_namespace_properties_requires_existing_collection(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    with pytest.raises(NoSuchNamespaceException):
+        set_namespace_properties(
+            sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+        )
+    create_namespace_meta(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+    )
+    set_namespace_properties(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "data-team"}
+    )
+    project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert (
+        project.tags[ns_meta_key("demo-user-1", "underwriting")]
+        == '{"owner":"data-team"}'
+    )
+
+
+def test_set_namespace_properties_after_delete_does_not_undelete(sqlite_registry):
+    ensure_catalog_project(sqlite_registry)
+    create_namespace_meta(
+        sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
+    )
+    delete_namespace_meta(sqlite_registry, "demo-user-1", "underwriting")
+    with pytest.raises(NoSuchNamespaceException):
+        set_namespace_properties(
+            sqlite_registry, "demo-user-1", "underwriting", {"owner": "resurrect"}
+        )
+    assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "underwriting")
+    project = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert ns_meta_key("demo-user-1", "underwriting") not in project.tags
