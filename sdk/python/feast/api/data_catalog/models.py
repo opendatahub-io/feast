@@ -16,6 +16,9 @@
 
 from __future__ import annotations
 
+from typing import Annotated, Literal
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -80,6 +83,28 @@ class SchemaField(BaseModel):
     nullable: bool = True
 
 
+class DchConnectionRef(BaseModel):
+    """OpenAPI DchConnectionRef. Catalog stores the JSON; does not call DCH."""
+
+    type: Literal["dch"]
+    id: UUID
+
+
+class RhaiConnectionRef(BaseModel):
+    """OpenAPI RhaiConnectionRef. Catalog stores secret_name; does not read the Secret."""
+
+    type: Literal["rhai"]
+    secret_name: str
+
+
+ConnectionRef = Annotated[
+    DchConnectionRef | RhaiConnectionRef,
+    Field(discriminator="type"),
+]
+
+Maturity = Literal["experimental", "staging", "production", "deprecated"]
+
+
 class VolumeInfo(BaseModel):
     model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
 
@@ -95,6 +120,7 @@ class VolumeInfo(BaseModel):
     labels: list[str] | None = None
     properties: dict[str, str] = Field(default_factory=dict)
     config: dict[str, str] = Field(default_factory=dict)
+    connection_ref: ConnectionRef | None = None
 
 
 class CreateVolumeRequest(BaseModel):
@@ -105,6 +131,7 @@ class CreateVolumeRequest(BaseModel):
     storage_location: str | None = Field(default=None, alias="storage-location")
     volume_type: str | None = Field(default=None, alias="volume-type")
     content_type: str | None = None
+    connection_ref: ConnectionRef | None = None
     comment: str | None = None
     description: str | None = None
     owner: str | None = None
@@ -129,6 +156,7 @@ class CreateGenericTableRequest(BaseModel):
     name: str
     format: str | None = None
     location: str | None = None
+    connection_ref: ConnectionRef | None = None
     description: str | None = None
     purpose: str | None = None
     license: str | None = None
@@ -145,9 +173,10 @@ class UpdateGenericTableRequest(BaseModel):
     description: str | None = None
     format: str | None = None
     location: str | None = None
+    connection_ref: ConnectionRef | None = None
     purpose: str | None = None
     license: str | None = None
-    maturity: str | None = None
+    maturity: Maturity | None = None
     domain: str | None = None
     pii: str | None = None
     owner: str | None = None
@@ -166,6 +195,7 @@ class AssetResponse(BaseModel):
     content_type: str | None = None
     columns: list[SchemaField] | None = None
     collection: str | None = None
+    connection_ref: ConnectionRef | None = None
     owner: str | None = None
     description: str | None = None
     labels: list[str] | None = None
