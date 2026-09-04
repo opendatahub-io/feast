@@ -69,9 +69,7 @@ def _display_name(table: str) -> str:
     return _http_part("name", table)
 
 
-def _require_collection(
-    registry: BaseRegistry, rhai_ns: str, collection: str
-) -> None:
+def _require_collection(registry: BaseRegistry, rhai_ns: str, collection: str) -> None:
     if not validate_namespace_exists(registry, rhai_ns, collection):
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 
@@ -91,9 +89,7 @@ def _get_iceberg_table(
     display = _display_name(table)
     name = scoped_name(rhai_ns, collection, display)
     try:
-        dataset = registry.get_saved_dataset(
-            name, CATALOG_PROJECT, allow_cache=False
-        )
+        dataset = registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     except SavedDatasetNotFound as exc:
         raise NoSuchTableException(
             f"Table does not exist: {collection}.{display}"
