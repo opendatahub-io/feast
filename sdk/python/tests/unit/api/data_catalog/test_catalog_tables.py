@@ -19,15 +19,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     CATALOG_PROJECT,
     DEFAULT_COLLECTION,
     scoped_name,
 )
-from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
-from feast.api.catalog.errors import register_error_handlers
-from feast.api.catalog.namespaces import get_namespace_router
-from feast.api.catalog.tables import get_table_router
+from feast.api.data_catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.data_catalog.errors import register_error_handlers
+from feast.api.data_catalog.namespaces import get_namespace_router
+from feast.api.data_catalog.tables import get_table_router
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
 from feast.saved_dataset import SavedDataset
@@ -211,8 +211,8 @@ def test_t11_update_is_501_tags_unchanged(sqlite_registry):
 
 
 def test_no_load_table_models_or_feast_uri():
-    import feast.api.catalog.tables as tables
-    from feast.api.catalog import models
+    import feast.api.data_catalog.tables as tables
+    from feast.api.data_catalog import models
 
     assert not hasattr(models, "LoadTableResponse")
     assert not hasattr(models, "CreateTableRequest")

@@ -12,15 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Catalog translation helpers plus Iceberg REST types and routers.
+"""Data Registry Iceberg REST types and routers.
 
 Does not mount routes on RestRegistryServer. Tests include
 ``get_config_router()``, ``get_namespace_router()``, and
-``get_table_router()`` on a dedicated FastAPI app. Mounting on
-RestRegistryServer is RHAI-390 (``add_catalog_routes``).
+``get_table_router()`` on a dedicated FastAPI app.
 """
 
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     CATALOG_PROJECT,
     DEFAULT_COLLECTION,
     NS_META_PREFIX,
@@ -28,7 +27,7 @@ from feast.api.catalog.catalog_utils import (
     delete_namespace_meta,
     ensure_catalog_project,
     get_namespace_properties,
-    list_namespaces,
+    list_collections,
     ns_meta_key,
     parse_ns_meta_key,
     parse_scoped_name,
@@ -38,8 +37,8 @@ from feast.api.catalog.catalog_utils import (
     unscoped_name,
     validate_namespace_exists,
 )
-from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
-from feast.api.catalog.errors import (
+from feast.api.data_catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.data_catalog.errors import (
     BadRequestException,
     IcebergRESTException,
     NamespaceAlreadyExistsException,
@@ -51,7 +50,7 @@ from feast.api.catalog.errors import (
     missing_required_fields,
     register_error_handlers,
 )
-from feast.api.catalog.models import (
+from feast.api.data_catalog.models import (
     CreateNamespaceRequest,
     DataRegistryConfig,
     ErrorResponse,
@@ -62,8 +61,8 @@ from feast.api.catalog.models import (
     UpdateNamespacePropertiesRequest,
     UpdateNamespacePropertiesResponse,
 )
-from feast.api.catalog.namespaces import get_namespace_router
-from feast.api.catalog.tables import get_table_router
+from feast.api.data_catalog.namespaces import get_namespace_router
+from feast.api.data_catalog.tables import get_table_router
 
 __all__ = [
     "CATALOG_CONFIG_ENDPOINTS",
@@ -94,7 +93,7 @@ __all__ = [
     "get_namespace_properties",
     "get_namespace_router",
     "get_table_router",
-    "list_namespaces",
+    "list_collections",
     "missing_required_fields",
     "ns_meta_key",
     "parse_ns_meta_key",

@@ -16,8 +16,8 @@ import tempfile
 
 import pytest
 
-from feast.api.catalog import parse_scoped_name, scoped_name, unscoped_name
-from feast.api.catalog.catalog_utils import MAX_SCOPED_NAME, SCOPE_SEP
+from feast.api.data_catalog import parse_scoped_name, scoped_name, unscoped_name
+from feast.api.data_catalog.catalog_utils import MAX_SCOPED_NAME, SCOPE_SEP
 from feast.errors import SavedDatasetNotFound
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig

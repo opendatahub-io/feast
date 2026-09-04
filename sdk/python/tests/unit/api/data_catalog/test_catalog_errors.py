@@ -20,9 +20,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-import feast.api.catalog as catalog_pkg
-from feast.api.catalog.config import get_config_router
-from feast.api.catalog.errors import (
+import feast.api.data_catalog as data_catalog_pkg
+from feast.api.data_catalog.config import get_config_router
+from feast.api.data_catalog.errors import (
     BadRequestException,
     IcebergRESTException,
     NamespaceAlreadyExistsException,
@@ -119,9 +119,9 @@ def test_missing_required_fields_helper():
     }
 
 
-def test_catalog_package_does_not_mount_feast_server():
-    catalog_dir = Path(catalog_pkg.__file__).resolve().parent
-    forbidden = {"RestRegistryServer", "DATACATALOG_ENABLED", "add_catalog_routes"}
+def test_data_catalog_package_does_not_mount_feast_server():
+    catalog_dir = Path(data_catalog_pkg.__file__).resolve().parent
+    forbidden = {"RestRegistryServer", "DATACATALOG_ENABLED", "add_data_catalog_routes"}
     for path in catalog_dir.glob("*.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

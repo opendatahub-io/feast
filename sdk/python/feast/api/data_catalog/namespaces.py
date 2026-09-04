@@ -12,34 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Iceberg REST namespace (collection) lifecycle (RHAI-388).
+"""Iceberg REST namespace (collection) lifecycle.
 
 Empty collections persist as scoped Project tags ``_ns_meta_{ns}/{collection}``
 on Feast project ``data-registry``. Do not mount this router on
-RestRegistryServer here (RHAI-390).
+RestRegistryServer here.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     DEFAULT_COLLECTION,
-    _require_namespace,
+    _http_collection,
+    _http_namespace,
     create_namespace_meta,
     delete_namespace_meta,
     get_namespace_properties,
-    list_namespaces,
+    list_collections,
     merge_namespace_properties,
-    resolve_namespace,
     validate_namespace_exists,
 )
-from feast.api.catalog.errors import (
+from feast.api.data_catalog.errors import (
     BadRequestException,
     NoSuchNamespaceException,
     ServiceFailureException,
 )
-from feast.api.catalog.models import (
+from feast.api.data_catalog.models import (
     CreateNamespaceRequest,
     ListNamespacesResponse,
     NamespaceResponse,
@@ -56,26 +56,8 @@ def _registry(request: Request) -> BaseRegistry:
     return registry
 
 
-def _as_bad_request(exc: ValueError) -> BadRequestException:
-    return BadRequestException(str(exc))
-
-
-def _rhai_ns(project: str) -> str:
-    try:
-        return _require_namespace(project)
-    except ValueError as exc:
-        raise _as_bad_request(exc) from exc
-
-
-def _collection_name(collection: str) -> str:
-    try:
-        return resolve_namespace(collection)
-    except ValueError as exc:
-        raise _as_bad_request(exc) from exc
-
-
 def _project_and_collection(project: str, collection: str) -> tuple[str, str]:
-    return _rhai_ns(project), _collection_name(collection)
+    return _http_namespace(project), _http_collection(collection)
 
 
 def get_namespace_router() -> APIRouter:
@@ -83,19 +65,16 @@ def get_namespace_router() -> APIRouter:
 
     @router.get("/v1/{project}/namespaces", response_model=ListNamespacesResponse)
     def list_namespaces_http(project: str, request: Request) -> ListNamespacesResponse:
-        rhai_ns = _rhai_ns(project)
-        names = list_namespaces(_registry(request), rhai_ns)
+        rhai_ns = _http_namespace(project)
+        names = list_collections(_registry(request), rhai_ns)
         return ListNamespacesResponse(namespaces=[[name] for name in names])
 
     @router.post("/v1/{project}/namespaces", response_model=NamespaceResponse)
     def create_namespace(
         project: str, body: CreateNamespaceRequest, request: Request
     ) -> NamespaceResponse:
-        rhai_ns = _rhai_ns(project)
-        try:
-            collection = resolve_namespace(body.namespace)
-        except ValueError as exc:
-            raise _as_bad_request(exc) from exc
+        rhai_ns = _http_namespace(project)
+        collection = _http_collection(body.namespace)
         registry = _registry(request)
         properties = dict(body.properties)
         create_namespace_meta(registry, rhai_ns, collection, properties)
