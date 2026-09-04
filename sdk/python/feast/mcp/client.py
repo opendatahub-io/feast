@@ -2,8 +2,27 @@ import logging
 from typing import Any, Dict, Optional
 
 import httpx
+from fastmcp.exceptions import ToolError
 
 logger = logging.getLogger(__name__)
+
+#: Upstream error bodies are echoed back to the caller (and to the LLM), so
+#: cap how much of an unexpected payload can ride along in the message.
+_MAX_DETAIL_CHARS = 500
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Best-effort human-readable reason from an upstream error response."""
+    try:
+        body: Any = response.json()
+    except ValueError:
+        return response.text[:_MAX_DETAIL_CHARS] or response.reason_phrase
+    if isinstance(body, dict):
+        for key in ("detail", "message", "error"):
+            value = body.get(key)
+            if value:
+                return str(value)[:_MAX_DETAIL_CHARS]
+    return str(body)[:_MAX_DETAIL_CHARS]
 
 
 class FeastClient:
@@ -37,8 +56,23 @@ class FeastClient:
                 json=json,
                 params=params,
             )
-            if response.status_code >= 500:
-                response.raise_for_status()
+            # Every error status must become an MCP error. Returning a 401
+            # or 403 body as a successful tool result would hand the caller a
+            # denial payload dressed as feature data. ToolError (rather than a
+            # bare raise) survives servers configured with mask_error_details.
+            if response.status_code >= 400:
+                detail = _error_detail(response)
+                logger.warning(
+                    "Upstream %s %s returned %s: %s",
+                    method,
+                    url,
+                    response.status_code,
+                    detail,
+                )
+                raise ToolError(
+                    f"Feast returned HTTP {response.status_code} for "
+                    f"{method} {path}: {detail}"
+                )
             if response.headers.get("content-type", "").startswith("application/json"):
                 return response.json()
             return response.text

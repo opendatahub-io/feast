@@ -140,6 +140,31 @@ def _describe_user(access_token: AccessToken) -> str:
     return f"{user} (client_id={client_id})" if client_id else str(user)
 
 
+def _raw_bearer_token() -> Optional[str]:
+    """Bearer token read straight off the request, bypassing FastMCP's auth.
+
+    In ``passthrough`` mode no auth provider is configured, so FastMCP never
+    parses ``Authorization`` and :func:`get_access_token` stays ``None`` --
+    even when the caller is holding exactly the token Feast needs. Reading
+    the header directly is what makes "the client already holds a valid
+    token" actually work.
+    """
+    try:
+        request = get_http_request()
+    except Exception:
+        return None
+    if request is None:
+        return None
+
+    header = request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    return value.strip() or None
+
+
 def get_auth_token() -> Optional[str]:
     """Return the caller's bearer token, logging who is calling from where.
 
@@ -151,12 +176,19 @@ def get_auth_token() -> Optional[str]:
     ip, where = _request_context()
 
     if access_token is None:
+        # Either no auth provider is configured (passthrough) or the provider
+        # permits anonymous access. When a provider IS set, FastMCP rejects
+        # missing/invalid tokens before the tool body runs, so this fallback
+        # cannot launder an unvalidated token past validation -- and Feast
+        # validates whatever is forwarded either way.
+        raw_token = _raw_bearer_token()
         logger.info(
-            "Unauthenticated request: ip=%s request=%s",
+            "Unauthenticated request: ip=%s request=%s forwarded_caller_token=%s",
             ip or "unknown",
             where or "n/a",
+            "yes" if raw_token else "no",
         )
-        return None
+        return raw_token
 
     logger.info(
         "Authenticated request: user=%s ip=%s request=%s",
