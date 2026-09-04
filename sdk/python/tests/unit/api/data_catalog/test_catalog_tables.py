@@ -140,9 +140,7 @@ def test_t4_http_create_does_not_insert(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     _assert_501(client.post(f"/v1/{NS}/namespaces/{COL}/tables"))
-    assert client.get(f"/v1/{NS}/namespaces/{COL}/tables").json() == {
-        "identifiers": []
-    }
+    assert client.get(f"/v1/{NS}/namespaces/{COL}/tables").json() == {"identifiers": []}
 
 
 def test_t5_seeded_same_name_other_project_ok(sqlite_registry):
@@ -165,9 +163,7 @@ def test_t5_seeded_same_name_other_project_ok(sqlite_registry):
 
 
 def test_t6_create_missing_collection_is_501(sqlite_registry):
-    _assert_501(
-        _client(sqlite_registry).post(f"/v1/{NS}/namespaces/{COL}/tables")
-    )
+    _assert_501(_client(sqlite_registry).post(f"/v1/{NS}/namespaces/{COL}/tables"))
 
 
 def test_t8_load_is_501(sqlite_registry):
@@ -269,10 +265,7 @@ def test_list_skips_iceberg_tags_without_catalog_managed(sqlite_registry):
     )
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert listed.json() == {"identifiers": []}
-    assert (
-        client.head(f"/v1/{NS}/namespaces/{COL}/tables/unmanaged").status_code
-        == 404
-    )
+    assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/unmanaged").status_code == 404
 
 
 def test_list_skips_untagged_saved_dataset(sqlite_registry):
