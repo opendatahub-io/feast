@@ -14,8 +14,9 @@
 
 """RHOAI generic-table catalog routes (RHAI-376).
 
-Register parquet/csv/postgresql (etc.) as SavedDataset rows.
-POST format=iceberg is 501 — Iceberg create stays unimplemented.
+Register tables of any format (including iceberg) as SavedDataset rows.
+Iceberg REST POST /tables stays 501 (warehouse create). This route is
+catalog metadata only.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, Query, Request, Response
 
 from feast.api.catalog.catalog_assets import (
+    connection_ref_from_tags,
+    connection_ref_to_tag,
     delete_catalog_dataset,
     get_catalog_dataset,
     insert_catalog_dataset,
@@ -49,7 +52,6 @@ from feast.api.catalog.errors import (
     BadRequestException,
     NoSuchNamespaceException,
     NoSuchTableException,
-    NotImplementedException,
     ServiceFailureException,
 )
 from feast.api.catalog.models import (
@@ -63,10 +65,7 @@ from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
 
-_ICEBERG_UNIMPLEMENTED = (
-    "Iceberg table create is not implemented on this catalog. "
-    "Set format to parquet, csv, postgresql, or another non-iceberg type"
-)
+_DEFAULT_TABLE_FORMAT = "iceberg"
 
 
 def _registry(request: Request) -> BaseRegistry:
@@ -108,8 +107,9 @@ def _require_collection(
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 
 
-def _is_iceberg_format(fmt: str | None) -> bool:
-    return not fmt or fmt.strip().lower() == "iceberg"
+def _table_format(fmt: str | None) -> str:
+    stripped = (fmt or "").strip()
+    return stripped or _DEFAULT_TABLE_FORMAT
 
 
 def _asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
@@ -131,6 +131,7 @@ def _asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
         location=storage_uri(dataset) or None,
         columns=columns or None,
         collection=collection,
+        connection_ref=connection_ref_from_tags(tags),
         owner=tags.get("owner") or None,
         description=dataset.description or None,
         labels=labels_from_tags(tags),
@@ -197,14 +198,19 @@ def get_generic_table_router() -> APIRouter:
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
-        if _is_iceberg_format(body.format):
-            raise NotImplementedException(_ICEBERG_UNIMPLEMENTED)
         display = _display_name(body.name)
+        try:
+            label_tags = labels_to_tag(body.labels)
+            ref_tags = connection_ref_to_tag(body.connection_ref)
+            columns = schema_fields_to_columns(body.schema_fields)
+        except ValueError as exc:
+            raise _as_bad_request(exc) from exc
         tags = {
             **notes_from_properties(body.properties),
-            **labels_to_tag(body.labels),
+            **label_tags,
+            **ref_tags,
             "asset_type": "table",
-            "format": body.format.strip(),
+            "format": _table_format(body.format),
         }
         for key in ("purpose", "license", "maturity", "domain", "pii", "owner"):
             value = getattr(body, key)
@@ -221,7 +227,7 @@ def get_generic_table_router() -> APIRouter:
             location=(body.location or "").strip(),
             tags=tags,
             description=body.description or "",
-            columns=schema_fields_to_columns(body.schema_fields),
+            columns=columns,
         )
         return _asset_response(dataset, col)
 
@@ -257,17 +263,24 @@ def get_generic_table_router() -> APIRouter:
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         dataset = _get_table(registry, rhai_ns, col, _display_name(table))
-        if body.format is not None and _is_iceberg_format(body.format):
-            raise NotImplementedException(_ICEBERG_UNIMPLEMENTED)
         tags = dict(dataset.tags or {})
         if body.format is not None:
-            tags["format"] = body.format.strip()
+            tags["format"] = _table_format(body.format)
         if body.owner is not None:
             tags["owner"] = body.owner
+        if "connection_ref" in body.model_fields_set:
+            tags.pop("_connection_ref", None)
+            try:
+                tags.update(connection_ref_to_tag(body.connection_ref))
+            except ValueError as exc:
+                raise _as_bad_request(exc) from exc
         if body.add_labels or body.remove_labels:
-            tags = merge_labels(
-                tags, add=body.add_labels, remove=body.remove_labels
-            )
+            try:
+                tags = merge_labels(
+                    tags, add=body.add_labels, remove=body.remove_labels
+                )
+            except ValueError as exc:
+                raise _as_bad_request(exc) from exc
         if body.properties is not None:
             tags = merge_public_properties(tags, body.properties)
             tags["asset_type"] = "table"
@@ -283,7 +296,10 @@ def get_generic_table_router() -> APIRouter:
         if body.location is not None:
             dataset.storage = SavedDatasetFileStorage(path=body.location)
         if body.schema_fields is not None:
-            dataset.columns = schema_fields_to_columns(body.schema_fields)
+            try:
+                dataset.columns = schema_fields_to_columns(body.schema_fields)
+            except ValueError as exc:
+                raise _as_bad_request(exc) from exc
         dataset.tags = tags
         updated = replace_catalog_dataset(registry, dataset)
         return _asset_response(updated, col)

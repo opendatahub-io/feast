@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from inspect import signature
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from feast.api.catalog.catalog_utils import (
     CATALOG_MANAGED_TAG,
     CATALOG_MANAGED_VALUE,
@@ -34,6 +36,7 @@ from feast.api.catalog.catalog_utils import (
     unscoped_name,
 )
 from feast.api.catalog.errors import AlreadyExistsException
+from feast.api.catalog.models import ConnectionRef
 from feast.errors import SavedDatasetAlreadyExists, SavedDatasetNotFound
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
@@ -52,6 +55,7 @@ RESERVED_TAGS = {
     "updated_by",
     "uuid",
     "_labels",
+    "_connection_ref",
     "comment",
     "purpose",
     "license",
@@ -59,6 +63,13 @@ RESERVED_TAGS = {
     "domain",
     "pii",
 }
+
+
+_MAX_LABELS_JSON = 10_000
+_MAX_LABEL_COUNT = 1_000
+_MAX_LABEL_LEN = 255
+_MAX_CONNECTION_REF_JSON = 4_096
+_CONNECTION_REF_ADAPTER = TypeAdapter(ConnectionRef)
 
 
 def isoformat_ts(value: datetime | None) -> str | None:
@@ -79,13 +90,17 @@ def storage_uri(dataset: SavedDataset) -> str:
 
 def labels_from_tags(tags: dict[str, str]) -> list[str] | None:
     raw = tags.get("_labels")
-    if not raw:
+    if not raw or len(raw) > _MAX_LABELS_JSON:
         return None
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError, RecursionError):
         return None
-    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    if not isinstance(parsed, list) or len(parsed) > _MAX_LABEL_COUNT:
+        return None
+    if not all(
+        isinstance(item, str) and len(item) <= _MAX_LABEL_LEN for item in parsed
+    ):
         return None
     return parsed
 
@@ -93,7 +108,40 @@ def labels_from_tags(tags: dict[str, str]) -> list[str] | None:
 def labels_to_tag(labels: list[str] | None) -> dict[str, str]:
     if not labels:
         return {}
-    return {"_labels": json.dumps(list(labels))}
+    if len(labels) > _MAX_LABEL_COUNT:
+        raise ValueError(
+            f"labels must have at most {_MAX_LABEL_COUNT} entries"
+        )
+    for item in labels:
+        if not isinstance(item, str) or len(item) > _MAX_LABEL_LEN:
+            raise ValueError(
+                f"each label must be a string of at most {_MAX_LABEL_LEN} characters"
+            )
+    encoded = json.dumps(list(labels))
+    if len(encoded) > _MAX_LABELS_JSON:
+        raise ValueError(
+            f"labels JSON must be at most {_MAX_LABELS_JSON} characters"
+        )
+    return {"_labels": encoded}
+
+
+def connection_ref_from_tags(tags: dict[str, str]):
+    raw = tags.get("_connection_ref")
+    if not raw or len(raw) > _MAX_CONNECTION_REF_JSON:
+        return None
+    try:
+        return _CONNECTION_REF_ADAPTER.validate_json(raw)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def connection_ref_to_tag(ref) -> dict[str, str]:
+    if ref is None:
+        return {}
+    encoded = ref.model_dump_json()
+    if len(encoded) > _MAX_CONNECTION_REF_JSON:
+        raise ValueError("connection_ref is too large")
+    return {"_connection_ref": encoded}
 
 
 def merge_labels(
@@ -276,9 +324,11 @@ def schema_fields_to_columns(fields: list[Any] | None) -> list[SavedDatasetColum
             if nullable is None:
                 nullable = True
         else:
-            continue
+            raise ValueError("schema_fields entries must be objects with name and type")
         if not name:
-            continue
+            raise ValueError("schema_fields[].name is required")
+        if not type_name:
+            raise ValueError("schema_fields[].type is required")
         columns.append(
             SavedDatasetColumn(
                 name=name,

@@ -19,8 +19,9 @@ prefixed path) becomes ``overrides.prefix`` so later calls use
 ``/v1/{prefix}/...``. ``endpoints`` lists operations that actually serve.
 Iceberg table create/update/drop/rename and LoadTable exist as routes but
 return 501 and are not advertised. Namespace CRUD and RHOAI volume /
-generic-table catalog registration are advertised. Mounting on
-RestRegistryServer is RHAI-390.
+generic-table catalog registration (including iceberg-format rows) are
+advertised. Auth and rate limits are kube-rbac-proxy / ingress, not these
+handlers. Mounting on RestRegistryServer is RHAI-390.
 """
 
 from __future__ import annotations
@@ -98,6 +99,11 @@ def get_config_router() -> APIRouter:
 
     @router.get("/v1/projects", response_model=ProjectListResponse)
     def list_projects(request: Request) -> ProjectListResponse:
+        """Catalog DISTINCT of RHAI namespaces with rows or collection tags.
+
+        Not a Kubernetes SSAR list. Caller auth is kube-rbac-proxy, not this
+        handler. Rate limits belong on the ingress, not in-process.
+        """
         registry = getattr(request.app.state, "registry", None)
         if registry is None:
             return ProjectListResponse(projects=[])

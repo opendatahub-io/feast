@@ -23,6 +23,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response
 
 from feast.api.catalog.catalog_assets import (
+    connection_ref_from_tags,
+    connection_ref_to_tag,
     delete_catalog_dataset,
     get_catalog_dataset,
     insert_catalog_dataset,
@@ -116,6 +118,7 @@ def _volume_info(dataset: SavedDataset, rhai_ns: str, collection: str) -> Volume
         labels=labels_from_tags(tags),
         properties=public_properties(tags),
         config={},
+        connection_ref=connection_ref_from_tags(tags),
     )
 
 
@@ -168,9 +171,15 @@ def get_volume_router() -> APIRouter:
         volume_type = (
             body.volume_type or body.content_type or _DEFAULT_VOLUME_TYPE
         ).strip() or _DEFAULT_VOLUME_TYPE
+        try:
+            label_tags = labels_to_tag(body.labels)
+            ref_tags = connection_ref_to_tag(body.connection_ref)
+        except ValueError as exc:
+            raise _as_bad_request(exc) from exc
         tags = {
             **notes_from_properties(body.properties),
-            **labels_to_tag(body.labels),
+            **label_tags,
+            **ref_tags,
             "asset_type": "volume",
             "volume_type": volume_type,
         }

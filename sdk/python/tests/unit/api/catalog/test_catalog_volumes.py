@@ -326,3 +326,36 @@ def test_concurrent_create_same_volume_is_created_and_409():
         assert again.json()["error"]["type"] == "AlreadyExistsException"
     finally:
         registry.teardown()
+
+
+def test_connection_ref_round_trips(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={
+            "name": VOL,
+            "location": "s3://bucket/claims/",
+            "connection_ref": {"type": "rhai", "secret_name": "aws-creds"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert got.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+    bad = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={
+            "name": "other",
+            "location": "s3://bucket/other/",
+            "connection_ref": {"type": "unknown"},
+        },
+    )
+    assert bad.status_code == 400, bad.text
+    assert bad.json()["error"]["type"] == "BadRequestException"
