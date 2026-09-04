@@ -72,7 +72,10 @@ def test_config_endpoints_include_namespace_crud():
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
         not in CATALOG_CONFIG_ENDPOINTS
     )
-    assert "POST /v1/{prefix}/namespaces/{namespace}/tables" not in CATALOG_CONFIG_ENDPOINTS
+    assert (
+        "POST /v1/{prefix}/namespaces/{namespace}/tables"
+        not in CATALOG_CONFIG_ENDPOINTS
+    )
     assert "POST /v1/{prefix}/tables/rename" not in CATALOG_CONFIG_ENDPOINTS
     assert all("/volumes" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
 

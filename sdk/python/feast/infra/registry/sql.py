@@ -2021,10 +2021,7 @@ class SqlRegistry(CachingRegistry):
                         project,
                     )
 
-            if (
-                not isinstance(obj, Project)
-                and project == _DATA_REGISTRY_PROJECT
-            ):
+            if not isinstance(obj, Project) and project == _DATA_REGISTRY_PROJECT:
                 self._cas_touch_project(project, conn)
             if not self.purge_feast_metadata:
                 self._set_last_updated_metadata(update_datetime, project, conn)
