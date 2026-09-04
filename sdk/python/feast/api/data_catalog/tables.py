@@ -12,38 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Iceberg REST table routes (RHAI-389).
+"""Iceberg REST table routes.
 
-List and HEAD are catalog **read** over Feast SavedDataset rows.
+List and HEAD are data-catalog **read** over Feast SavedDataset rows.
 Create, load, update, drop, and rename are 501 stubs: no Iceberg
 warehouse, no credential vending.
 
-Do not mount this router on RestRegistryServer here — RHAI-390 does that.
+Do not mount this router on RestRegistryServer here.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     CATALOG_MANAGED_TAG,
     CATALOG_MANAGED_VALUE,
     CATALOG_PROJECT,
-    _require_namespace,
-    _require_part,
-    resolve_namespace,
+    _http_collection,
+    _http_namespace,
+    _http_part,
     scoped_name,
     unscoped_name,
     validate_namespace_exists,
 )
-from feast.api.catalog.errors import (
-    BadRequestException,
+from feast.api.data_catalog.errors import (
     NoSuchNamespaceException,
     NoSuchTableException,
     NotImplementedException,
     ServiceFailureException,
 )
-from feast.api.catalog.models import ListTablesResponse, TableIdentifier
+from feast.api.data_catalog.models import ListTablesResponse, TableIdentifier
 from feast.errors import SavedDatasetNotFound
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
@@ -62,33 +61,12 @@ def _registry(request: Request) -> BaseRegistry:
     return registry
 
 
-def _as_bad_request(exc: ValueError) -> BadRequestException:
-    return BadRequestException(str(exc))
-
-
-def _rhai_ns(project: str) -> str:
-    try:
-        return _require_namespace(project)
-    except ValueError as exc:
-        raise _as_bad_request(exc) from exc
-
-
-def _collection_name(collection: str) -> str:
-    try:
-        return resolve_namespace(collection)
-    except ValueError as exc:
-        raise _as_bad_request(exc) from exc
-
-
 def _project_and_collection(project: str, collection: str) -> tuple[str, str]:
-    return _rhai_ns(project), _collection_name(collection)
+    return _http_namespace(project), _http_collection(collection)
 
 
 def _display_name(table: str) -> str:
-    try:
-        return _require_part("name", table)
-    except ValueError as exc:
-        raise _as_bad_request(exc) from exc
+    return _http_part("name", table)
 
 
 def _require_collection(
@@ -192,7 +170,7 @@ def get_table_router() -> APIRouter:
 
     @router.post("/v1/{project}/tables/rename")
     def rename_table(project: str) -> Response:
-        _rhai_ns(project)
+        _http_namespace(project)
         raise NotImplementedException(_TABLE_UNIMPLEMENTED)
 
     return router

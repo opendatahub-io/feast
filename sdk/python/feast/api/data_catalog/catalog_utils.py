@@ -36,7 +36,8 @@ import json
 import threading
 from typing import Any, Callable
 
-from feast.api.catalog.errors import (
+from feast.api.data_catalog.errors import (
+    BadRequestException,
     NamespaceAlreadyExistsException,
     NamespaceNotEmptyException,
     NoSuchNamespaceException,
@@ -148,6 +149,32 @@ def resolve_namespace(raw: str | list[str]) -> str:
     return _require_part("collection", value)
 
 
+def _as_bad_request(exc: ValueError) -> BadRequestException:
+    return BadRequestException(str(exc))
+
+
+def _http_namespace(project: str) -> str:
+    """K8s / RHOAI namespace from Iceberg path ``{project}``."""
+    try:
+        return _require_namespace(project)
+    except ValueError as exc:
+        raise _as_bad_request(exc) from exc
+
+
+def _http_collection(collection: str) -> str:
+    try:
+        return resolve_namespace(collection)
+    except ValueError as exc:
+        raise _as_bad_request(exc) from exc
+
+
+def _http_part(label: str, value: str) -> str:
+    try:
+        return _require_part(label, value)
+    except ValueError as exc:
+        raise _as_bad_request(exc) from exc
+
+
 def _catalog_saved_datasets(
     registry: BaseRegistry,
     rhai_ns: str,
@@ -163,8 +190,8 @@ def _catalog_saved_datasets(
     return registry.list_saved_datasets(CATALOG_PROJECT, **kwargs)
 
 
-def list_namespaces(registry: BaseRegistry, rhai_ns: str) -> list[str]:
-    """Distinct collection display names for one RHAI tenant, plus ``default``.
+def list_collections(registry: BaseRegistry, rhai_ns: str) -> list[str]:
+    """Distinct collection display names for one tenant, plus ``default``.
 
     Unions catalog-managed SavedDataset.collection values with scoped
     ``_ns_meta_{ns}/{collection}`` Project tags so empty POST-created

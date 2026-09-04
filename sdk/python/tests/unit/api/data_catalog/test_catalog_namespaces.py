@@ -19,15 +19,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import NullPool
 
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     CATALOG_PROJECT,
     DEFAULT_COLLECTION,
     ns_meta_key,
     scoped_name,
 )
-from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
-from feast.api.catalog.errors import register_error_handlers
-from feast.api.catalog.namespaces import get_namespace_router
+from feast.api.data_catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.data_catalog.errors import register_error_handlers
+from feast.api.data_catalog.namespaces import get_namespace_router
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
 from feast.saved_dataset import SavedDataset
@@ -388,8 +388,8 @@ def _threaded_sqlite_registry():
 def test_n13_concurrent_create_same_collection_is_200_and_409():
     import threading
 
-    from feast.api.catalog.catalog_utils import create_namespace_meta
-    from feast.api.catalog.errors import NamespaceAlreadyExistsException
+    from feast.api.data_catalog.catalog_utils import create_namespace_meta
+    from feast.api.data_catalog.errors import NamespaceAlreadyExistsException
 
     registry, _path = _threaded_sqlite_registry()
     try:
@@ -430,7 +430,7 @@ def test_n13_concurrent_create_same_collection_is_200_and_409():
 def test_n14_concurrent_create_different_collections_both_tags_survive():
     import threading
 
-    from feast.api.catalog.catalog_utils import create_namespace_meta
+    from feast.api.data_catalog.catalog_utils import create_namespace_meta
 
     registry, _path = _threaded_sqlite_registry()
     try:
@@ -520,8 +520,8 @@ def test_n15_concurrent_property_updates_merge_keys():
 def test_n16_apply_saved_dataset_does_not_drop_namespace_tag():
     import threading
 
-    from feast.api.catalog.catalog_utils import create_namespace_meta
-    from feast.api.catalog.errors import NamespaceAlreadyExistsException
+    from feast.api.data_catalog.catalog_utils import create_namespace_meta
+    from feast.api.data_catalog.errors import NamespaceAlreadyExistsException
 
     for _ in range(10):
         registry, _path = _threaded_sqlite_registry()
@@ -572,11 +572,11 @@ def test_n16_apply_saved_dataset_does_not_drop_namespace_tag():
 
 
 def test_n17_delete_namespace_meta_with_assets_is_409():
-    from feast.api.catalog.catalog_utils import (
+    from feast.api.data_catalog.catalog_utils import (
         create_namespace_meta,
         delete_namespace_meta,
     )
-    from feast.api.catalog.errors import NamespaceNotEmptyException
+    from feast.api.data_catalog.errors import NamespaceNotEmptyException
 
     registry, _path = _threaded_sqlite_registry()
     try:
@@ -600,11 +600,11 @@ def test_n17_delete_namespace_meta_with_assets_is_409():
 def test_n18_concurrent_deletes_are_204_and_404():
     import threading
 
-    from feast.api.catalog.catalog_utils import (
+    from feast.api.data_catalog.catalog_utils import (
         create_namespace_meta,
         delete_namespace_meta,
     )
-    from feast.api.catalog.errors import NoSuchNamespaceException
+    from feast.api.data_catalog.errors import NoSuchNamespaceException
 
     registry, _path = _threaded_sqlite_registry()
     try:
@@ -640,12 +640,12 @@ def test_n18_concurrent_deletes_are_204_and_404():
 def test_n19_concurrent_delete_and_properties_does_not_undelete():
     import threading
 
-    from feast.api.catalog.catalog_utils import (
+    from feast.api.data_catalog.catalog_utils import (
         create_namespace_meta,
         delete_namespace_meta,
         merge_namespace_properties,
     )
-    from feast.api.catalog.errors import NoSuchNamespaceException
+    from feast.api.data_catalog.errors import NoSuchNamespaceException
 
     for _ in range(20):
         registry, _path = _threaded_sqlite_registry()
@@ -698,11 +698,11 @@ def test_n19_concurrent_delete_and_properties_does_not_undelete():
 def test_n20_concurrent_delete_of_nonempty_stays_409():
     import threading
 
-    from feast.api.catalog.catalog_utils import (
+    from feast.api.data_catalog.catalog_utils import (
         create_namespace_meta,
         delete_namespace_meta,
     )
-    from feast.api.catalog.errors import NamespaceNotEmptyException
+    from feast.api.data_catalog.errors import NamespaceNotEmptyException
 
     for _ in range(20):
         registry, _path = _threaded_sqlite_registry()

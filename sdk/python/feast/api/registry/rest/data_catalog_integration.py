@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mount catalog ``/v1`` routes on RestRegistryServer (RHAI-390).
+"""Mount Data Registry Iceberg ``/v1`` routes on RestRegistryServer.
 
-Kept out of ``feast.api.catalog`` so that package stays free of
+Kept out of ``feast.api.data_catalog`` so that package stays free of
 RestRegistryServer / DATACATALOG_ENABLED identifiers.
 """
 
@@ -26,21 +26,21 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from feast.api.catalog.config import get_config_router
-from feast.api.catalog.errors import (
+from feast.api.data_catalog.config import get_config_router
+from feast.api.data_catalog.errors import (
     BadRequestException,
     IcebergRESTException,
     validation_message,
 )
-from feast.api.catalog.namespaces import get_namespace_router
-from feast.api.catalog.tables import get_table_router
+from feast.api.data_catalog.namespaces import get_namespace_router
+from feast.api.data_catalog.tables import get_table_router
 
 
 def is_datacatalog_enabled() -> bool:
     return os.environ.get("DATACATALOG_ENABLED", "").lower() in ("1", "true", "yes")
 
 
-def add_catalog_routes(app: FastAPI, registry) -> None:
+def add_data_catalog_routes(app: FastAPI, registry) -> None:
     """Include Iceberg routers when ``DATACATALOG_ENABLED`` is truthy.
 
     Iceberg JSON for ``IcebergRESTException`` and for ``/v1`` validation
