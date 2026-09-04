@@ -2308,7 +2308,7 @@ class SqlRegistry(CachingRegistry):
             projects, project.name, "project_name", project, "project_proto"
         )
 
-    def _cas_touch_project(self, name: str, conn) -> None:
+    def _cas_touch_project(self, name: str, conn: Any) -> None:
         """Bump Project last_updated on ``conn`` without replacing tags.
 
         Used after object apply/delete so a stale ``get_project`` snapshot cannot

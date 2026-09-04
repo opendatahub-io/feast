@@ -45,6 +45,7 @@ from feast.api.catalog.errors import (
 from feast.errors import ConcurrentVersionConflict, ProjectObjectNotFoundException
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.project import Project
+from feast.saved_dataset import SavedDataset
 
 SCOPE_SEP = "/"
 MAX_SCOPED_NAME = 255  # saved_datasets.saved_dataset_name VARCHAR(255)
@@ -151,7 +152,7 @@ def _catalog_saved_datasets(
     registry: BaseRegistry,
     rhai_ns: str,
     collection: str | None = None,
-):
+) -> list[SavedDataset]:
     """SavedDatasets stamped ``_catalog_managed=true`` for this tenant."""
     kwargs: dict[str, Any] = {
         "namespace": rhai_ns,
@@ -363,10 +364,20 @@ def set_namespace_properties(
     collection: str,
     properties: dict[str, str],
 ) -> None:
-    key = ns_meta_key(rhai_ns, collection)
+    """Replace one collection's JSON properties. Collection must already exist.
+
+    Existence (tag, ``default``, or catalog-managed SavedDatasets) is decided on
+    the same write connection as merge. Missing collection is 404 and does not
+    write a tag.
+    """
+    ns = _require_namespace(rhai_ns)
+    col = _require_part("collection", collection)
+    key = ns_meta_key(ns, col)
     payload = json.dumps(properties, separators=(",", ":"), sort_keys=True)
 
     def mutator(project: Project, conn: Any) -> None:
+        if not _collection_present_in_mutate(project, registry, conn, ns, col, key):
+            raise NoSuchNamespaceException(f"Namespace does not exist: {col}")
         tags = dict(project.tags)
         tags[key] = payload
         project.tags = tags
