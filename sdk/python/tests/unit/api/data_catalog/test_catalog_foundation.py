@@ -16,22 +16,22 @@ import tempfile
 
 import pytest
 
-from feast.api.catalog import (
+from feast.api.data_catalog import (
     CATALOG_PROJECT,
     DEFAULT_COLLECTION,
     ensure_catalog_project,
-    list_namespaces,
+    list_collections,
     ns_meta_key,
     resolve_namespace,
     scoped_name,
     set_namespace_properties,
     validate_namespace_exists,
 )
-from feast.api.catalog.catalog_utils import (
+from feast.api.data_catalog.catalog_utils import (
     create_namespace_meta,
     delete_namespace_meta,
 )
-from feast.api.catalog.errors import NoSuchNamespaceException
+from feast.api.data_catalog.errors import NoSuchNamespaceException
 from feast.errors import ProjectObjectNotFoundException
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
@@ -105,12 +105,12 @@ def test_resolve_namespace_rejects_invalid(raw):
         resolve_namespace(raw)
 
 
-def test_list_namespaces_empty_registry_has_default(sqlite_registry):
+def test_list_collections_empty_registry_has_default(sqlite_registry):
     ensure_catalog_project(sqlite_registry)
-    assert list_namespaces(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
+    assert list_collections(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
 
 
-def test_list_namespaces_isolates_tenants(sqlite_registry):
+def test_list_collections_isolates_tenants(sqlite_registry):
     ensure_catalog_project(sqlite_registry)
     sqlite_registry.apply_saved_dataset(
         _make_saved_dataset(
@@ -137,11 +137,11 @@ def test_list_namespaces_isolates_tenants(sqlite_registry):
         CATALOG_PROJECT,
     )
 
-    assert list_namespaces(sqlite_registry, "demo-user-1") == [
+    assert list_collections(sqlite_registry, "demo-user-1") == [
         DEFAULT_COLLECTION,
         "underwriting",
     ]
-    assert list_namespaces(sqlite_registry, "demo-user-2") == [
+    assert list_collections(sqlite_registry, "demo-user-2") == [
         DEFAULT_COLLECTION,
         "ingestion",
         "underwriting",
@@ -173,7 +173,7 @@ def test_list_and_exists_see_scoped_ns_meta_tag(sqlite_registry):
     create_namespace_meta(
         sqlite_registry, "demo-user-1", "underwriting", {"owner": "uw"}
     )
-    assert list_namespaces(sqlite_registry, "demo-user-1") == [
+    assert list_collections(sqlite_registry, "demo-user-1") == [
         DEFAULT_COLLECTION,
         "underwriting",
     ]
@@ -197,7 +197,7 @@ def test_unmanaged_saved_dataset_is_not_an_iceberg_namespace(sqlite_registry):
         ),
         CATALOG_PROJECT,
     )
-    assert list_namespaces(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
+    assert list_collections(sqlite_registry, "demo-user-1") == [DEFAULT_COLLECTION]
     assert not validate_namespace_exists(sqlite_registry, "demo-user-1", "ml-leak")
 
 

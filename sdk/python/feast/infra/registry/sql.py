@@ -94,7 +94,7 @@ from feast.version_utils import (
 )
 
 # Feast project that holds Data Registry catalog rows. Do not import
-# feast.api.catalog from this module (that package imports sql tables).
+# feast.api.data_catalog from this module (that package imports sql tables).
 _DATA_REGISTRY_PROJECT = "data-registry"
 
 metadata = MetaData()

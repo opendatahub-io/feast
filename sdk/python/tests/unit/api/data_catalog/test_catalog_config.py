@@ -15,8 +15,8 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
-from feast.api.catalog.errors import register_error_handlers
+from feast.api.data_catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.data_catalog.errors import register_error_handlers
 
 
 def _client() -> TestClient:

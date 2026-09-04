@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Iceberg REST error types and FastAPI handlers (RHAI-386).
+"""Iceberg REST error types and FastAPI handlers.
 
-Handlers are registered on the catalog FastAPI app only. Do not call
+Handlers are registered on the data-catalog FastAPI app only. Do not call
 ``register_error_handlers`` on RestRegistryServer without a ``/v1`` path
 check — that would rewrite Feast REST bodies.
 """
