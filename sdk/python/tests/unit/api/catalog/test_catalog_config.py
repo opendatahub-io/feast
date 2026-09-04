@@ -55,10 +55,10 @@ def test_get_v1_project_config_sets_prefix():
 
 
 def test_config_endpoints_are_iceberg_prefix_shaped():
+    _UNPREFIXED = {"GET /v1/config", "GET /v1/projects"}
     for signature in CATALOG_CONFIG_ENDPOINTS:
-        assert "{prefix}" in signature or signature == "GET /v1/config"
+        assert "{prefix}" in signature or signature in _UNPREFIXED
         assert "{project}" not in signature
-        assert "/volumes" not in signature
 
 
 def test_config_endpoints_include_namespace_crud():
@@ -74,7 +74,14 @@ def test_config_endpoints_include_namespace_crud():
     )
     assert "POST /v1/{prefix}/namespaces/{namespace}/tables" not in CATALOG_CONFIG_ENDPOINTS
     assert "POST /v1/{prefix}/tables/rename" not in CATALOG_CONFIG_ENDPOINTS
-    assert all("/volumes" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
+    assert "GET /v1/{prefix}/namespaces/{namespace}/volumes" in CATALOG_CONFIG_ENDPOINTS
+    assert (
+        "POST /v1/{prefix}/namespaces/{namespace}/generic-tables"
+        in CATALOG_CONFIG_ENDPOINTS
+    )
+    assert "GET /v1/projects" in CATALOG_CONFIG_ENDPOINTS
+    assert all("/search" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
+    assert all("/labels" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
 
 
 def test_empty_warehouse_does_not_set_prefix():
@@ -101,3 +108,10 @@ def test_warehouse_mixed_case_is_400_not_prefix():
 def test_path_project_mixed_case_is_400_not_prefix():
     response = _client().get("/v1/Demo-User/config")
     _assert_iceberg_400(response)
+
+
+def test_get_v1_projects_empty_without_registry():
+    response = _client().get("/v1/projects")
+    assert response.status_code == 200
+    assert response.json() == {"projects": []}
+    assert "error" not in response.json()

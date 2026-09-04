@@ -26,6 +26,7 @@ from feast.api.catalog.catalog_utils import (
     delete_namespace_meta,
     ensure_catalog_project,
     get_namespace_properties,
+    list_catalog_projects,
     list_namespaces,
     ns_meta_key,
     parse_ns_meta_key,
@@ -38,17 +39,20 @@ from feast.api.catalog.catalog_utils import (
 )
 from feast.api.catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
 from feast.api.catalog.errors import (
+    AlreadyExistsException,
     BadRequestException,
     IcebergRESTException,
     NamespaceAlreadyExistsException,
     NamespaceNotEmptyException,
     NoSuchNamespaceException,
     NoSuchTableException,
+    NoSuchVolumeException,
     NotImplementedException,
     ServiceFailureException,
     missing_required_fields,
     register_error_handlers,
 )
+from feast.api.catalog.generic_tables import get_generic_table_router
 from feast.api.catalog.models import (
     CreateNamespaceRequest,
     DataRegistryConfig,
@@ -56,18 +60,21 @@ from feast.api.catalog.models import (
     ListNamespacesResponse,
     ListTablesResponse,
     NamespaceResponse,
+    ProjectListResponse,
     TableIdentifier,
     UpdateNamespacePropertiesRequest,
     UpdateNamespacePropertiesResponse,
 )
 from feast.api.catalog.namespaces import get_namespace_router
 from feast.api.catalog.tables import get_table_router
+from feast.api.catalog.volumes import get_volume_router
 
 __all__ = [
     "CATALOG_CONFIG_ENDPOINTS",
     "CATALOG_PROJECT",
     "DEFAULT_COLLECTION",
     "NS_META_PREFIX",
+    "AlreadyExistsException",
     "BadRequestException",
     "CreateNamespaceRequest",
     "DataRegistryConfig",
@@ -80,7 +87,9 @@ __all__ = [
     "NamespaceResponse",
     "NoSuchNamespaceException",
     "NoSuchTableException",
+    "NoSuchVolumeException",
     "NotImplementedException",
+    "ProjectListResponse",
     "ServiceFailureException",
     "TableIdentifier",
     "UpdateNamespacePropertiesRequest",
@@ -89,9 +98,12 @@ __all__ = [
     "delete_namespace_meta",
     "ensure_catalog_project",
     "get_config_router",
+    "get_generic_table_router",
     "get_namespace_properties",
     "get_namespace_router",
     "get_table_router",
+    "get_volume_router",
+    "list_catalog_projects",
     "list_namespaces",
     "missing_required_fields",
     "ns_meta_key",

@@ -56,9 +56,18 @@ class NoSuchTableException(IcebergRESTException):
     error_type = "NoSuchTableException"
 
 
-class NamespaceAlreadyExistsException(IcebergRESTException):
+class AlreadyExistsException(IcebergRESTException):
     http_status = 409
     error_type = "AlreadyExistsException"
+
+
+class NamespaceAlreadyExistsException(AlreadyExistsException):
+    pass
+
+
+class NoSuchVolumeException(IcebergRESTException):
+    http_status = 404
+    error_type = "NoSuchVolumeException"
 
 
 class NamespaceNotEmptyException(IcebergRESTException):

@@ -453,6 +453,27 @@ def delete_namespace_meta(
         raise NoSuchNamespaceException(f"Namespace does not exist: {col}") from exc
 
 
+def list_catalog_projects(registry: BaseRegistry) -> list[str]:
+    """RHAI namespaces that already have catalog presence.
+
+    Distinct ``SavedDataset.namespace`` for managed rows, plus tenants that
+    have ``_ns_meta_`` collection tags. Not a Kubernetes SSAR list.
+    """
+    found: set[str] = set()
+    for dataset in registry.list_saved_datasets(
+        CATALOG_PROJECT, tags=_CATALOG_MANAGED_TAGS
+    ):
+        if dataset.namespace:
+            found.add(dataset.namespace)
+    project = _get_catalog_project(registry)
+    if project is not None:
+        for key in project.tags or {}:
+            parsed = parse_ns_meta_key(key)
+            if parsed:
+                found.add(parsed[0])
+    return sorted(found)
+
+
 def _get_catalog_project(registry: BaseRegistry) -> Project | None:
     try:
         return registry.get_project(CATALOG_PROJECT, allow_cache=False)

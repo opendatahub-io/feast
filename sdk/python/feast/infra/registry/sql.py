@@ -50,6 +50,7 @@ from feast.errors import (
     PermissionNotFoundException,
     ProjectNotFoundException,
     ProjectObjectNotFoundException,
+    SavedDatasetAlreadyExists,
     SavedDatasetNotFound,
     ValidationReferenceNotFound,
 )
@@ -1521,9 +1522,16 @@ class SqlRegistry(CachingRegistry):
         saved_dataset: SavedDataset,
         project: str,
         commit: bool = True,
+        on_conflict: Literal["update", "raise"] = "update",
     ):
         # Denormalized index columns: caller owns hierarchy fields; proto remains
         # the source of truth inside saved_dataset_proto.
+        # on_conflict="update" is feast apply (upsert / skip insert race).
+        # Catalog HTTP create uses on_conflict="raise" → SavedDatasetAlreadyExists.
+        if on_conflict not in ("update", "raise"):
+            raise ValueError(
+                f"on_conflict must be 'update' or 'raise', got {on_conflict!r}"
+            )
         return self._apply_object(
             saved_datasets,
             project,
@@ -1534,6 +1542,7 @@ class SqlRegistry(CachingRegistry):
                 "namespace": saved_dataset.namespace or "",
                 "collection": saved_dataset.collection or "",
             },
+            on_conflict=on_conflict,
         )
 
     def delete_saved_dataset(self, name: str, project: str, commit: bool = True):
@@ -1908,6 +1917,7 @@ class SqlRegistry(CachingRegistry):
         proto_field_name: str,
         name: Optional[str] = None,
         extra_values: Optional[Dict[str, Any]] = None,
+        on_conflict: Literal["update", "raise"] = "update",
     ):
         if not self.purge_feast_metadata:
             self._maybe_init_project_metadata(project)
@@ -1926,6 +1936,8 @@ class SqlRegistry(CachingRegistry):
             row = conn.execute(stmt).first()
 
             if row:
+                if on_conflict == "raise":
+                    raise SavedDatasetAlreadyExists(name, project)
                 if proto_field_name in [
                     "entity_proto",
                     "saved_dataset_proto",
@@ -2010,6 +2022,8 @@ class SqlRegistry(CachingRegistry):
                     with conn.begin_nested():
                         conn.execute(insert(table).values(values))
                 except IntegrityError:
+                    if on_conflict == "raise":
+                        raise SavedDatasetAlreadyExists(name, project)
                     logger.info(
                         "Object %s in project %s already created by another "
                         "process, skipping.",

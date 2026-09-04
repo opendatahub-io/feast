@@ -32,8 +32,10 @@ from feast.api.catalog.errors import (
     IcebergRESTException,
     validation_message,
 )
+from feast.api.catalog.generic_tables import get_generic_table_router
 from feast.api.catalog.namespaces import get_namespace_router
 from feast.api.catalog.tables import get_table_router
+from feast.api.catalog.volumes import get_volume_router
 
 
 def is_datacatalog_enabled() -> bool:
@@ -52,6 +54,8 @@ def add_catalog_routes(app: FastAPI, registry) -> None:
     app.include_router(get_config_router())
     app.include_router(get_namespace_router())
     app.include_router(get_table_router())
+    app.include_router(get_volume_router())
+    app.include_router(get_generic_table_router())
 
     @app.exception_handler(IcebergRESTException)
     async def iceberg_rest_exception_handler(
