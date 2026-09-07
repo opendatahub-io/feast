@@ -161,7 +161,8 @@ def _http_namespace(project: str) -> str:
         raise _as_bad_request(exc) from exc
 
 
-def _http_collection(collection: str) -> str:
+def _http_collection(collection: str | list[str]) -> str:
+    """Iceberg collection from a path segment or CreateNamespace ``namespace`` list."""
     try:
         return resolve_namespace(collection)
     except ValueError as exc:
