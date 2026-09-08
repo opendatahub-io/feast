@@ -62,6 +62,10 @@ RESERVED_TAGS = {
     "maturity",
     "domain",
     "pii",
+    "created_at",
+    "updated_at",
+    "created-at",
+    "updated-at",
 }
 
 
