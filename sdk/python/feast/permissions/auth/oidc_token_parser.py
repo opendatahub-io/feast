@@ -59,8 +59,9 @@ class OidcTokenParser(TokenParser):
         if self._jwks_client is None:
             ssl_ctx = ssl.create_default_context()
             if not self._auth_config.verify_ssl:
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
+                # Explicit user opt-out (verify_ssl: false); verification is on by default.
+                ssl_ctx.check_hostname = False  # tls-lint:ignore:check-hostname-false
+                ssl_ctx.verify_mode = ssl.CERT_NONE  # tls-lint:ignore:cert-none
             elif self._auth_config.ca_cert_path and os.path.exists(
                 self._auth_config.ca_cert_path
             ):

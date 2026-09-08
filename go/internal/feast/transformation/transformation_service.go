@@ -3,7 +3,9 @@ package transformation
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"strings"
 
 	"io"
@@ -19,6 +21,7 @@ import (
 	"github.com/feast-dev/feast/go/internal/feast/onlineserving"
 	"github.com/feast-dev/feast/go/protos/feast/serving"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -29,15 +32,46 @@ type GrpcTransformationService struct {
 }
 
 func NewGrpcTransformationService(config *registry.RepoConfig, endpoint string) (*GrpcTransformationService, error) {
-	opts := make([]grpc.DialOption, 0)
-	opts = append(opts, grpc.WithDefaultCallOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds, err := transformationCredentials(config.FeatureServer)
+	if err != nil {
+		return nil, err
+	}
 
-	conn, err := grpc.Dial(endpoint, opts...)
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, err
 	}
 	client := serving.NewTransformationServiceClient(conn)
 	return &GrpcTransformationService{config.Project, conn, &client}, nil
+}
+
+// transformationCredentials selects the gRPC transport credentials from the
+// "feature_server" block of feature_store.yaml. TLS is opt-in because the
+// endpoint defaults to a localhost sidecar.
+func transformationCredentials(featureServer map[string]interface{}) (credentials.TransportCredentials, error) {
+	useTLS, _ := featureServer["transformation_service_tls"].(bool)
+	if !useTLS {
+		return insecure.NewCredentials(), nil
+	}
+
+	certPath, _ := featureServer["transformation_service_cert"].(string)
+	if certPath == "" {
+		// Verify against the host trust store.
+		return credentials.NewClientTLSFromCert(nil, ""), nil
+	}
+
+	pemBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read transformation_service_cert %q: %w", certPath, err)
+	}
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil || rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+	if !rootCAs.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("no certificates found in transformation_service_cert %q", certPath)
+	}
+	return credentials.NewClientTLSFromCert(rootCAs, ""), nil
 }
 
 func (s *GrpcTransformationService) Close() error {
