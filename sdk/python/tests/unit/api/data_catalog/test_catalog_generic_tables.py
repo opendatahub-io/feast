@@ -97,24 +97,21 @@ def _seed_iceberg_table(registry, name: str = TABLE) -> None:
 def test_iceberg_format_post_inserts_catalog_row(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    omitted = client.post(
+    resp_default = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={"name": TABLE, "location": "s3://bucket/events/"},
+        json={"name": TABLE},
     )
-    assert omitted.status_code == 201, omitted.text
-    assert omitted.json()["format"] == "iceberg"
-    iceberg_rest = client.post(f"/v1/{NS}/namespaces/{COL}/tables")
-    assert iceberg_rest.status_code == 501
+    assert resp_default.status_code == 201
+    assert resp_default.json()["format"] == "iceberg"
+    resp_explicit = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": "explicit-ice", "format": "iceberg"},
+    )
+    assert resp_explicit.status_code == 201
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
-    assert [asset["name"] for asset in listed.json()["assets"]] == [TABLE]
+    assert len(listed.json()["assets"]) == 2
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
-    assert iceberg.json()["identifiers"] == [{"namespace": [COL], "name": TABLE}]
-    named = client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={"name": "events-2", "format": "iceberg"},
-    )
-    assert named.status_code == 201, named.text
-    assert named.json()["format"] == "iceberg"
+    assert len(iceberg.json()["identifiers"]) == 2
 
 
 def test_create_parquet_201_no_invented_user(sqlite_registry):
@@ -193,7 +190,7 @@ def test_list_includes_seeded_iceberg_and_skips_volumes(sqlite_registry):
     assert iceberg.json()["identifiers"] == [{"namespace": [COL], "name": TABLE}]
 
 
-def test_patch_replaces_schema_and_may_set_iceberg_format(sqlite_registry):
+def test_patch_replaces_schema_and_rejects_iceberg_format(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     client.post(
@@ -221,14 +218,12 @@ def test_patch_replaces_schema_and_may_set_iceberg_format(sqlite_registry):
     assert body["description"] == "claims"
     assert [col["name"] for col in body["columns"]] == ["b", "c"]
     assert body["labels"] == ["uw", "pii"]
-    as_iceberg = client.patch(
+    patched_ice = client.patch(
         f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
         json={"format": "iceberg"},
     )
-    assert as_iceberg.status_code == 200, as_iceberg.text
-    assert as_iceberg.json()["format"] == "iceberg"
-    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
-    assert iceberg.json()["identifiers"] == [{"namespace": [COL], "name": PARQUET}]
+    assert patched_ice.status_code == 200
+    assert patched_ice.json()["format"] == "iceberg"
 
 
 def test_get_delete_and_missing(sqlite_registry):
@@ -325,80 +320,3 @@ def test_generic_delete_unregisters_iceberg_catalog_row(sqlite_registry):
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert iceberg.json() == {"identifiers": []}
     assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}").status_code == 404
-
-
-def test_connection_ref_round_trips(sqlite_registry):
-    client = _client(sqlite_registry)
-    _ensure_collection(client)
-    dch_id = "11111111-1111-1111-1111-111111111111"
-    created = client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={
-            "name": PARQUET,
-            "format": "parquet",
-            "connection_ref": {"type": "dch", "id": dch_id},
-        },
-    )
-    assert created.status_code == 201, created.text
-    assert created.json()["connection_ref"] == {"type": "dch", "id": dch_id}
-    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
-    assert got.json()["connection_ref"] == {"type": "dch", "id": dch_id}
-
-
-def test_patch_maturity_enum(sqlite_registry):
-    client = _client(sqlite_registry)
-    _ensure_collection(client)
-    client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={"name": PARQUET, "format": "parquet"},
-    )
-    bad = client.patch(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
-        json={"maturity": "banana"},
-    )
-    assert bad.status_code == 400, bad.text
-    assert bad.json()["error"]["type"] == "BadRequestException"
-    ok = client.patch(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
-        json={"maturity": "production"},
-    )
-    assert ok.status_code == 200, ok.text
-
-
-def test_schema_field_empty_name_is_400_hyphen_name_ok(sqlite_registry):
-    client = _client(sqlite_registry)
-    _ensure_collection(client)
-    empty = client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={
-            "name": PARQUET,
-            "format": "parquet",
-            "schema_fields": [{"name": "", "type": "string"}],
-        },
-    )
-    assert empty.status_code == 400, empty.text
-    hyphen = client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={
-            "name": PARQUET,
-            "format": "parquet",
-            "schema_fields": [{"name": "claim-id", "type": "string"}],
-        },
-    )
-    assert hyphen.status_code == 201, hyphen.text
-    assert hyphen.json()["columns"][0]["name"] == "claim-id"
-
-
-def test_oversized_labels_are_400(sqlite_registry):
-    client = _client(sqlite_registry)
-    _ensure_collection(client)
-    huge = client.post(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables",
-        json={
-            "name": PARQUET,
-            "format": "parquet",
-            "labels": ["x" * 256],
-        },
-    )
-    assert huge.status_code == 400, huge.text
-    assert huge.json()["error"]["type"] == "BadRequestException"

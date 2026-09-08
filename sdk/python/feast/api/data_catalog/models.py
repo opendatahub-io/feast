@@ -208,3 +208,76 @@ class AssetResponse(BaseModel):
 
 class AssetListResponse(BaseModel):
     assets: list[AssetResponse]
+
+
+# ---------------------------------------------------------------------------
+# Iceberg LoadTableResponse (GET .../tables/{table})
+# ---------------------------------------------------------------------------
+
+
+class IcebergField(BaseModel):
+    id: int
+    name: str
+    required: bool
+    type: str
+
+
+class IcebergSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    type: str = "struct"
+    schema_id: int = Field(default=0, serialization_alias="schema-id")
+    fields: list[IcebergField] = Field(default_factory=list)
+
+
+class PartitionSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    spec_id: int = Field(default=0, serialization_alias="spec-id")
+    fields: list = Field(default_factory=list)
+
+
+class SortOrder(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    order_id: int = Field(default=0, serialization_alias="order-id")
+    fields: list = Field(default_factory=list)
+
+
+class TableMetadata(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    format_version: int = Field(default=2, serialization_alias="format-version")
+    table_uuid: str = Field(serialization_alias="table-uuid")
+    location: str
+    last_updated_ms: int = Field(serialization_alias="last-updated-ms")
+    properties: dict[str, str] = Field(default_factory=dict)
+    schemas: list[IcebergSchema] = Field(default_factory=list)
+    current_schema_id: int = Field(default=0, serialization_alias="current-schema-id")
+    partition_specs: list[PartitionSpec] = Field(
+        default_factory=list, serialization_alias="partition-specs"
+    )
+    default_spec_id: int = Field(default=0, serialization_alias="default-spec-id")
+    sort_orders: list[SortOrder] = Field(
+        default_factory=list, serialization_alias="sort-orders"
+    )
+    default_sort_order_id: int = Field(
+        default=0, serialization_alias="default-sort-order-id"
+    )
+    last_column_id: int = Field(default=0, serialization_alias="last-column-id")
+    last_sequence_number: int = Field(
+        default=0, serialization_alias="last-sequence-number"
+    )
+    last_partition_id: int = Field(default=999, serialization_alias="last-partition-id")
+    snapshots: list = Field(default_factory=list)
+    current_snapshot_id: int = Field(
+        default=-1, serialization_alias="current-snapshot-id"
+    )
+
+
+class LoadTableResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+
+    metadata_location: str = Field(serialization_alias="metadata-location")
+    metadata: TableMetadata
+    config: dict[str, str] = Field(default_factory=dict)

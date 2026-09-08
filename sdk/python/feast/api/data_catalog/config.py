@@ -43,6 +43,7 @@ CATALOG_CONFIG_ENDPOINTS = [
     "DELETE /v1/{prefix}/namespaces/{namespace}",
     "POST /v1/{prefix}/namespaces/{namespace}/properties",
     "GET /v1/{prefix}/namespaces/{namespace}/tables",
+    "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
     "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}",
     "GET /v1/{prefix}/namespaces/{namespace}/volumes",
     "POST /v1/{prefix}/namespaces/{namespace}/volumes",

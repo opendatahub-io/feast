@@ -70,7 +70,7 @@ def test_config_endpoints_include_namespace_crud():
     assert "GET /v1/{prefix}/namespaces/{namespace}/tables" in CATALOG_CONFIG_ENDPOINTS
     assert (
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
-        not in CATALOG_CONFIG_ENDPOINTS
+        in CATALOG_CONFIG_ENDPOINTS
     )
     assert (
         "POST /v1/{prefix}/namespaces/{namespace}/tables"
