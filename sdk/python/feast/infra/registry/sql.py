@@ -386,7 +386,8 @@ class SqlRegistry(CachingRegistry):
         else:
             self.read_engine = self.write_engine
         if registry_config.schema_mode == "auto":
-            metadata.create_all(self.write_engine)
+            with self._schema_creation_lock(self.write_engine):
+                metadata.create_all(self.write_engine)
             # Additive migration for existing registries — write engine only.
             self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
         elif registry_config.schema_mode == "verify":
@@ -538,6 +539,59 @@ class SqlRegistry(CachingRegistry):
                         "project": row.project_id,
                     },
                 )
+
+    @staticmethod
+    @contextmanager
+    def _schema_creation_lock(
+        engine: Engine,
+    ) -> Generator[None, None, None]:
+        """Serialize ``metadata.create_all`` across processes sharing one DB.
+
+        When gRPC and REST registry servers start concurrently against an empty
+        database, both call ``create_all`` and race on ``CREATE TABLE``.  The
+        loser hits a Postgres ``UniqueViolation`` on ``pg_type_typname_nsp_index``
+        because each table implicitly registers a composite type.  An advisory
+        lock eliminates the race: the loser waits, then ``create_all`` sees the
+        tables and skips creation.
+        """
+        if engine.dialect.name == "postgresql":
+            with engine.connect() as lock_conn:
+                lock_conn.execute(
+                    text(
+                        "SELECT pg_advisory_lock(hashtext('feast_schema_creation'))"
+                    )
+                )
+                lock_conn.commit()
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text(
+                            "SELECT pg_advisory_unlock("
+                            "hashtext('feast_schema_creation'))"
+                        )
+                    )
+                    lock_conn.commit()
+        elif engine.dialect.name in ("mysql", "mariadb"):
+            with engine.connect() as lock_conn:
+                got = lock_conn.execute(
+                    text("SELECT GET_LOCK('feast_schema_creation', 60)")
+                ).scalar()
+                lock_conn.commit()
+                if not got:
+                    raise RuntimeError(
+                        "Could not acquire MySQL GET_LOCK for schema creation "
+                        "within 60s"
+                    )
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text("SELECT RELEASE_LOCK('feast_schema_creation')")
+                    )
+                    lock_conn.commit()
+        else:
+            yield
 
     @staticmethod
     @contextmanager
