@@ -193,7 +193,7 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
     resp = client.get(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["metadata-location"] == ""
+    assert body["metadata-location"] == "s3://bucket/events/metadata/"
     assert body["config"] == {}
 
     meta = body["metadata"]
@@ -277,16 +277,13 @@ def test_t11_update_is_501_tags_unchanged(sqlite_registry):
     assert "tier" not in (stored.tags or {})
 
 
-def test_no_write_models_or_feast_uri():
-    import feast.api.data_catalog.tables as tables
+def test_no_write_models():
     from feast.api.data_catalog import models
 
     assert hasattr(models, "LoadTableResponse")
     assert not hasattr(models, "CreateTableRequest")
     assert not hasattr(models, "UpdateTableRequest")
     assert not hasattr(models, "RenameTableRequest")
-    source = Path(tables.__file__).read_text()
-    assert "feast://" not in source
 
 
 def test_t13_rename_is_501_source_remains(sqlite_registry):

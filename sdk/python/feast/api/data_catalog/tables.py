@@ -48,6 +48,7 @@ from feast.api.data_catalog.models import (
     IcebergSchema,
     ListTablesResponse,
     LoadTableResponse,
+    PartitionSpec,
     TableIdentifier,
     TableMetadata,
 )
@@ -112,7 +113,11 @@ def _get_iceberg_table(
 def _load_table_response(dataset: SavedDataset) -> LoadTableResponse:
     """Build a LoadTableResponse from stored SavedDataset data.
 
-    Returns only what is actually persisted — no synthetic metadata.
+    Returns Iceberg-spec-compliant metadata so that ``pyiceberg`` and other
+    engines can parse the response without validation errors.  Fields like
+    ``format_version``, ``current_schema_id``, ``partition_specs``, and
+    ``last_sequence_number`` are hardcoded defaults — appropriate for
+    catalog-only registered assets (no managed commits).
     ``config`` is always empty (no credential vending).
     """
     tags = dataset.tags or {}
@@ -134,16 +139,33 @@ def _load_table_response(dataset: SavedDataset) -> LoadTableResponse:
     last_updated_ms = 0
     if dataset.last_updated_timestamp is not None:
         last_updated_ms = int(dataset.last_updated_timestamp.timestamp() * 1000)
+    location = storage_uri(dataset)
+    table_uuid = tags.get("uuid") or dataset.name
     metadata = TableMetadata(
-        table_uuid=tags.get("uuid") or dataset.name,
-        location=storage_uri(dataset),
+        format_version=2,
+        table_uuid=table_uuid,
+        location=location,
         last_updated_ms=last_updated_ms,
         properties=props,
-        schemas=[schema] if iceberg_fields else [],
+        schemas=[schema],
+        current_schema_id=0,
+        partition_specs=[PartitionSpec(spec_id=0, fields=[])],
         last_column_id=len(iceberg_fields),
+        last_sequence_number=0,
     )
+    if location.startswith("s3://"):
+        metadata_location = f"{location.rstrip('/')}/metadata/"
+    else:
+        display = dataset.name
+        try:
+            display = unscoped_name(dataset.name)
+        except ValueError:
+            pass
+        metadata_location = (
+            f"feast://{dataset.namespace}/tables/{display}/metadata"
+        )
     return LoadTableResponse(
-        metadata_location="",
+        metadata_location=metadata_location,
         metadata=metadata,
         config={},
     )
