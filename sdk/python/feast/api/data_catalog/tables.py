@@ -42,7 +42,7 @@ from feast.api.data_catalog.errors import (
     NotImplementedException,
     ServiceFailureException,
 )
-from feast.api.data_catalog.catalog_assets import storage_uri
+from feast.api.data_catalog.catalog_assets import epoch_ms, storage_uri
 from feast.api.data_catalog.models import (
     IcebergField,
     IcebergSchema,
@@ -136,9 +136,7 @@ def _load_table_response(dataset: SavedDataset) -> LoadTableResponse:
     raw_ref = tags.get("_connection_ref")
     if raw_ref:
         props["connection_ref"] = raw_ref
-    last_updated_ms = 0
-    if dataset.last_updated_timestamp is not None:
-        last_updated_ms = int(dataset.last_updated_timestamp.timestamp() * 1000)
+    last_updated_ms = epoch_ms(dataset.last_updated_timestamp)
     location = storage_uri(dataset)
     table_uuid = tags.get("uuid") or dataset.name
     metadata = TableMetadata(

@@ -84,6 +84,15 @@ def isoformat_ts(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def epoch_ms(value: datetime | None) -> int:
+    """Return epoch milliseconds, treating naive datetimes as UTC."""
+    if value is None:
+        return 0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return int(value.timestamp() * 1000)
+
+
 def storage_uri(dataset: SavedDataset) -> str:
     storage = dataset.storage
     file_options = getattr(storage, "file_options", None)
