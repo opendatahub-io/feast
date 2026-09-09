@@ -47,8 +47,8 @@ import (
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/access"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/authz"
 	feasthandler "github.com/feast-dev/feast/infra/feast-operator/internal/controller/handler"
-	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/registry"
 	feastmetrics "github.com/feast-dev/feast/infra/feast-operator/internal/controller/metrics"
+	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/registry"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
 	routev1 "github.com/openshift/api/route/v1"
 )
@@ -110,19 +110,7 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if r.Metrics != nil {
 				r.Metrics.DeleteFeatureStore(req.NamespacedName.Namespace, req.NamespacedName.Name)
 			}
-			// Clean up namespace registry and OpenLineage discovery entries
-			deletedCR := &feastdevv1.FeatureStore{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      req.NamespacedName.Name,
-					Namespace: req.NamespacedName.Namespace,
-				},
-			}
-			if err := r.cleanupNamespaceRegistry(ctx, deletedCR); err != nil {
-				logger.Error(err, "Failed to clean up namespace registry entry for deleted FeatureStore")
-			}
-			if err := r.cleanupOpenLineageDiscovery(ctx, deletedCR); err != nil {
-				logger.Error(err, "Failed to clean up OpenLineage discovery entry for deleted FeatureStore")
-			}
+			r.cleanupOnDeletion(ctx, req.NamespacedName.Namespace, req.NamespacedName.Name)
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Unable to get FeatureStore CR")
@@ -130,20 +118,11 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	currentStatus := cr.Status.DeepCopy()
 
-	// Handle deletion - clean up namespace registry and OpenLineage discovery entries
 	if cr.DeletionTimestamp != nil {
-		logger.Info("FeatureStore is being deleted, cleaning up registry entries")
 		if r.Metrics != nil {
 			r.Metrics.DeleteFeatureStore(cr.Namespace, cr.Name)
 		}
-		if err := r.cleanupNamespaceRegistry(ctx, cr); err != nil {
-			logger.Error(err, "Failed to clean up namespace registry entry")
-			return ctrl.Result{}, err
-		}
-		if err := r.cleanupOpenLineageDiscovery(ctx, cr); err != nil {
-			logger.Error(err, "Failed to clean up OpenLineage discovery entry")
-			return ctrl.Result{}, err
-		}
+		r.cleanupOnDeletion(ctx, cr.Namespace, cr.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -166,21 +145,29 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	// Add to namespace registry and OpenLineage discovery if deployment was successful
-	if recErr == nil && cr.DeletionTimestamp == nil {
-		feast := services.FeastServices{
-			Handler: feasthandler.FeastHandler{
-				Client:       r.Client,
-				Context:      ctx,
-				FeatureStore: cr,
-				Scheme:       r.Scheme,
-			},
+	if recErr == nil && cr.DeletionTimestamp == nil && apimeta.IsStatusConditionTrue(cr.Status.Conditions, feastdevv1.ReadyType) {
+		if err := access.EnsureNamespaceLabel(ctx, r.Client, cr.Namespace); err != nil {
+			logger.Error(err, "Failed to add Feast label to namespace")
 		}
-		if err := feast.AddToNamespaceRegistry(); err != nil {
-			logger.Error(err, "Failed to add FeatureStore to namespace registry")
+		r.addToNamespaceRegistry(ctx, cr)
+		r.addToOpenLineageDiscovery(ctx, cr)
+		policies, err := r.fetchPermissionsFromRegistry(ctx, cr)
+		if err != nil {
+			logger.Error(err, "Failed to fetch permissions from registry")
 		}
-		if err := feast.AddToOpenLineageDiscovery(); err != nil {
-			logger.Error(err, "Failed to add FeatureStore to OpenLineage discovery")
+		if err != nil || len(policies) == 0 || cr.Status.ClientConfigMap == "" {
+			logger.V(1).Info("Auto-access prerequisites missing or registry unreachable; cleaning up stale auto-access RBAC",
+				"policies", len(policies),
+				"clientConfigMapSet", cr.Status.ClientConfigMap != "",
+				"fetchError", err != nil,
+			)
+			if err := access.CleanupAutoAccessRBAC(ctx, r.Client, cr.Namespace, cr.Name); err != nil {
+				logger.Error(err, "Failed to cleanup stale auto-access RBAC")
+			}
+		} else {
+			if err := access.ReconcileAutoAccessRBAC(ctx, r.Client, r.Scheme, cr, cr.Namespace, cr.Name, cr.Status.ClientConfigMap, policies); err != nil {
+				logger.Error(err, "Failed to reconcile auto-access RBAC")
+			}
 		}
 	}
 
