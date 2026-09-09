@@ -301,6 +301,40 @@ def test_properties_cannot_set_format_to_iceberg(sqlite_registry):
     assert iceberg.json() == {"identifiers": []}
 
 
+def test_metadata_fields_round_trip_in_properties(sqlite_registry):
+    """purpose, license, maturity, domain, pii are returned inside properties."""
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": "annotated",
+            "format": "parquet",
+            "purpose": "analytics",
+            "license": "MIT",
+            "maturity": "production",
+            "domain": "claims",
+            "pii": "none",
+        },
+    )
+    assert created.status_code == 201, created.text
+    props = created.json()["properties"]
+    assert props["purpose"] == "analytics"
+    assert props["license"] == "MIT"
+    assert props["maturity"] == "production"
+    assert props["domain"] == "claims"
+    assert props["pii"] == "none"
+
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/annotated")
+    assert got.status_code == 200
+    got_props = got.json()["properties"]
+    assert got_props["purpose"] == "analytics"
+    assert got_props["license"] == "MIT"
+    assert got_props["maturity"] == "production"
+    assert got_props["domain"] == "claims"
+    assert got_props["pii"] == "none"
+
+
 def test_generic_delete_unregisters_iceberg_catalog_row(sqlite_registry):
     """Data Hub unregister (option A). Iceberg DELETE stays 501."""
     client = _client(sqlite_registry)

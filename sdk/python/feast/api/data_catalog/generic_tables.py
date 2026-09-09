@@ -123,6 +123,11 @@ def _asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
         )
         for column in (dataset.columns or [])
     ]
+    props = public_properties(tags)
+    for key in ("purpose", "license", "maturity", "domain", "pii"):
+        val = tags.get(key)
+        if val:
+            props[key] = val
     return AssetResponse(
         name=unscoped_name(dataset.name),
         asset_type=tags.get("asset_type") or "table",
@@ -135,7 +140,7 @@ def _asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
         owner=tags.get("owner") or None,
         description=dataset.description or None,
         labels=labels_from_tags(tags),
-        properties=public_properties(tags) or None,
+        properties=props or None,
         registered_by=tags.get("registered_by") or None,
         updated_by=tags.get("updated_by") or None,
         created_at=isoformat_ts(dataset.created_timestamp),
