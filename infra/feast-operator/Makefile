@@ -55,6 +55,7 @@ OPERATOR_SDK_VERSION ?= v1.41.0
 IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 FS_IMG ?= quay.io/feastdev/feature-server:$(VERSION)
 CJ_IMG ?= quay.io/openshift/origin-cli:4.17
+KRBP_IMG ?=
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
 
@@ -117,6 +118,11 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: build-installer vet lint envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" GOTOOLCHAIN=go$(shell go env GOVERSION | sed 's/^go//') go test $$(go list ./... | grep -v test/e2e | grep -v test/data-source-types | grep -v test/upgrade | grep -v test/previous-version) -coverprofile cover.out
+
+.PHONY: setup-test
+setup-test: envtest ## Download envtest binaries (etcd, kube-apiserver) required by unit tests.
+	$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN)
+	@echo "envtest binaries installed. Run 'make test' to execute tests."
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
@@ -372,4 +378,4 @@ catalog-push: ## Push a catalog image.
 
 .PHONY: related-image-fs
 related-image-fs: envsubst
-	FS_IMG=$(FS_IMG) CJ_IMG=$(CJ_IMG) $(ENVSUBST) < config/default/related_image_fs_patch.tmpl > config/default/related_image_fs_patch.yaml
+	FS_IMG=$(FS_IMG) CJ_IMG=$(CJ_IMG) KRBP_IMG=$(KRBP_IMG) $(ENVSUBST) < config/default/related_image_fs_patch.tmpl > config/default/related_image_fs_patch.yaml
