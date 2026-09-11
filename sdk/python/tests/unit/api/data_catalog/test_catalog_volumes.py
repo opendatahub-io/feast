@@ -328,6 +328,80 @@ def test_concurrent_create_same_volume_is_created_and_409():
         registry.teardown()
 
 
+def test_update_add_labels(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _create_volume(client)
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"add_labels": ["pii"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["labels"] == ["pii"]
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert got.json()["labels"] == ["pii"]
+
+
+def test_update_remove_labels(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw", "pii"]},
+    )
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"remove_labels": ["pii"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["labels"] == ["uw"]
+
+
+def test_update_add_and_remove_labels_combined(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw", "old"]},
+    )
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"add_labels": ["new"], "remove_labels": ["old"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["labels"] == ["uw", "new"]
+
+
+def test_update_add_label_idempotent(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw"]},
+    )
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"add_labels": ["uw"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["labels"] == ["uw"]
+
+
+def test_update_remove_missing_label_noop(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw"]},
+    )
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"remove_labels": ["nonexistent"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["labels"] == ["uw"]
+
+
 def test_connection_ref_round_trips(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)

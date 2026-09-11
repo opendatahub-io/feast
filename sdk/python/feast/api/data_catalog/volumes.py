@@ -32,6 +32,7 @@ from feast.api.data_catalog.catalog_assets import (
     labels_from_tags,
     labels_to_tag,
     list_catalog_datasets,
+    merge_labels,
     merge_public_properties,
     notes_from_properties,
     public_properties,
@@ -252,6 +253,11 @@ def get_volume_router() -> APIRouter:
             tags.setdefault("volume_type", _DEFAULT_VOLUME_TYPE)
         if body.comment is not None:
             dataset.description = body.comment
+        if body.add_labels or body.remove_labels:
+            try:
+                tags = merge_labels(tags, add=body.add_labels, remove=body.remove_labels)
+            except ValueError as exc:
+                raise _as_bad_request(exc) from exc
         if body.storage_location is not None:
             dataset.storage = SavedDatasetFileStorage(path=body.storage_location)
         dataset.tags = tags

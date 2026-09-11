@@ -146,6 +146,8 @@ class UpdateVolumeRequest(BaseModel):
     owner: str | None = None
     storage_location: str | None = Field(default=None, alias="storage-location")
     properties: dict[str, str] | None = None
+    add_labels: list[str] | None = None
+    remove_labels: list[str] | None = None
 
 
 class ListVolumesResponse(BaseModel):
