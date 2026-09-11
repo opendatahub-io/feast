@@ -193,7 +193,7 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
     resp = client.get(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["metadata-location"] == "s3://bucket/events/metadata/"
+    assert body["metadata-location"] == "s3://bucket/events/"
     assert body["config"] == {}
 
     meta = body["metadata"]

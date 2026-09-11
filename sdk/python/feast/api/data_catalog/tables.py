@@ -151,19 +151,8 @@ def _load_table_response(dataset: SavedDataset) -> LoadTableResponse:
         last_column_id=len(iceberg_fields),
         last_sequence_number=0,
     )
-    if location.startswith("s3://"):
-        metadata_location = f"{location.rstrip('/')}/metadata/"
-    else:
-        display = dataset.name
-        try:
-            display = unscoped_name(dataset.name)
-        except ValueError:
-            pass
-        metadata_location = (
-            f"feast://{dataset.namespace}/tables/{display}/metadata"
-        )
     return LoadTableResponse(
-        metadata_location=metadata_location,
+        metadata_location=location,
         metadata=metadata,
         config={},
     )
