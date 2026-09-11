@@ -348,7 +348,9 @@ def test_n12_config_advertises_namespace_and_tables(sqlite_registry):
     assert "GET /v1/{prefix}/namespaces/{namespace}/volumes" in endpoints
     assert "GET /v1/projects" in endpoints
     assert all("/search" not in sig for sig in endpoints)
-    assert all("/labels" not in sig for sig in endpoints)
+    assert "GET /v1/{prefix}/labels" in endpoints
+    assert "POST /v1/{prefix}/labels" in endpoints
+    assert "DELETE /v1/{prefix}/labels/{label}" in endpoints
 
 
 def test_post_default_is_409(sqlite_registry):
