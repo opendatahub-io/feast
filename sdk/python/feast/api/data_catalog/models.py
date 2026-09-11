@@ -212,6 +212,21 @@ class AssetListResponse(BaseModel):
     assets: list[AssetResponse]
 
 
+# ----- Labels -----
+
+
+class LabelListResponse(BaseModel):
+    labels: list[str]
+
+
+class CreateLabelRequest(BaseModel):
+    name: str
+
+
+class LabelResponse(BaseModel):
+    name: str
+
+
 # ---------------------------------------------------------------------------
 # Iceberg LoadTableResponse (GET .../tables/{table})
 # ---------------------------------------------------------------------------
