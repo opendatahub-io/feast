@@ -211,6 +211,20 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
     assert meta["properties"]["owner"] == "uw"
     assert "_connection_ref" not in meta["properties"]
 
+    # Hardcoded Iceberg structural defaults (agreed with Mateusz)
+    assert meta["current-schema-id"] == 0
+    assert meta["last-sequence-number"] == 0
+    assert meta["current-snapshot-id"] == -1
+    assert meta["snapshots"] == []
+    assert meta["last-partition-id"] == 999
+    assert meta["partition-specs"] == [{"spec-id": 0, "fields": []}]
+    assert meta["default-spec-id"] == 0
+    assert meta["sort-orders"] == []
+    assert meta["default-sort-order-id"] == 0
+    assert meta["last-column-id"] == 2  # two columns seeded above
+    assert meta["schemas"][0]["schema-id"] == 0
+    assert meta["schemas"][0]["type"] == "struct"
+
 
 def test_load_missing_table_is_404(sqlite_registry):
     client = _client(sqlite_registry)

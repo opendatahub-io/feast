@@ -328,6 +328,58 @@ def test_concurrent_create_same_volume_is_created_and_409():
         registry.teardown()
 
 
+def test_timestamps_populated_on_create(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client)
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["created-at"] is not None
+    assert body["updated-at"] is not None
+
+
+def test_updated_at_changes_after_update(sqlite_registry):
+    import time
+
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client)
+    created_at = created.json()["created-at"]
+    updated_at_v1 = created.json()["updated-at"]
+    assert created_at is not None
+    assert updated_at_v1 is not None
+
+    time.sleep(0.05)
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"comment": "v2"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["created-at"] == created_at  # unchanged
+    assert updated.json()["updated-at"] >= updated_at_v1  # moved forward
+
+
+def test_owner_round_trips_on_create_and_update(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "location": "s3://bucket/claims/", "owner": "uw-team"},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["owner"] == "uw-team"
+
+    updated = client.put(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"owner": "claims-team"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["owner"] == "claims-team"
+
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert got.json()["owner"] == "claims-team"
+
+
 def test_update_add_labels(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)

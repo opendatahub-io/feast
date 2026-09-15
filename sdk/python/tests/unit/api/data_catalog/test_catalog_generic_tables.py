@@ -335,6 +335,110 @@ def test_metadata_fields_round_trip_in_properties(sqlite_registry):
     assert got_props["pii"] == "none"
 
 
+def test_uuid_and_timestamps_on_create(sqlite_registry):
+    """uuid, created_at, updated_at are populated on create."""
+    import uuid as _uuid
+
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    _uuid.UUID(body["uuid"])  # valid UUID or raises
+    assert body["created_at"] is not None
+    assert body["updated_at"] is not None
+
+
+def test_owner_round_trips_on_create_and_update(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet", "owner": "uw-team"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["owner"] == "uw-team"
+
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"owner": "claims-team"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["owner"] == "claims-team"
+
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert got.json()["owner"] == "claims-team"
+
+
+def test_updated_by_set_from_header_on_patch(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+        headers={"X-User": "creator"},
+    )
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"description": "updated"},
+        headers={"X-User": "editor"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["registered_by"] == "creator"
+    assert patched.json()["updated_by"] == "editor"
+
+
+def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "connection_ref": {"type": "rhai", "secret_name": "aws-creds"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert got.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+
+
+def test_updated_at_changes_after_patch(sqlite_registry):
+    import time
+
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert created.status_code == 201
+    created_at = created.json()["created_at"]
+    updated_at_v1 = created.json()["updated_at"]
+    assert created_at is not None
+    assert updated_at_v1 is not None
+
+    time.sleep(0.05)
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"description": "v2"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["created_at"] == created_at  # unchanged
+    assert patched.json()["updated_at"] >= updated_at_v1  # moved forward
+
+
 def test_generic_delete_unregisters_iceberg_catalog_row(sqlite_registry):
     """Data Hub unregister (option A). Iceberg DELETE stays 501."""
     client = _client(sqlite_registry)
