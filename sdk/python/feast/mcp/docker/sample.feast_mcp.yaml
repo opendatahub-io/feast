@@ -1,0 +1,57 @@
+# Sample config for the feast-mcp image.
+#
+# The image's default CMD is `--config /config/feast_mcp.yaml`, so mount this
+# file there -- as a ConfigMap under `config.storage` when deploying with the
+# mcp-lifecycle-operator, or with `-v` for a local `docker run`.
+#
+# Resolution order is CLI > environment > this file > defaults. Note that
+# environment outranks the file: setting FEAST_MCP_TRANSPORT in the CR's
+# `config.env` will silently override `server.transport` below.
+
+server:
+  # stdio cannot serve a port, so it is not deployable under the
+  # mcp-lifecycle-operator, whose MCPServer CRD requires `config.port`.
+  transport: http           # stdio | http | streamable-http | sse
+  host: 0.0.0.0
+  port: 8000                # must match spec.config.port on the MCPServer CR
+  # workers: 4              # omit for single-process uvicorn;
+                            # multi-worker requires http transport, not sse
+
+# At least one of features.url / registry.url is required.
+# Under the mcp-lifecycle-operator the MCP server runs in its own Deployment,
+# so these must be cluster DNS names -- localhost only works when the MCP
+# server is a sidecar in the Feast pod.
+features:
+  url: http://feast-example-online.feast.svc.cluster.local:6566
+
+registry:
+  url: http://feast-example-registry-rest.feast.svc.cluster.local:6572
+
+timeout: 30
+
+# Logs always go to stderr. With an OTLP endpoint set they are also exported,
+# and each request gets a real trace id; without one, logs fall back to a
+# generated per-request id. The image ships the mcp-server-otel extra, so the
+# exporters are already installed.
+observability:
+  level: INFO               # DEBUG | INFO | WARNING | ERROR
+  format: json              # text | json
+  # otel_endpoint: http://otel-collector.observability.svc.cluster.local:4317
+  # otel_protocol: grpc     # grpc | http
+  # otel_service_name: feast-mcp
+
+# auth:
+#   mode: oidc              # passthrough | oidc
+#   discovery_url: https://keycloak.example.com/realms/feast/.well-known/openid-configuration
+#   client_id: feast-mcp
+#   base_url: https://mcp.example.com
+
+# Required for OIDC with more than one replica: the /callback and /token
+# requests may otherwise hit a replica that never saw the /authorize.
+# Also required if the MCPServer CR sets `mcp.stateless: true`, which drops
+# the Service's ClientIP affinity.
+#
+# session_storage:
+#   backend: redis          # redis | valkey | postgresql | mongodb | disk | memory
+#   options:
+#     url: redis://redis.feast.svc.cluster.local:6379
