@@ -1,0 +1,460 @@
+# Copyright 2026 The Feast Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import tempfile
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from feast.api.data_catalog.catalog_utils import CATALOG_PROJECT, DEFAULT_COLLECTION, scoped_name
+from feast.api.data_catalog.config import get_config_router
+from feast.api.data_catalog.errors import register_error_handlers
+from feast.api.data_catalog.generic_tables import get_generic_table_router
+from feast.api.data_catalog.namespaces import get_namespace_router
+from feast.api.data_catalog.tables import get_table_router
+from feast.api.data_catalog.volumes import get_volume_router
+from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
+from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
+from feast.saved_dataset import SavedDataset
+
+NS = "demo-user-1"
+COL = "underwriting"
+TABLE = "events"
+PARQUET = "claims-parquet"
+
+
+@pytest.fixture
+def sqlite_registry():
+    _fd, registry_path = tempfile.mkstemp()
+    registry = SqlRegistry(
+        SqlRegistryConfig(
+            registry_type="sql",
+            path=f"sqlite:///{registry_path}",
+            purge_feast_metadata=False,
+        ),
+        "scratch",
+        None,
+    )
+    yield registry
+    registry.teardown()
+
+
+def _client(registry) -> TestClient:
+    app = FastAPI()
+    app.state.registry = registry
+    register_error_handlers(app)
+    app.include_router(get_config_router())
+    app.include_router(get_namespace_router())
+    app.include_router(get_table_router())
+    app.include_router(get_volume_router())
+    app.include_router(get_generic_table_router())
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _ensure_collection(client: TestClient, project: str = NS, collection: str = COL):
+    client.post(
+        f"/v1/{project}/namespaces",
+        json={"namespace": [collection], "properties": {}},
+    )
+
+
+def _assert_501(response) -> None:
+    assert response.status_code == 501, response.text
+    assert response.json()["error"]["type"] == "NotImplementedException"
+
+
+def _seed_iceberg_table(registry, name: str = TABLE) -> None:
+    registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name(NS, COL, name),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="s3://bucket/events/"),
+            namespace=NS,
+            collection=COL,
+            tags={
+                "_catalog_managed": "true",
+                "asset_type": "table",
+                "format": "iceberg",
+            },
+        ),
+        CATALOG_PROJECT,
+    )
+
+
+def test_iceberg_format_post_inserts_catalog_row(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp_default = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": TABLE},
+    )
+    assert resp_default.status_code == 201
+    assert resp_default.json()["format"] == "iceberg"
+    resp_explicit = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": "explicit-ice", "format": "iceberg"},
+    )
+    assert resp_explicit.status_code == 201
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
+    assert len(listed.json()["assets"]) == 2
+    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert len(iceberg.json()["identifiers"]) == 2
+
+
+def test_create_parquet_201_no_invented_user(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "location": "s3://bucket/claims.parquet",
+            "schema_fields": [
+                {"name": "claim_id", "type": "string", "nullable": False}
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["name"] == PARQUET
+    assert body["asset_type"] == "table"
+    assert body["format"] == "parquet"
+    assert body["location"] == "s3://bucket/claims.parquet"
+    assert body["collection"] == COL
+    assert body["registered_by"] is None
+    assert body["columns"][0]["name"] == "claim_id"
+    assert "document_count" not in body
+
+    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert iceberg.json() == {"identifiers": []}
+
+
+def test_registered_by_from_header_only(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "csv"},
+        headers={"X-User": "uw-analyst"},
+    )
+    assert created.status_code == 201
+    assert created.json()["registered_by"] == "uw-analyst"
+
+
+def test_duplicate_is_409(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    payload = {"name": PARQUET, "format": "parquet"}
+    assert (
+        client.post(
+            f"/v1/{NS}/namespaces/{COL}/generic-tables", json=payload
+        ).status_code
+        == 201
+    )
+    again = client.post(f"/v1/{NS}/namespaces/{COL}/generic-tables", json=payload)
+    assert again.status_code == 409
+    assert again.json()["error"]["type"] == "AlreadyExistsException"
+
+
+def test_list_includes_seeded_iceberg_and_skips_volumes(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _seed_iceberg_table(sqlite_registry)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": "docs", "location": "s3://bucket/docs/"},
+    )
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
+    assert listed.status_code == 200
+    names = sorted(asset["name"] for asset in listed.json()["assets"])
+    assert names == [PARQUET, TABLE]
+    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert iceberg.json()["identifiers"] == [{"namespace": [COL], "name": TABLE}]
+
+
+def test_patch_replaces_schema_and_rejects_iceberg_format(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "schema_fields": [{"name": "a", "type": "string"}],
+            "labels": ["uw"],
+        },
+    )
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={
+            "description": "claims",
+            "schema_fields": [
+                {"name": "b", "type": "long"},
+                {"name": "c", "type": "string"},
+            ],
+            "add_labels": ["pii"],
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["description"] == "claims"
+    assert [col["name"] for col in body["columns"]] == ["b", "c"]
+    assert body["labels"] == ["uw", "pii"]
+    patched_ice = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"format": "iceberg"},
+    )
+    assert patched_ice.status_code == 200
+    assert patched_ice.json()["format"] == "iceberg"
+
+
+def test_get_delete_and_missing(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "csv"},
+    )
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert got.status_code == 200
+    assert got.json()["format"] == "csv"
+    deleted = client.delete(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert deleted.status_code == 204
+    missing = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["type"] == "NoSuchTableException"
+
+
+def test_missing_collection_404(sqlite_registry):
+    client = _client(sqlite_registry)
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
+    assert listed.status_code == 404
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert created.status_code == 404
+
+
+def test_create_in_default(sqlite_registry):
+    client = _client(sqlite_registry)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{DEFAULT_COLLECTION}/generic-tables",
+        json={"name": PARQUET, "format": "postgresql"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["collection"] == DEFAULT_COLLECTION
+
+
+def test_label_query_filters_list(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet", "labels": ["uw"]},
+    )
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": "other", "format": "csv", "labels": ["finance"]},
+    )
+    filtered = client.get(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables", params={"label": "uw"}
+    )
+    assert [asset["name"] for asset in filtered.json()["assets"]] == [PARQUET]
+
+
+def test_properties_cannot_set_format_to_iceberg(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"properties": {"team": "uw", "format": "iceberg", "asset_type": "volume"}},
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["format"] == "parquet"
+    assert body["asset_type"] == "table"
+    assert body["properties"] == {"team": "uw"}
+    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert iceberg.json() == {"identifiers": []}
+
+
+def test_metadata_fields_round_trip_in_properties(sqlite_registry):
+    """purpose, license, maturity, domain, pii are returned inside properties."""
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": "annotated",
+            "format": "parquet",
+            "purpose": "analytics",
+            "license": "MIT",
+            "maturity": "production",
+            "domain": "claims",
+            "pii": "none",
+        },
+    )
+    assert created.status_code == 201, created.text
+    props = created.json()["properties"]
+    assert props["purpose"] == "analytics"
+    assert props["license"] == "MIT"
+    assert props["maturity"] == "production"
+    assert props["domain"] == "claims"
+    assert props["pii"] == "none"
+
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/annotated")
+    assert got.status_code == 200
+    got_props = got.json()["properties"]
+    assert got_props["purpose"] == "analytics"
+    assert got_props["license"] == "MIT"
+    assert got_props["maturity"] == "production"
+    assert got_props["domain"] == "claims"
+    assert got_props["pii"] == "none"
+
+
+def test_uuid_and_timestamps_on_create(sqlite_registry):
+    """uuid, created_at, updated_at are populated on create."""
+    import uuid as _uuid
+
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    _uuid.UUID(body["uuid"])  # valid UUID or raises
+    assert body["created_at"] is not None
+    assert body["updated_at"] is not None
+
+
+def test_owner_round_trips_on_create_and_update(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet", "owner": "uw-team"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["owner"] == "uw-team"
+
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"owner": "claims-team"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["owner"] == "claims-team"
+
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert got.json()["owner"] == "claims-team"
+
+
+def test_updated_by_set_from_header_on_patch(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+        headers={"X-User": "creator"},
+    )
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"description": "updated"},
+        headers={"X-User": "editor"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["registered_by"] == "creator"
+    assert patched.json()["updated_by"] == "editor"
+
+
+def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "connection_ref": {"type": "rhai", "secret_name": "aws-creds"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    assert got.json()["connection_ref"] == {
+        "type": "rhai",
+        "secret_name": "aws-creds",
+    }
+
+
+def test_updated_at_changes_after_patch(sqlite_registry):
+    import time
+
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert created.status_code == 201
+    created_at = created.json()["created_at"]
+    updated_at_v1 = created.json()["updated_at"]
+    assert created_at is not None
+    assert updated_at_v1 is not None
+
+    time.sleep(0.05)
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"description": "v2"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["created_at"] == created_at  # unchanged
+    assert patched.json()["updated_at"] >= updated_at_v1  # moved forward
+
+
+def test_generic_delete_unregisters_iceberg_catalog_row(sqlite_registry):
+    """Data Hub unregister (option A). Iceberg DELETE stays 501."""
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _seed_iceberg_table(sqlite_registry)
+    _assert_501(client.delete(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}"))
+    assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}").status_code == 204
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{TABLE}",
+        json={"description": "stale warehouse table"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["description"] == "stale warehouse table"
+    assert patched.json()["format"] == "iceberg"
+    dropped = client.delete(f"/v1/{NS}/namespaces/{COL}/generic-tables/{TABLE}")
+    assert dropped.status_code == 204
+    iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
+    assert iceberg.json() == {"identifiers": []}
+    assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}").status_code == 404
