@@ -130,6 +130,10 @@ def labels_to_tag(labels: list[str] | None) -> dict[str, str]:
             raise ValueError(
                 f"each label must be a string of at most {_MAX_LABEL_LEN} characters"
             )
+        if "/" in item:
+            raise ValueError(
+                f"label must not contain '/' (got {item!r})"
+            )
     encoded = json.dumps(list(labels))
     if len(encoded) > _MAX_LABELS_JSON:
         raise ValueError(

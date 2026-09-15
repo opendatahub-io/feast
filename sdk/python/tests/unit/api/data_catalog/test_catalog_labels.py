@@ -180,6 +180,24 @@ def test_create_label_empty_name_400(sqlite_registry):
     assert resp.status_code == 400
 
 
+def test_create_label_slash_in_name_400(sqlite_registry):
+    """Labels with '/' are rejected because they break the DELETE path."""
+    client = _client(sqlite_registry)
+    resp = client.post(f"/v1/{NS}/labels", json={"name": "team/data"})
+    assert resp.status_code == 400
+
+
+def test_assign_label_with_slash_rejected(sqlite_registry):
+    """Labels with '/' are rejected when assigned to assets too."""
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": "v1", "location": "s3://b/c/", "labels": ["team/data"]},
+    )
+    assert resp.status_code == 400
+
+
 def test_create_label_project_isolation(sqlite_registry):
     """Labels in different projects don't collide."""
     client = _client(sqlite_registry)

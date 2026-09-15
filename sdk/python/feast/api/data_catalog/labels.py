@@ -84,6 +84,8 @@ def get_label_router() -> APIRouter:
         name = body.name.strip()
         if not name:
             raise BadRequestException("Label name must not be empty")
+        if "/" in name:
+            raise BadRequestException("Label name must not contain '/'")
         create_label_meta(registry, rhai_ns, name)
         return LabelResponse(name=name)
 
