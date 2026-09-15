@@ -26,9 +26,9 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/feature-server:odh-pr
   - name: dockerfile
-    value: Dockerfile
+    value: sdk/python/feast/infra/feature_servers/multicloud/Dockerfile
   - name: path-context
-    value: sdk/python/feast/infra/feature_servers/multicloud
+    value: .
   - name: additional-tags
     value: 
     - 'odh-pr-{{revision}}'
