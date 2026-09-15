@@ -551,7 +551,10 @@ def label_meta_key(rhai_ns: str, label_name: str) -> str:
     ns = _require_namespace(rhai_ns)
     if not label_name or not label_name.strip():
         raise ValueError("label name must not be empty")
-    return f"{LABEL_META_PREFIX}{ns}/{label_name.strip()}"
+    name = label_name.strip()
+    if "/" in name:
+        raise ValueError(f"label name must not contain '/' (got {name!r})")
+    return f"{LABEL_META_PREFIX}{ns}/{name}"
 
 
 def parse_label_meta_key(key: str) -> tuple[str, str] | None:
