@@ -20,7 +20,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import NullPool
 
-from feast.api.data_catalog.catalog_utils import CATALOG_PROJECT, DEFAULT_COLLECTION, scoped_name
+from feast.api.data_catalog.catalog_utils import (
+    CATALOG_PROJECT,
+    DEFAULT_COLLECTION,
+    scoped_name,
+)
 from feast.api.data_catalog.config import get_config_router
 from feast.api.data_catalog.errors import register_error_handlers
 from feast.api.data_catalog.namespaces import get_namespace_router
@@ -267,9 +271,7 @@ def test_default_apply_saved_dataset_still_updates(sqlite_registry):
         tags={"_catalog_managed": "true", "asset_type": "volume"},
     )
     sqlite_registry.apply_saved_dataset(second, CATALOG_PROJECT)
-    got = sqlite_registry.get_saved_dataset(
-        name, CATALOG_PROJECT, allow_cache=False
-    )
+    got = sqlite_registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     assert got.storage.file_options.uri == "s3://second/"
 
 
@@ -462,18 +464,21 @@ def test_connection_ref_round_trips(sqlite_registry):
         json={
             "name": VOL,
             "location": "s3://bucket/claims/",
-            "connection_ref": {"type": "rhai", "secret_name": "aws-creds"},
+            "connection_ref": {
+                "type": "rhai",
+                "secret_name": "aws-creds",  # pragma: allowlist secret
+            },
         },
     )
     assert created.status_code == 200, created.text
     assert created.json()["connection_ref"] == {
         "type": "rhai",
-        "secret_name": "aws-creds",
+        "secret_name": "aws-creds",  # pragma: allowlist secret
     }
     got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
     assert got.json()["connection_ref"] == {
         "type": "rhai",
-        "secret_name": "aws-creds",
+        "secret_name": "aws-creds",  # pragma: allowlist secret
     }
     bad = client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",

@@ -557,9 +557,7 @@ class SqlRegistry(CachingRegistry):
         if engine.dialect.name == "postgresql":
             with engine.connect() as lock_conn:
                 lock_conn.execute(
-                    text(
-                        "SELECT pg_advisory_lock(hashtext('feast_schema_creation'))"
-                    )
+                    text("SELECT pg_advisory_lock(hashtext('feast_schema_creation'))")
                 )
                 lock_conn.commit()
                 try:

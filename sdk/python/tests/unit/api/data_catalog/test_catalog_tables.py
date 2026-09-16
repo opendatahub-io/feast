@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -178,7 +177,7 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
         sqlite_registry,
         extra_tags={
             "uuid": "aaaa-bbbb-cccc",
-            "_connection_ref": '{"type":"rhai","secret_name":"my-s3"}',
+            "_connection_ref": '{"type":"rhai","secret_name":"my-s3"}',  # pragma: allowlist secret
         },
     )
     stored = sqlite_registry.get_saved_dataset(
@@ -207,7 +206,10 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
     assert fields[0] == {"id": 1, "name": "id", "required": True, "type": "long"}
     assert fields[1] == {"id": 2, "name": "name", "required": False, "type": "string"}
 
-    assert meta["properties"]["connection_ref"] == '{"type":"rhai","secret_name":"my-s3"}'
+    assert (
+        meta["properties"]["connection_ref"]
+        == '{"type":"rhai","secret_name":"my-s3"}'  # pragma: allowlist secret
+    )
     assert meta["properties"]["owner"] == "uw"
     assert "_connection_ref" not in meta["properties"]
 

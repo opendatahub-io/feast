@@ -97,9 +97,7 @@ def _display_name(volume: str) -> str:
         raise _as_bad_request(exc) from exc
 
 
-def _require_collection(
-    registry: BaseRegistry, rhai_ns: str, collection: str
-) -> None:
+def _require_collection(registry: BaseRegistry, rhai_ns: str, collection: str) -> None:
     if not validate_namespace_exists(registry, rhai_ns, collection):
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 
@@ -255,7 +253,9 @@ def get_volume_router() -> APIRouter:
             dataset.description = body.comment
         if body.add_labels or body.remove_labels:
             try:
-                tags = merge_labels(tags, add=body.add_labels, remove=body.remove_labels)
+                tags = merge_labels(
+                    tags, add=body.add_labels, remove=body.remove_labels
+                )
             except ValueError as exc:
                 raise _as_bad_request(exc) from exc
         if body.storage_location is not None:

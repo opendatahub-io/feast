@@ -73,7 +73,7 @@ _MAX_LABELS_JSON = 10_000
 _MAX_LABEL_COUNT = 1_000
 _MAX_LABEL_LEN = 255
 _MAX_CONNECTION_REF_JSON = 4_096
-_CONNECTION_REF_ADAPTER = TypeAdapter(ConnectionRef)
+_CONNECTION_REF_ADAPTER: TypeAdapter[ConnectionRef] = TypeAdapter(ConnectionRef)
 
 
 def isoformat_ts(value: datetime | None) -> str | None:
@@ -122,9 +122,7 @@ def labels_to_tag(labels: list[str] | None) -> dict[str, str]:
     if not labels:
         return {}
     if len(labels) > _MAX_LABEL_COUNT:
-        raise ValueError(
-            f"labels must have at most {_MAX_LABEL_COUNT} entries"
-        )
+        raise ValueError(f"labels must have at most {_MAX_LABEL_COUNT} entries")
     for item in labels:
         if not isinstance(item, str) or len(item) > _MAX_LABEL_LEN:
             raise ValueError(
@@ -132,9 +130,7 @@ def labels_to_tag(labels: list[str] | None) -> dict[str, str]:
             )
     encoded = json.dumps(list(labels))
     if len(encoded) > _MAX_LABELS_JSON:
-        raise ValueError(
-            f"labels JSON must be at most {_MAX_LABELS_JSON} characters"
-        )
+        raise ValueError(f"labels JSON must be at most {_MAX_LABELS_JSON} characters")
     return {"_labels": encoded}
 
 
@@ -263,9 +259,7 @@ def get_catalog_dataset(
 ) -> SavedDataset | None:
     name = scoped_name(rhai_ns, collection, display_name)
     try:
-        dataset = registry.get_saved_dataset(
-            name, CATALOG_PROJECT, allow_cache=False
-        )
+        dataset = registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     except SavedDatasetNotFound:
         return None
     if dataset.namespace != rhai_ns or dataset.collection != collection:
@@ -300,11 +294,11 @@ def list_catalog_datasets(
     return rows
 
 
-def replace_catalog_dataset(registry: BaseRegistry, dataset: SavedDataset) -> SavedDataset:
+def replace_catalog_dataset(
+    registry: BaseRegistry, dataset: SavedDataset
+) -> SavedDataset:
     registry.apply_saved_dataset(dataset, CATALOG_PROJECT)
-    return registry.get_saved_dataset(
-        dataset.name, CATALOG_PROJECT, allow_cache=False
-    )
+    return registry.get_saved_dataset(dataset.name, CATALOG_PROJECT, allow_cache=False)
 
 
 def delete_catalog_dataset(

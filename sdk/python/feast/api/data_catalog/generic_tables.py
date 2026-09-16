@@ -100,9 +100,7 @@ def _display_name(table: str) -> str:
         raise _as_bad_request(exc) from exc
 
 
-def _require_collection(
-    registry: BaseRegistry, rhai_ns: str, collection: str
-) -> None:
+def _require_collection(registry: BaseRegistry, rhai_ns: str, collection: str) -> None:
     if not validate_namespace_exists(registry, rhai_ns, collection):
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 

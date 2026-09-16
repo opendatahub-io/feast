@@ -106,7 +106,7 @@ Maturity = Literal["experimental", "staging", "production", "deprecated"]
 
 
 class VolumeInfo(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     name: str
     catalog_name: str = Field(serialization_alias="catalog-name")
@@ -225,7 +225,7 @@ class IcebergField(BaseModel):
 
 
 class IcebergSchema(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     type: str = "struct"
     schema_id: int = Field(default=0, serialization_alias="schema-id")
@@ -233,21 +233,21 @@ class IcebergSchema(BaseModel):
 
 
 class PartitionSpec(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     spec_id: int = Field(default=0, serialization_alias="spec-id")
     fields: list = Field(default_factory=list)
 
 
 class SortOrder(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     order_id: int = Field(default=0, serialization_alias="order-id")
     fields: list = Field(default_factory=list)
 
 
 class TableMetadata(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     format_version: int = Field(default=2, serialization_alias="format-version")
     table_uuid: str = Field(serialization_alias="table-uuid")
@@ -278,7 +278,7 @@ class TableMetadata(BaseModel):
 
 
 class LoadTableResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, ser_json_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     metadata_location: str = Field(serialization_alias="metadata-location")
     metadata: TableMetadata

@@ -315,9 +315,7 @@ class SavedDatasetLocationAlreadyExists(FeastError):
 
 class SavedDatasetAlreadyExists(FeastError):
     def __init__(self, name: str, project: str):
-        super().__init__(
-            f"Saved dataset {name} already exists in project {project}."
-        )
+        super().__init__(f"Saved dataset {name} already exists in project {project}.")
 
 
 class FeastOfflineStoreInvalidName(FeastError):

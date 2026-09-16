@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
+from feast.api.data_catalog.catalog_assets import epoch_ms, storage_uri
 from feast.api.data_catalog.catalog_utils import (
     CATALOG_MANAGED_TAG,
     CATALOG_MANAGED_VALUE,
@@ -42,7 +43,6 @@ from feast.api.data_catalog.errors import (
     NotImplementedException,
     ServiceFailureException,
 )
-from feast.api.data_catalog.catalog_assets import epoch_ms, storage_uri
 from feast.api.data_catalog.models import (
     IcebergField,
     IcebergSchema,

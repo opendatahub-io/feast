@@ -18,7 +18,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from feast.api.data_catalog.catalog_utils import CATALOG_PROJECT, DEFAULT_COLLECTION, scoped_name
+from feast.api.data_catalog.catalog_utils import (
+    CATALOG_PROJECT,
+    DEFAULT_COLLECTION,
+    scoped_name,
+)
 from feast.api.data_catalog.config import get_config_router
 from feast.api.data_catalog.errors import register_error_handlers
 from feast.api.data_catalog.generic_tables import get_generic_table_router
@@ -290,7 +294,9 @@ def test_properties_cannot_set_format_to_iceberg(sqlite_registry):
     )
     patched = client.patch(
         f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
-        json={"properties": {"team": "uw", "format": "iceberg", "asset_type": "volume"}},
+        json={
+            "properties": {"team": "uw", "format": "iceberg", "asset_type": "volume"}
+        },
     )
     assert patched.status_code == 200, patched.text
     body = patched.json()
@@ -399,18 +405,21 @@ def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
         json={
             "name": PARQUET,
             "format": "parquet",
-            "connection_ref": {"type": "rhai", "secret_name": "aws-creds"},
+            "connection_ref": {
+                "type": "rhai",
+                "secret_name": "aws-creds",  # pragma: allowlist secret
+            },
         },
     )
     assert created.status_code == 201, created.text
     assert created.json()["connection_ref"] == {
         "type": "rhai",
-        "secret_name": "aws-creds",
+        "secret_name": "aws-creds",  # pragma: allowlist secret
     }
     got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
     assert got.json()["connection_ref"] == {
         "type": "rhai",
-        "secret_name": "aws-creds",
+        "secret_name": "aws-creds",  # pragma: allowlist secret
     }
 
 
