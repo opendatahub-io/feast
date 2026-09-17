@@ -162,7 +162,7 @@ class CreateGenericTableRequest(BaseModel):
     description: str | None = None
     purpose: str | None = None
     license: str | None = None
-    maturity: str | None = None
+    maturity: Maturity | None = None
     domain: str | None = None
     pii: str | None = None
     owner: str | None = None
