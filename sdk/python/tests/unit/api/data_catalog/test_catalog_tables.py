@@ -132,7 +132,10 @@ def test_t3_list_head_after_seed(sqlite_registry):
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert listed.status_code == 200
     assert listed.json()["identifiers"] == [{"namespace": [COL], "name": TABLE}]
-    _assert_501(client.get(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}"))
+    loaded = client.get(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}")
+    assert loaded.status_code == 200
+    assert loaded.json()["config"] == {}
+    assert loaded.json()["metadata"]["location"] == "s3://bucket/events/"
     assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}").status_code == 204
 
 
@@ -166,10 +169,92 @@ def test_t6_create_missing_collection_is_501(sqlite_registry):
     _assert_501(_client(sqlite_registry).post(f"/v1/{NS}/namespaces/{COL}/tables"))
 
 
-def test_t8_load_is_501(sqlite_registry):
+def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
+    from feast.saved_dataset import SavedDatasetColumn
+
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    _assert_501(client.get(f"/v1/{NS}/namespaces/{COL}/tables/missing"))
+    _seed_iceberg_table(
+        sqlite_registry,
+        extra_tags={
+            "uuid": "aaaa-bbbb-cccc",
+            "_connection_ref": '{"type":"rhai","secret_name":"my-s3"}',
+        },
+    )
+    stored = sqlite_registry.get_saved_dataset(
+        scoped_name(NS, COL, TABLE), CATALOG_PROJECT, allow_cache=False
+    )
+    stored.columns = [
+        SavedDatasetColumn(name="id", type="long", description="", nullable=False),
+        SavedDatasetColumn(name="name", type="string", description="", nullable=True),
+    ]
+    sqlite_registry.apply_saved_dataset(stored, CATALOG_PROJECT)
+
+    resp = client.get(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["metadata-location"] == "s3://bucket/events/"
+    assert body["config"] == {}
+
+    meta = body["metadata"]
+    assert meta["table-uuid"] == "aaaa-bbbb-cccc"
+    assert meta["location"] == "s3://bucket/events/"
+    assert meta["format-version"] == 2
+    assert meta["last-updated-ms"] >= 0
+
+    assert len(meta["schemas"]) == 1
+    fields = meta["schemas"][0]["fields"]
+    assert fields[0] == {"id": 1, "name": "id", "required": True, "type": "long"}
+    assert fields[1] == {"id": 2, "name": "name", "required": False, "type": "string"}
+
+    assert meta["properties"]["connection_ref"] == '{"type":"rhai","secret_name":"my-s3"}'
+    assert meta["properties"]["owner"] == "uw"
+    assert "_connection_ref" not in meta["properties"]
+
+    # Hardcoded Iceberg structural defaults (agreed with Mateusz)
+    assert meta["current-schema-id"] == 0
+    assert meta["last-sequence-number"] == 0
+    assert meta["current-snapshot-id"] == -1
+    assert meta["snapshots"] == []
+    assert meta["last-partition-id"] == 999
+    assert meta["partition-specs"] == [{"spec-id": 0, "fields": []}]
+    assert meta["default-spec-id"] == 0
+    assert meta["sort-orders"] == []
+    assert meta["default-sort-order-id"] == 0
+    assert meta["last-column-id"] == 2  # two columns seeded above
+    assert meta["schemas"][0]["schema-id"] == 0
+    assert meta["schemas"][0]["type"] == "struct"
+
+
+def test_load_missing_table_is_404(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.get(f"/v1/{NS}/namespaces/{COL}/tables/nonexistent")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["type"] == "NoSuchTableException"
+
+
+def test_load_non_iceberg_format_is_404(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    sqlite_registry.apply_saved_dataset(
+        SavedDataset(
+            name=scoped_name(NS, COL, "csv-data"),
+            features=["fv:feature"],
+            join_keys=["entity_id"],
+            storage=SavedDatasetFileStorage(path="s3://bucket/csv/"),
+            namespace=NS,
+            collection=COL,
+            tags={
+                "_catalog_managed": "true",
+                "asset_type": "table",
+                "format": "parquet",
+            },
+        ),
+        CATALOG_PROJECT,
+    )
+    resp = client.get(f"/v1/{NS}/namespaces/{COL}/tables/csv-data")
+    assert resp.status_code == 404
 
 
 def test_t9_head_missing_404(sqlite_registry):
@@ -206,18 +291,13 @@ def test_t11_update_is_501_tags_unchanged(sqlite_registry):
     assert "tier" not in (stored.tags or {})
 
 
-def test_no_load_table_models_or_feast_uri():
-    import feast.api.data_catalog.tables as tables
+def test_no_write_models():
     from feast.api.data_catalog import models
 
-    assert not hasattr(models, "LoadTableResponse")
+    assert hasattr(models, "LoadTableResponse")
     assert not hasattr(models, "CreateTableRequest")
     assert not hasattr(models, "UpdateTableRequest")
     assert not hasattr(models, "RenameTableRequest")
-    source = Path(tables.__file__).read_text()
-    assert "feast://" not in source
-    assert "metadata_location" not in source
-    assert "saved_dataset_to_load_table" not in source
 
 
 def test_t13_rename_is_501_source_remains(sqlite_registry):
@@ -291,13 +371,19 @@ def test_t16_config_advertises_read_not_writes(sqlite_registry):
     endpoints = _client(sqlite_registry).get("/v1/config").json()["endpoints"]
     assert endpoints == CATALOG_CONFIG_ENDPOINTS
     assert "GET /v1/{prefix}/namespaces/{namespace}/tables" in endpoints
+    assert "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}" in endpoints
     assert "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}" in endpoints
-    assert "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}" not in endpoints
     assert "POST /v1/{prefix}/namespaces/{namespace}/tables" not in endpoints
     assert "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}" not in endpoints
     assert "DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}" not in endpoints
     assert "POST /v1/{prefix}/tables/rename" not in endpoints
-    assert all("/volumes" not in sig for sig in endpoints)
+    assert "GET /v1/{prefix}/namespaces/{namespace}/volumes" in endpoints
+    assert "POST /v1/{prefix}/namespaces/{namespace}/generic-tables" in endpoints
+    assert "GET /v1/projects" in endpoints
+    assert all("/search" not in sig for sig in endpoints)
+    assert "GET /v1/{prefix}/labels" in endpoints
+    assert "POST /v1/{prefix}/labels" in endpoints
+    assert "DELETE /v1/{prefix}/labels/{label}" in endpoints
 
 
 def test_t17_create_in_default_is_501(sqlite_registry):
