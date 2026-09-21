@@ -111,6 +111,8 @@ const (
 	// This is more flexible than a hardcoded namespace name because ODH,
 	// RHOAI, and custom installs can each label their chosen namespace.
 	DataRegistryNamespaceLabel = "opendatahub.io/data-registry"
+	// DataRegistryPlatformNamespaceLabel is applied by feast-module-operator on rhoai-data-registry.
+	DataRegistryPlatformNamespaceLabel = "dataregistry.opendatahub.io/enabled"
 
 	// DataRegistryFinalizer is added to the FeatureStore CR when the data-registry
 	// annotation is enabled. It prevents the CR from being garbage-collected before
@@ -118,7 +120,10 @@ const (
 	// that do not carry owner references and would otherwise be orphaned.
 	DataRegistryFinalizer = "dataregistry.opendatahub.io/cleanup"
 
-	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
+	// DefaultKubeRBACProxyImage is the fallback when RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+	// is unset (standalone make deploy). ODH/RHOAI installs inject the related image via OLM.
+	// Requires opendatahub-io/kube-rbac-proxy with Format2 endpoint rules (PR #28, v3.6.0-ea.2+).
+	DefaultKubeRBACProxyImage = "quay.io/opendatahub/kube-rbac-proxy:v3.6.0-ea.2"
 
 	DefaultKubeRBACProxyCPURequest    = "50m"
 	DefaultKubeRBACProxyCPULimit      = "100m"
