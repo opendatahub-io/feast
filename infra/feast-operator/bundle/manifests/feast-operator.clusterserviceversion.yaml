@@ -177,6 +177,14 @@ spec:
       - rules:
         - apiGroups:
           - ""
+          resourceNames:
+          - feast-capabilities-config
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
           resources:
           - configmaps
           verbs:
@@ -187,6 +195,16 @@ spec:
           - list
           - patch
           - update
+          - watch
+        - apiGroups:
+          - ""
+          resourceNames:
+          - feast-capabilities-config
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
           - watch
         - apiGroups:
           - ""

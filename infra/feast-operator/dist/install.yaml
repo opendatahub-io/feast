@@ -23191,6 +23191,16 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resourceNames:
+  - feast-capabilities-config
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
   resources:
   - namespaces
   - secrets

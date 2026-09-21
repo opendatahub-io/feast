@@ -46,6 +46,8 @@ const (
 	// Feast condition reasons:
 	ReadyReason                  = "Ready"
 	FailedReason                 = "FeatureStoreFailed"
+	FeatureStoreDisabledReason   = "FeatureStoreDisabled"
+	DataRegistryDisabledReason   = "DataRegistryDisabled"
 	DeploymentNotAvailableReason = "DeploymentNotAvailable"
 	OfflineStoreFailedReason     = "OfflineStoreDeploymentFailed"
 	OnlineStoreFailedReason      = "OnlineStoreDeploymentFailed"
@@ -60,6 +62,8 @@ const (
 
 	// Feast condition messages:
 	ReadyMessage                  = "FeatureStore installation complete"
+	FeatureStoreDisabledMessage   = "Feature Store capability is disabled in the platform configuration (feast-capabilities-config featureStoreEnabled=false)"
+	DataRegistryDisabledMessage   = "Data Registry capability is disabled in the platform configuration (feast-capabilities-config dataRegistryEnabled=false)"
 	OfflineStoreReadyMessage      = "Offline Store installation complete"
 	OnlineStoreReadyMessage       = "Online Store installation complete"
 	RegistryReadyMessage          = "Registry installation complete"
