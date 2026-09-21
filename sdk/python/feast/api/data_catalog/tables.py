@@ -14,9 +14,9 @@
 
 """Iceberg REST table routes.
 
-List and HEAD are data-catalog **read** over Feast SavedDataset rows.
-Create, load, update, drop, and rename are 501 stubs: no Iceberg
-warehouse, no credential vending.
+List, HEAD, and load are data-catalog **read** over Feast SavedDataset rows.
+Load returns stored metadata with an empty config map (no credential
+vending). Create, update, drop, and rename remain 501 stubs.
 
 Do not mount this router on RestRegistryServer here.
 """
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, Response
 
+from feast.api.data_catalog.catalog_assets import epoch_ms, storage_uri
 from feast.api.data_catalog.catalog_utils import (
     CATALOG_MANAGED_TAG,
     CATALOG_MANAGED_VALUE,
@@ -42,7 +43,15 @@ from feast.api.data_catalog.errors import (
     NotImplementedException,
     ServiceFailureException,
 )
-from feast.api.data_catalog.models import ListTablesResponse, TableIdentifier
+from feast.api.data_catalog.models import (
+    IcebergField,
+    IcebergSchema,
+    ListTablesResponse,
+    LoadTableResponse,
+    PartitionSpec,
+    TableIdentifier,
+    TableMetadata,
+)
 from feast.errors import SavedDatasetNotFound
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
@@ -101,6 +110,54 @@ def _get_iceberg_table(
     return dataset
 
 
+def _load_table_response(dataset: SavedDataset) -> LoadTableResponse:
+    """Build a LoadTableResponse from stored SavedDataset data.
+
+    Returns Iceberg-spec-compliant metadata so that ``pyiceberg`` and other
+    engines can parse the response without validation errors.  Fields like
+    ``format_version``, ``current_schema_id``, ``partition_specs``, and
+    ``last_sequence_number`` are hardcoded defaults — appropriate for
+    catalog-only registered assets (no managed commits).
+    ``config`` is always empty (no credential vending).
+    """
+    tags = dataset.tags or {}
+    iceberg_fields = [
+        IcebergField(
+            id=idx + 1,
+            name=col.name,
+            required=not col.nullable,
+            type=col.type or "string",
+        )
+        for idx, col in enumerate(dataset.columns or [])
+    ]
+    schema = IcebergSchema(fields=iceberg_fields)
+    _INTERNAL_KEYS = {CATALOG_MANAGED_TAG, "_labels", "_connection_ref", "uuid"}
+    props = {k: v for k, v in tags.items() if k not in _INTERNAL_KEYS}
+    raw_ref = tags.get("_connection_ref")
+    if raw_ref:
+        props["connection_ref"] = raw_ref
+    last_updated_ms = epoch_ms(dataset.last_updated_timestamp)
+    location = storage_uri(dataset)
+    table_uuid = tags.get("uuid") or dataset.name
+    metadata = TableMetadata(
+        format_version=2,
+        table_uuid=table_uuid,
+        location=location,
+        last_updated_ms=last_updated_ms,
+        properties=props,
+        schemas=[schema],
+        current_schema_id=0,
+        partition_specs=[PartitionSpec(spec_id=0, fields=[])],
+        last_column_id=len(iceberg_fields),
+        last_sequence_number=0,
+    )
+    return LoadTableResponse(
+        metadata_location=location,
+        metadata=metadata,
+        config={},
+    )
+
+
 def get_table_router() -> APIRouter:
     router = APIRouter(tags=["tables"])
 
@@ -133,11 +190,19 @@ def get_table_router() -> APIRouter:
         _project_and_collection(project, collection)
         raise NotImplementedException(_TABLE_UNIMPLEMENTED)
 
-    @router.get("/v1/{project}/namespaces/{collection}/tables/{table}")
-    def load_table(project: str, collection: str, table: str) -> Response:
-        _project_and_collection(project, collection)
-        _display_name(table)
-        raise NotImplementedException(_TABLE_UNIMPLEMENTED)
+    @router.get(
+        "/v1/{project}/namespaces/{collection}/tables/{table}",
+        response_model=LoadTableResponse,
+        response_model_by_alias=True,
+    )
+    def load_table(
+        project: str, collection: str, table: str, request: Request
+    ) -> LoadTableResponse:
+        rhai_ns, col = _project_and_collection(project, collection)
+        registry = _registry(request)
+        _require_collection(registry, rhai_ns, col)
+        dataset = _get_iceberg_table(registry, rhai_ns, col, table)
+        return _load_table_response(dataset)
 
     @router.head(
         "/v1/{project}/namespaces/{collection}/tables/{table}",

@@ -50,6 +50,7 @@ from feast.errors import (
     PermissionNotFoundException,
     ProjectNotFoundException,
     ProjectObjectNotFoundException,
+    SavedDatasetAlreadyExists,
     SavedDatasetNotFound,
     ValidationReferenceNotFound,
 )
@@ -385,7 +386,8 @@ class SqlRegistry(CachingRegistry):
         else:
             self.read_engine = self.write_engine
         if registry_config.schema_mode == "auto":
-            metadata.create_all(self.write_engine)
+            with self._schema_creation_lock(self.write_engine):
+                metadata.create_all(self.write_engine)
             # Additive migration for existing registries — write engine only.
             self._ensure_saved_dataset_hierarchy_columns(self.write_engine)
         elif registry_config.schema_mode == "verify":
@@ -537,6 +539,57 @@ class SqlRegistry(CachingRegistry):
                         "project": row.project_id,
                     },
                 )
+
+    @staticmethod
+    @contextmanager
+    def _schema_creation_lock(
+        engine: Engine,
+    ) -> Generator[None, None, None]:
+        """Serialize ``metadata.create_all`` across processes sharing one DB.
+
+        When gRPC and REST registry servers start concurrently against an empty
+        database, both call ``create_all`` and race on ``CREATE TABLE``.  The
+        loser hits a Postgres ``UniqueViolation`` on ``pg_type_typname_nsp_index``
+        because each table implicitly registers a composite type.  An advisory
+        lock eliminates the race: the loser waits, then ``create_all`` sees the
+        tables and skips creation.
+        """
+        if engine.dialect.name == "postgresql":
+            with engine.connect() as lock_conn:
+                lock_conn.execute(
+                    text("SELECT pg_advisory_lock(hashtext('feast_schema_creation'))")
+                )
+                lock_conn.commit()
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text(
+                            "SELECT pg_advisory_unlock("
+                            "hashtext('feast_schema_creation'))"
+                        )
+                    )
+                    lock_conn.commit()
+        elif engine.dialect.name in ("mysql", "mariadb"):
+            with engine.connect() as lock_conn:
+                got = lock_conn.execute(
+                    text("SELECT GET_LOCK('feast_schema_creation', 60)")
+                ).scalar()
+                lock_conn.commit()
+                if not got:
+                    raise RuntimeError(
+                        "Could not acquire MySQL GET_LOCK for schema creation "
+                        "within 60s"
+                    )
+                try:
+                    yield
+                finally:
+                    lock_conn.execute(
+                        text("SELECT RELEASE_LOCK('feast_schema_creation')")
+                    )
+                    lock_conn.commit()
+        else:
+            yield
 
     @staticmethod
     @contextmanager
@@ -1525,9 +1578,16 @@ class SqlRegistry(CachingRegistry):
         saved_dataset: SavedDataset,
         project: str,
         commit: bool = True,
+        on_conflict: Literal["update", "raise"] = "update",
     ):
         # Denormalized index columns: caller owns hierarchy fields; proto remains
         # the source of truth inside saved_dataset_proto.
+        # on_conflict="update" is feast apply (upsert / skip insert race).
+        # Catalog HTTP create uses on_conflict="raise" → SavedDatasetAlreadyExists.
+        if on_conflict not in ("update", "raise"):
+            raise ValueError(
+                f"on_conflict must be 'update' or 'raise', got {on_conflict!r}"
+            )
         return self._apply_object(
             saved_datasets,
             project,
@@ -1538,6 +1598,7 @@ class SqlRegistry(CachingRegistry):
                 "namespace": saved_dataset.namespace or "",
                 "collection": saved_dataset.collection or "",
             },
+            on_conflict=on_conflict,
         )
 
     def delete_saved_dataset(self, name: str, project: str, commit: bool = True):
@@ -1912,6 +1973,7 @@ class SqlRegistry(CachingRegistry):
         proto_field_name: str,
         name: Optional[str] = None,
         extra_values: Optional[Dict[str, Any]] = None,
+        on_conflict: Literal["update", "raise"] = "update",
     ):
         if not self.purge_feast_metadata:
             self._maybe_init_project_metadata(project)
@@ -1930,6 +1992,8 @@ class SqlRegistry(CachingRegistry):
             row = conn.execute(stmt).first()
 
             if row:
+                if on_conflict == "raise":
+                    raise SavedDatasetAlreadyExists(name, project)
                 if proto_field_name in [
                     "entity_proto",
                     "saved_dataset_proto",
@@ -2014,6 +2078,8 @@ class SqlRegistry(CachingRegistry):
                     with conn.begin_nested():
                         conn.execute(insert(table).values(values))
                 except IntegrityError:
+                    if on_conflict == "raise":
+                        raise SavedDatasetAlreadyExists(name, project)
                     logger.info(
                         "Object %s in project %s already created by another "
                         "process, skipping.",
