@@ -232,6 +232,7 @@ spec:
           resources:
           - namespaces
           verbs:
+          - create
           - get
           - list
           - update
@@ -408,12 +409,15 @@ spec:
           - rbac.authorization.k8s.io
           resources:
           - clusterrolebindings
+          - rolebindings
+          - roles
           verbs:
           - create
           - delete
           - get
           - list
           - update
+          - watch
         - apiGroups:
           - rbac.authorization.k8s.io
           resources:
@@ -436,18 +440,6 @@ spec:
           verbs:
           - delete
           - update
-        - apiGroups:
-          - rbac.authorization.k8s.io
-          resources:
-          - rolebindings
-          - roles
-          verbs:
-          - create
-          - delete
-          - get
-          - list
-          - update
-          - watch
         - apiGroups:
           - route.openshift.io
           resources:
