@@ -46,6 +46,7 @@ import (
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/access"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/authz"
+	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/capabilities"
 	feasthandler "github.com/feast-dev/feast/infra/feast-operator/internal/controller/handler"
 	feastmetrics "github.com/feast-dev/feast/infra/feast-operator/internal/controller/metrics"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/registry"
@@ -75,11 +76,12 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;create;update;watch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;create
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-editor;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;watch;update;delete
 // namespaces update is required by access.EnsureNamespaceLabel and
 // RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
 // discovery label. Not present upstream; do not drop when syncing.
-// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch,resourceNames=feast-capabilities-config
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
@@ -336,6 +338,51 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		Reason:  feastdevv1.ReadyReason,
 		Message: feastdevv1.ReadyMessage,
 	}
+
+	caps, capErr := capabilities.Load(ctx, r.Client)
+	if capErr != nil {
+		logger.Error(capErr, "Failed to load feast-capabilities-config")
+		condition = metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.FailedReason,
+			Message: "Error: " + capErr.Error(),
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		return ctrl.Result{Requeue: true, RequeueAfter: RequeueDelayError}, capErr
+	}
+
+	if services.IsDataRegistryCREnabled(cr) {
+		if !caps.DataRegistryEnabled {
+			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+			drCond.Reason = feastdevv1.DataRegistryDisabledReason
+			drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryDisabledMessage
+			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+			condition = metav1.Condition{
+				Type:    feastdevv1.ReadyType,
+				Status:  metav1.ConditionFalse,
+				Reason:  feastdevv1.DataRegistryDisabledReason,
+				Message: feastdevv1.DataRegistryDisabledMessage,
+			}
+			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+			cr.Status.Phase = feastdevv1.FailedPhase
+			logger.Info(condition.Message)
+			return ctrl.Result{}, nil
+		}
+	} else if !caps.FeatureStoreEnabled {
+		condition = metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.FeatureStoreDisabledReason,
+			Message: feastdevv1.FeatureStoreDisabledMessage,
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		logger.Info(condition.Message)
+		return ctrl.Result{}, nil
+	}
+
 	feast := services.FeastServices{
 		Handler: feasthandler.FeastHandler{
 			Client:       r.Client,
@@ -448,6 +495,14 @@ func (r *FeatureStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)
 	}
 
+	if capsNS := capabilities.OperatorNamespace(); capsNS != "" {
+		bldr = bldr.Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.mapCapabilitiesConfigToFeatureStores),
+			builder.WithPredicates(capabilitiesConfigMapPredicate(capsNS)),
+		)
+	}
+
 	return bldr.Complete(r)
 
 }
@@ -490,6 +545,39 @@ func (r *FeatureStoreReconciler) mapMlflowToFeastRequests(ctx context.Context, _
 		}
 		requests = append(requests, reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(fs),
+		})
+	}
+	return requests
+}
+
+func capabilitiesConfigMapPredicate(operatorNamespace string) predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		cm, ok := obj.(*corev1.ConfigMap)
+		if !ok {
+			return false
+		}
+		return cm.GetName() == capabilities.ConfigMapName && cm.GetNamespace() == operatorNamespace
+	})
+}
+
+func (r *FeatureStoreReconciler) mapCapabilitiesConfigToFeatureStores(ctx context.Context, obj client.Object) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+	if cm.GetName() != capabilities.ConfigMapName {
+		return nil
+	}
+	logger := log.FromContext(ctx)
+	var feastList feastdevv1.FeatureStoreList
+	if err := r.List(ctx, &feastList, client.InNamespace("")); err != nil {
+		logger.Error(err, "could not list FeatureStores for capabilities ConfigMap watch")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(feastList.Items))
+	for i := range feastList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&feastList.Items[i]),
 		})
 	}
 	return requests

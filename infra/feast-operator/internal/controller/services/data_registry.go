@@ -77,16 +77,34 @@ func (feast *FeastServices) validateDataRegistryNamespace() error {
 	); err != nil {
 		return fmt.Errorf("failed to read namespace %q for data-registry label check: %w", nsName, err)
 	}
-	if ns.Labels[DataRegistryNamespaceLabel] != "true" {
+	if !namespaceDesignatedForDataRegistry(ns) {
 		return fmt.Errorf(
 			"namespace %q is not designated for the data registry "+
-				"(missing required label %s=true); "+
+				"(missing required label %s=true or %s=true); "+
 				"the data-registry FeatureStore CR must be created in the namespace "+
 				"labeled by the platform operator (e.g. rhoai-data-registry)",
-			nsName, DataRegistryNamespaceLabel,
+			nsName, DataRegistryNamespaceLabel, DataRegistryPlatformNamespaceLabel,
 		)
 	}
 	return nil
+}
+
+func namespaceDesignatedForDataRegistry(ns *corev1.Namespace) bool {
+	if ns == nil || ns.Labels == nil {
+		return false
+	}
+	if ns.Labels[DataRegistryNamespaceLabel] == "true" {
+		return true
+	}
+	return ns.Labels[DataRegistryPlatformNamespaceLabel] == "true"
+}
+
+// IsDataRegistryCREnabled reports whether the CR carries the canonical data-registry annotation.
+func IsDataRegistryCREnabled(cr *feastdevv1.FeatureStore) bool {
+	if cr == nil {
+		return false
+	}
+	return cr.GetAnnotations()[DataRegistryAnnotation] == "true"
 }
 
 // validateDataRegistrySingleton ensures only one FeatureStore CR across the
@@ -241,7 +259,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 				Annotations: map[string]string{
 					// kube-rbac-proxy reads auth.yaml only at process start.
 					// Bump this when SAR config semantics change so pods roll.
-					"dataregistry.opendatahub.io/auth-config-revision": "static-sar-v1",
+					"dataregistry.opendatahub.io/auth-config-revision": "format2-endpoints-v1",
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -295,16 +313,13 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		return corev1.Container{}, err
 	}
 
-	// HTTP probe against GET /projects: data-registry mode always forces no_auth
-	// in feature_store.yaml (repo_config.go:getServiceRepoConfig), so the Feast
-	// server never challenges the kubelet with a 401. A TCP probe only confirms
-	// uvicorn is listening; the HTTP probe confirms the REST API is actually
-	// serving responses, which is the meaningful readiness signal.
-	// /projects is a stable GET endpoint that returns HTTP 200 with an empty
-	// list even before any projects are explicitly registered.
+	// HTTP probe against GET /healthz: a lightweight endpoint registered before
+	// any auth middleware, so it always returns 200 regardless of SSAR config.
+	// /projects cannot be used because catalog_ssar.py requires a bearer token
+	// when CATALOG_SSAR_API_GROUP is set, and kubelet probes carry no token.
 	probeHandler := corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{
-			Path:   "/projects",
+			Path:   "/healthz",
 			Port:   intstr.FromInt32(DataRegistryPort),
 			Scheme: corev1.URISchemeHTTP,
 		},
@@ -356,11 +371,10 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 // The proxy listens on 0.0.0.0:8443 (HTTPS) and forwards authenticated
 // requests to the feast-server at 127.0.0.1:6572.
 //
-// TODO: Once the ODH kube-rbac-proxy fork with byPathSegment support
-// merges, replace --ignore-paths with per-path SAR rewrites that extract
-// {project} from the URL and set SAR namespace accordingly for per-tenant
-// namespace authorization. The ODH fork image should also replace the brancz
-// fallback in DefaultKubeRBACProxyImage.
+// Auth.yaml uses Format2 endpoint rules (per-path SAR with byQueryParameter
+// namespace extraction) for resource CRUD endpoints and a Format1 fallback
+// for POST / miscellaneous paths. Requires the ODH kube-rbac-proxy fork
+// with named path capture support (opendatahub-io/kube-rbac-proxy#28).
 func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 	return corev1.Container{
 		Name:  DataRegistryProxyContainerName,
@@ -375,9 +389,8 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			// per-namespace SSAR filtering that cannot be expressed as a single
 			// resource SAR. The Feast server reads the bearer token from the
 			// request, performs TokenReview + per-namespace SubjectAccessReview,
-			// and returns only authorized results.
-			// /search is NOT in ignore-paths: it goes through the proxy SAR gate
-			// so unauthenticated callers get 401 (S1 fix).
+			// and returns only authorized results. The proxy must pass the
+			// Authorization header through unchanged for catalog_ssar.py.
 			"--ignore-paths=/projects,/api/v1/projects",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
@@ -536,37 +549,113 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cr := feast.Handler.FeatureStore
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
-	// Static SAR attributes are the coarse auth gate for Feast REST
-	// (/entities, /feature_views, …). kube-rbac-proxy maps GET→get and
-	// POST→create on this resource. /projects bypasses this gate via
-	// --ignore-paths and uses server-side SSAR instead. /search goes through
-	// the proxy gate (no ignore-paths entry) to prevent unauthenticated access.
+	// Two-layer auth.yaml using Format1 + Format2 (endpoint rules).
 	//
-	// Do not set `rewrites`. kube-rbac-proxy v0.18.1 only supports
-	// byQueryParameter and byHttpHeader. An empty rewrite (including the
-	// unsupported byHTTPPath key) produces no SAR attributes and the proxy
-	// returns HTTP 400 for every authenticated request:
-	// "Bad Request. The request or configuration is malformed."
+	// Format2 endpoints (path-scoped rules) take priority when the request
+	// path matches. They use byQueryParameter to extract the Feast project
+	// (= Kubernetes namespace) from ?project=<ns> and perform a per-namespace
+	// SubjectAccessReview, giving fine-grained per-tenant authorization.
 	//
-	// TODO: Once the ODH fork with byPathSegment support merges,
-	// switch to Format2 auth.yaml that extracts {project} from the URL path
-	// and uses it as the SAR namespace for per-tenant namespace authorization.
+	// Format1 (top-level resourceAttributes) is the fallback for paths NOT
+	// matched by any Format2 endpoint — e.g. POST requests where project is
+	// in the body, not the query string. It gates on a static SAR against the
+	// CR's namespace (coarse authentication + authorization gate).
 	//
-	// Namespace must be set: RoleBindings grant namespaced access. An empty
-	// namespace makes SAR cluster-scoped, which would not match the
-	// RoleBinding.
-	authYaml := `authorization:
-  resourceAttributes:
-    namespace: ` + cr.Namespace + `
-    apiGroup: ` + dataRegistryAPIGroup + `
-    resource: registries
-`
+	// /projects is in --ignore-paths so the proxy passes the bearer token
+	// through unchanged for server-side SSAR (catalog_ssar.py).
+	//
+	// Requires the ODH kube-rbac-proxy fork with named path capture support
+	// (opendatahub-io/kube-rbac-proxy#28).
+	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{
 		"auth.yaml": authYaml,
 	}
 
 	return controllerutil.SetControllerReference(cr, cm, feast.Handler.Scheme)
+}
+
+// buildDataRegistryAuthYaml generates the kube-rbac-proxy auth.yaml using
+// Format2 endpoint rules for per-namespace authorization on resource CRUD
+// endpoints, with a Format1 fallback for unmatched paths.
+//
+// Resource CRUD endpoints (GET/DELETE with ?project=<ns>) get per-namespace
+// SAR via byQueryParameter rewrite. POST endpoints (project in body) and
+// /search (multi-project via ?projects=) fall through to Format1's static
+// SAR gate. /projects is handled by --ignore-paths + server-side SSAR.
+func (feast *FeastServices) buildDataRegistryAuthYaml() string {
+	ns := feast.Handler.FeatureStore.Namespace
+	apiGroup := dataRegistryAPIGroup
+
+	// Format2 endpoint rules for resource paths that carry ?project=<namespace>.
+	// The proxy extracts the project query param and runs a per-namespace SAR.
+	// GET→get, DELETE→delete verbs are mapped automatically by kube-rbac-proxy.
+	// POST endpoints are NOT listed here because the project is in the request
+	// body, not the query string — they fall through to the Format1 fallback.
+	endpointPaths := []string{
+		"/entities",
+		"/entities/*",
+		"/feature_views",
+		"/feature_views/*",
+		"/feature_services",
+		"/feature_services/*",
+		"/data_sources",
+		"/data_sources/*",
+		"/saved_datasets",
+		"/saved_datasets/*",
+		"/permissions",
+		"/permissions/*",
+		"/features",
+		"/features/*",
+		"/label_views",
+		"/label_views/*",
+	}
+
+	var b strings.Builder
+	b.WriteString("authorization:\n")
+
+	// Format1 fallback: static SAR for paths not matched by any Format2 endpoint.
+	// This catches POST requests (project in body), miscellaneous paths, and any
+	// new endpoints added to the Feast REST API that aren't yet listed above.
+	b.WriteString("  resourceAttributes:\n")
+	b.WriteString("    namespace: " + ns + "\n")
+	b.WriteString("    apiGroup: " + apiGroup + "\n")
+	b.WriteString("    resource: registries\n")
+
+	// Format2 endpoint rules.
+	b.WriteString("  endpoints:\n")
+
+	// Per-namespace endpoints: extract ?project=<ns> from query params.
+	for _, path := range endpointPaths {
+		b.WriteString("    - path: " + path + "\n")
+		b.WriteString("      mappings:\n")
+		b.WriteString("        - methods: [get, delete]\n")
+		b.WriteString("          resources:\n")
+		b.WriteString("            - rewrites:\n")
+		b.WriteString("                byQueryParameter:\n")
+		b.WriteString("                  name: project\n")
+		b.WriteString("              resourceAttributes:\n")
+		b.WriteString("                namespace: \"{{ .Value }}\"\n")
+		b.WriteString("                apiGroup: " + apiGroup + "\n")
+		b.WriteString("                resource: registries\n")
+	}
+
+	// /search: static SAR gate (authentication + coarse authorization).
+	// /search uses ?projects= (plural, multi-value) — the proxy can only
+	// extract a single value, so per-namespace filtering remains a server-side
+	// concern. The Format2 rule ensures /search has an explicit auth gate
+	// rather than relying on the Format1 fallback behavior.
+	b.WriteString("    - path: /search\n")
+	b.WriteString("      mappings:\n")
+	b.WriteString("        - methods: [get]\n")
+	b.WriteString("          resources:\n")
+	b.WriteString("            - resourceAttributes:\n")
+	b.WriteString("                namespace: " + ns + "\n")
+	b.WriteString("                apiGroup: " + apiGroup + "\n")
+	b.WriteString("                resource: registries\n")
+	b.WriteString("                verb: get\n")
+
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
