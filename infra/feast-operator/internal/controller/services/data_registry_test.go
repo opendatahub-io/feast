@@ -71,8 +71,10 @@ var _ = Describe("Data Registry", func() {
 		}
 		if add {
 			nsObj.Labels[DataRegistryNamespaceLabel] = "true"
+			delete(nsObj.Labels, DataRegistryPlatformNamespaceLabel)
 		} else {
 			delete(nsObj.Labels, DataRegistryNamespaceLabel)
+			delete(nsObj.Labels, DataRegistryPlatformNamespaceLabel)
 		}
 		Expect(k8sClient.Update(ctx, nsObj)).To(Succeed())
 	}
