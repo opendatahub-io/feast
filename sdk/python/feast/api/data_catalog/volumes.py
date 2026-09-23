@@ -40,6 +40,7 @@ from feast.api.data_catalog.catalog_assets import (
     storage_uri,
 )
 from feast.api.data_catalog.catalog_utils import (
+    _registry,
     _require_namespace,
     _require_part,
     resolve_namespace,
@@ -50,7 +51,6 @@ from feast.api.data_catalog.errors import (
     BadRequestException,
     NoSuchNamespaceException,
     NoSuchVolumeException,
-    ServiceFailureException,
 )
 from feast.api.data_catalog.models import (
     CreateVolumeRequest,
@@ -63,13 +63,6 @@ from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
 
 _DEFAULT_VOLUME_TYPE = "EXTERNAL"
-
-
-def _registry(request: Request) -> BaseRegistry:
-    registry = getattr(request.app.state, "registry", None)
-    if registry is None:
-        raise ServiceFailureException("catalog registry is not configured")
-    return registry
 
 
 def _as_bad_request(exc: ValueError) -> BadRequestException:

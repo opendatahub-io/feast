@@ -27,6 +27,7 @@ from feast.api.data_catalog.catalog_utils import (
     DEFAULT_COLLECTION,
     _http_collection,
     _http_namespace,
+    _registry,
     create_namespace_meta,
     delete_namespace_meta,
     get_namespace_properties,
@@ -37,7 +38,6 @@ from feast.api.data_catalog.catalog_utils import (
 from feast.api.data_catalog.errors import (
     BadRequestException,
     NoSuchNamespaceException,
-    ServiceFailureException,
 )
 from feast.api.data_catalog.models import (
     CreateNamespaceRequest,
@@ -46,14 +46,6 @@ from feast.api.data_catalog.models import (
     UpdateNamespacePropertiesRequest,
     UpdateNamespacePropertiesResponse,
 )
-from feast.infra.registry.base_registry import BaseRegistry
-
-
-def _registry(request: Request) -> BaseRegistry:
-    registry = getattr(request.app.state, "registry", None)
-    if registry is None:
-        raise ServiceFailureException("catalog registry is not configured")
-    return registry
 
 
 def _project_and_collection(project: str, collection: str) -> tuple[str, str]:

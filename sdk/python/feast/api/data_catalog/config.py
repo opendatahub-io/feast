@@ -56,6 +56,9 @@ CATALOG_CONFIG_ENDPOINTS = [
     "GET /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
     "PATCH /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
     "DELETE /v1/{prefix}/namespaces/{namespace}/generic-tables/{table}",
+    "GET /v1/{prefix}/labels",
+    "POST /v1/{prefix}/labels",
+    "DELETE /v1/{prefix}/labels/{label}",
 ]
 
 
