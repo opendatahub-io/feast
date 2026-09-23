@@ -36,6 +36,8 @@ import json
 import threading
 from typing import Any, Callable
 
+from fastapi import Request
+
 from feast.api.data_catalog.errors import (
     BadRequestException,
     NamespaceAlreadyExistsException,
@@ -152,6 +154,13 @@ def resolve_namespace(raw: str | list[str]) -> str:
 
 def _as_bad_request(exc: ValueError) -> BadRequestException:
     return BadRequestException(str(exc))
+
+
+def _registry(request: Request) -> BaseRegistry:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise ServiceFailureException("catalog registry is not configured")
+    return registry
 
 
 def _http_namespace(project: str) -> str:
@@ -561,7 +570,7 @@ def parse_label_meta_key(key: str) -> tuple[str, str] | None:
     """Return ``(rhai_ns, label_name)`` or None if the key is not a label tag."""
     if not isinstance(key, str) or not key.startswith(LABEL_META_PREFIX):
         return None
-    rest = key[len(LABEL_META_PREFIX):]
+    rest = key[len(LABEL_META_PREFIX) :]
     if SCOPE_SEP not in rest:
         return None
     ns, label = rest.split(SCOPE_SEP, 1)
@@ -599,12 +608,13 @@ def list_discovered_labels(registry: BaseRegistry, rhai_ns: str) -> set[str]:
 
 def list_all_labels(registry: BaseRegistry, rhai_ns: str) -> list[str]:
     """Merge explicit + discovered labels, sorted."""
-    return sorted(list_explicit_labels(registry, rhai_ns) | list_discovered_labels(registry, rhai_ns))
+    return sorted(
+        list_explicit_labels(registry, rhai_ns)
+        | list_discovered_labels(registry, rhai_ns)
+    )
 
 
-def create_label_meta(
-    registry: BaseRegistry, rhai_ns: str, label_name: str
-) -> None:
+def create_label_meta(registry: BaseRegistry, rhai_ns: str, label_name: str) -> None:
     """Create a project-level label. Raises AlreadyExistsException if present anywhere."""
     from feast.api.data_catalog.errors import AlreadyExistsException
 
@@ -625,9 +635,7 @@ def create_label_meta(
     _mutate_catalog_project(registry, mutator)
 
 
-def delete_label_meta(
-    registry: BaseRegistry, rhai_ns: str, label_name: str
-) -> None:
+def delete_label_meta(registry: BaseRegistry, rhai_ns: str, label_name: str) -> None:
     """Delete a project-level label and cascade-remove from all assets.
 
     Raises NoSuchLabelException if the label does not exist anywhere
@@ -658,6 +666,7 @@ def delete_label_meta(
         raise NoSuchLabelException(f"Label does not exist: {label_name}")
 
     if explicit_exists:
+
         def mutator(project: Project, conn: Any) -> None:
             tags = dict(project.tags)
             tags.pop(key, None)

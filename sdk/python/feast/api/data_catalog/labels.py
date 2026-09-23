@@ -28,28 +28,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response
 
 from feast.api.data_catalog.catalog_utils import (
+    _registry,
     _require_namespace,
     create_label_meta,
     delete_label_meta,
     list_all_labels,
 )
-from feast.api.data_catalog.errors import (
-    BadRequestException,
-    ServiceFailureException,
-)
+from feast.api.data_catalog.errors import BadRequestException
 from feast.api.data_catalog.models import (
     CreateLabelRequest,
     LabelListResponse,
     LabelResponse,
 )
-from feast.infra.registry.base_registry import BaseRegistry
-
-
-def _registry(request: Request) -> BaseRegistry:
-    registry = getattr(request.app.state, "registry", None)
-    if registry is None:
-        raise ServiceFailureException("catalog registry is not configured")
-    return registry
 
 
 def _rhai_ns(project: str) -> str:
@@ -93,9 +83,7 @@ def get_label_router() -> APIRouter:
         "/v1/{project}/labels/{label}",
         status_code=204,
     )
-    def delete_label(
-        project: str, label: str, request: Request
-    ) -> Response:
+    def delete_label(project: str, label: str, request: Request) -> Response:
         rhai_ns = _rhai_ns(project)
         registry = _registry(request)
         label_name = label.strip()

@@ -272,7 +272,7 @@ def test_delete_label_does_not_affect_other_projects(sqlite_registry):
     _ensure_collection(client)
     _ensure_collection(client, project="other-user", collection=COL)
     client.post(f"/v1/{NS}/labels", json={"name": "pii"})
-    client.post(f"/v1/other-user/labels", json={"name": "pii"})
+    client.post("/v1/other-user/labels", json={"name": "pii"})
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
         json={"name": "claims", "location": "s3://b/c/", "labels": ["pii"]},
