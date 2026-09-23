@@ -33,6 +33,7 @@ from feast.api.data_catalog.catalog_utils import (
     _http_collection,
     _http_namespace,
     _http_part,
+    _registry,
     scoped_name,
     unscoped_name,
     validate_namespace_exists,
@@ -41,7 +42,6 @@ from feast.api.data_catalog.errors import (
     NoSuchNamespaceException,
     NoSuchTableException,
     NotImplementedException,
-    ServiceFailureException,
 )
 from feast.api.data_catalog.models import (
     IcebergField,
@@ -61,13 +61,6 @@ _TABLE_UNIMPLEMENTED = (
     "This catalog supports list and exists only; engines must use "
     "their own object-store credentials"
 )
-
-
-def _registry(request: Request) -> BaseRegistry:
-    registry = getattr(request.app.state, "registry", None)
-    if registry is None:
-        raise ServiceFailureException("catalog registry is not configured")
-    return registry
 
 
 def _project_and_collection(project: str, collection: str) -> tuple[str, str]:

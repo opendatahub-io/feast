@@ -70,6 +70,11 @@ class NoSuchVolumeException(IcebergRESTException):
     error_type = "NoSuchVolumeException"
 
 
+class NoSuchLabelException(IcebergRESTException):
+    http_status = 404
+    error_type = "NoSuchLabelException"
+
+
 class NamespaceNotEmptyException(IcebergRESTException):
     http_status = 409
     error_type = "NamespaceNotEmptyException"

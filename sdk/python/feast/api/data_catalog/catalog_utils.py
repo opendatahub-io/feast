@@ -36,6 +36,8 @@ import json
 import threading
 from typing import Any, Callable
 
+from fastapi import Request
+
 from feast.api.data_catalog.errors import (
     BadRequestException,
     NamespaceAlreadyExistsException,
@@ -54,6 +56,7 @@ CATALOG_PROJECT = "data-registry"
 DEFAULT_COLLECTION = "default"
 NAMESPACE_SEPARATOR = "\x1f"
 NS_META_PREFIX = "_ns_meta_"
+LABEL_META_PREFIX = "_label_"
 CATALOG_MANAGED_TAG = "_catalog_managed"
 CATALOG_MANAGED_VALUE = "true"
 _CATALOG_MANAGED_TAGS = {CATALOG_MANAGED_TAG: CATALOG_MANAGED_VALUE}
@@ -151,6 +154,13 @@ def resolve_namespace(raw: str | list[str]) -> str:
 
 def _as_bad_request(exc: ValueError) -> BadRequestException:
     return BadRequestException(str(exc))
+
+
+def _registry(request: Request) -> BaseRegistry:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise ServiceFailureException("catalog registry is not configured")
+    return registry
 
 
 def _http_namespace(project: str) -> str:
@@ -538,3 +548,132 @@ def _ns_meta_collections(registry: BaseRegistry, rhai_ns: str) -> set[str]:
         if parsed and parsed[0] == rhai_ns:
             found.add(parsed[1])
     return found
+
+
+# ---------------------------------------------------------------------------
+# Label meta helpers (project-level label CRUD)
+# ---------------------------------------------------------------------------
+
+
+def label_meta_key(rhai_ns: str, label_name: str) -> str:
+    """Scoped Project tag key for a project-level label."""
+    ns = _require_namespace(rhai_ns)
+    if not label_name or not label_name.strip():
+        raise ValueError("label name must not be empty")
+    name = label_name.strip()
+    if "/" in name:
+        raise ValueError(f"label name must not contain '/' (got {name!r})")
+    return f"{LABEL_META_PREFIX}{ns}/{name}"
+
+
+def parse_label_meta_key(key: str) -> tuple[str, str] | None:
+    """Return ``(rhai_ns, label_name)`` or None if the key is not a label tag."""
+    if not isinstance(key, str) or not key.startswith(LABEL_META_PREFIX):
+        return None
+    rest = key[len(LABEL_META_PREFIX) :]
+    if SCOPE_SEP not in rest:
+        return None
+    ns, label = rest.split(SCOPE_SEP, 1)
+    if not ns or not label:
+        return None
+    return ns, label
+
+
+def list_explicit_labels(registry: BaseRegistry, rhai_ns: str) -> set[str]:
+    """Labels explicitly created via POST /labels (stored as Project tags)."""
+    ns = _require_namespace(rhai_ns)
+    project = _get_catalog_project(registry)
+    if project is None:
+        return set()
+    found: set[str] = set()
+    for key in project.tags or {}:
+        parsed = parse_label_meta_key(key)
+        if parsed and parsed[0] == ns:
+            found.add(parsed[1])
+    return found
+
+
+def list_discovered_labels(registry: BaseRegistry, rhai_ns: str) -> set[str]:
+    """Labels found on assets (from ``_labels`` tags on SavedDatasets)."""
+    from feast.api.data_catalog.catalog_assets import labels_from_tags
+
+    ns = _require_namespace(rhai_ns)
+    found: set[str] = set()
+    for dataset in _catalog_saved_datasets(registry, ns):
+        labels = labels_from_tags(dataset.tags or {})
+        if labels:
+            found.update(labels)
+    return found
+
+
+def list_all_labels(registry: BaseRegistry, rhai_ns: str) -> list[str]:
+    """Merge explicit + discovered labels, sorted."""
+    return sorted(
+        list_explicit_labels(registry, rhai_ns)
+        | list_discovered_labels(registry, rhai_ns)
+    )
+
+
+def create_label_meta(registry: BaseRegistry, rhai_ns: str, label_name: str) -> None:
+    """Create a project-level label. Raises AlreadyExistsException if present anywhere."""
+    from feast.api.data_catalog.errors import AlreadyExistsException
+
+    ns = _require_namespace(rhai_ns)
+    key = label_meta_key(ns, label_name)
+
+    discovered = list_discovered_labels(registry, ns)
+
+    def mutator(project: Project, conn: Any) -> None:
+        if key in project.tags:
+            raise AlreadyExistsException(f"Label already exists: {label_name}")
+        if label_name in discovered:
+            raise AlreadyExistsException(f"Label already exists: {label_name}")
+        tags = dict(project.tags)
+        tags[key] = "true"
+        project.tags = tags
+
+    _mutate_catalog_project(registry, mutator)
+
+
+def delete_label_meta(registry: BaseRegistry, rhai_ns: str, label_name: str) -> None:
+    """Delete a project-level label and cascade-remove from all assets.
+
+    Raises NoSuchLabelException if the label does not exist anywhere
+    (neither as an explicit project tag nor on any asset).
+    """
+    from feast.api.data_catalog.catalog_assets import (
+        labels_from_tags,
+        merge_labels,
+        replace_catalog_dataset,
+    )
+    from feast.api.data_catalog.errors import NoSuchLabelException
+
+    ns = _require_namespace(rhai_ns)
+    key = label_meta_key(ns, label_name)
+
+    explicit_exists = False
+    project = _get_catalog_project(registry)
+    if project is not None and key in (project.tags or {}):
+        explicit_exists = True
+
+    assets_with_label: list = []
+    for dataset in _catalog_saved_datasets(registry, ns):
+        labels = labels_from_tags(dataset.tags or {})
+        if labels and label_name in labels:
+            assets_with_label.append(dataset)
+
+    if not explicit_exists and not assets_with_label:
+        raise NoSuchLabelException(f"Label does not exist: {label_name}")
+
+    if explicit_exists:
+
+        def mutator(project: Project, conn: Any) -> None:
+            tags = dict(project.tags)
+            tags.pop(key, None)
+            project.tags = tags
+
+        _mutate_catalog_project(registry, mutator, create_if_missing=False)
+
+    for dataset in assets_with_label:
+        dataset.tags = merge_labels(dataset.tags or {}, remove=[label_name])
+        replace_catalog_dataset(registry, dataset)
