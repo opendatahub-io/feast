@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -225,6 +225,21 @@ class CreateLabelRequest(BaseModel):
 
 class LabelResponse(BaseModel):
     name: str
+
+
+class SearchResult(BaseModel):
+    type: str
+    namespace: list[str] = Field(min_length=1, max_length=1)
+    name: str
+    description: str | None = None
+    properties: dict[str, str] = Field(default_factory=dict)
+    score: int = 0
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[SearchResult]
+    pagination: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

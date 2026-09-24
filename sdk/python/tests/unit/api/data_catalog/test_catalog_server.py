@@ -109,3 +109,7 @@ def test_s7_flag_on_volume_and_projects(sql_repo_config, monkeypatch):
     )
     assert parquet.status_code == 201, parquet.text
     assert client.get("/v1/projects").json() == {"projects": ["demo-user-1"]}
+    search = client.get("/v1/demo-user-1/search")
+    assert search.status_code == 200, search.text
+    assert search.json()["query"] == ""
+    assert "pagination" in search.json()

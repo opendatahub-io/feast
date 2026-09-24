@@ -83,7 +83,7 @@ def test_config_endpoints_include_namespace_crud():
         in CATALOG_CONFIG_ENDPOINTS
     )
     assert "GET /v1/projects" in CATALOG_CONFIG_ENDPOINTS
-    assert all("/search" not in sig for sig in CATALOG_CONFIG_ENDPOINTS)
+    assert "GET /v1/{prefix}/search" in CATALOG_CONFIG_ENDPOINTS
     assert "GET /v1/{prefix}/labels" in CATALOG_CONFIG_ENDPOINTS
     assert "POST /v1/{prefix}/labels" in CATALOG_CONFIG_ENDPOINTS
     assert "DELETE /v1/{prefix}/labels/{label}" in CATALOG_CONFIG_ENDPOINTS
