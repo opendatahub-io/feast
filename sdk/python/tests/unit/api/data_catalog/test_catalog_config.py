@@ -55,7 +55,7 @@ def test_get_v1_project_config_sets_prefix():
 
 
 def test_config_endpoints_are_iceberg_prefix_shaped():
-    _UNPREFIXED = {"GET /v1/config", "GET /v1/projects"}
+    _UNPREFIXED = {"GET /v1/config"}
     for signature in CATALOG_CONFIG_ENDPOINTS:
         assert "{prefix}" in signature or signature in _UNPREFIXED
         assert "{project}" not in signature
@@ -82,7 +82,11 @@ def test_config_endpoints_include_namespace_crud():
         "POST /v1/{prefix}/namespaces/{namespace}/generic-tables"
         in CATALOG_CONFIG_ENDPOINTS
     )
-    assert "GET /v1/projects" in CATALOG_CONFIG_ENDPOINTS
+    assert "GET /v1/projects" not in CATALOG_CONFIG_ENDPOINTS
+    assert (
+        "PATCH /v1/{prefix}/namespaces/{namespace}/volumes/{volume}"
+        in CATALOG_CONFIG_ENDPOINTS
+    )
     assert "GET /v1/{prefix}/search" in CATALOG_CONFIG_ENDPOINTS
     assert "GET /v1/{prefix}/labels" in CATALOG_CONFIG_ENDPOINTS
     assert "POST /v1/{prefix}/labels" in CATALOG_CONFIG_ENDPOINTS
@@ -115,8 +119,6 @@ def test_path_project_mixed_case_is_400_not_prefix():
     _assert_iceberg_400(response)
 
 
-def test_get_v1_projects_empty_without_registry():
+def test_get_v1_projects_route_removed():
     response = _client().get("/v1/projects")
-    assert response.status_code == 200
-    assert response.json() == {"projects": []}
-    assert "error" not in response.json()
+    assert response.status_code == 404

@@ -24,29 +24,25 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, Query, Request, Response
 
 from feast.api.data_catalog.catalog_assets import (
-    connection_ref_from_tags,
+    catalog_asset_response,
     connection_ref_to_tag,
     delete_catalog_dataset,
     get_catalog_dataset,
     insert_catalog_dataset,
-    isoformat_ts,
-    labels_from_tags,
     labels_to_tag,
     list_catalog_datasets,
     merge_labels,
     merge_public_properties,
     notes_from_properties,
-    public_properties,
+    owner_from_identity,
     replace_catalog_dataset,
     schema_fields_to_columns,
-    storage_uri,
 )
 from feast.api.data_catalog.catalog_utils import (
     _registry,
     _require_namespace,
     _require_part,
     resolve_namespace,
-    unscoped_name,
     validate_namespace_exists,
 )
 from feast.api.data_catalog.errors import (
@@ -58,14 +54,11 @@ from feast.api.data_catalog.models import (
     AssetListResponse,
     AssetResponse,
     CreateGenericTableRequest,
-    SchemaField,
     UpdateGenericTableRequest,
 )
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
-
-_DEFAULT_TABLE_FORMAT = "iceberg"
 
 
 def _as_bad_request(exc: ValueError) -> BadRequestException:
@@ -98,47 +91,6 @@ def _require_collection(registry: BaseRegistry, rhai_ns: str, collection: str) -
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 
 
-def _table_format(fmt: str | None) -> str:
-    stripped = (fmt or "").strip()
-    return stripped or _DEFAULT_TABLE_FORMAT
-
-
-def _asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
-    tags = dataset.tags or {}
-    columns = [
-        SchemaField(
-            name=column.name,
-            type=column.type,
-            description=column.description or "",
-            nullable=column.nullable,
-        )
-        for column in (dataset.columns or [])
-    ]
-    props = public_properties(tags)
-    for key in ("purpose", "license", "maturity", "domain", "pii"):
-        val = tags.get(key)
-        if val:
-            props[key] = val
-    return AssetResponse(
-        name=unscoped_name(dataset.name),
-        asset_type=tags.get("asset_type") or "table",
-        uuid=tags.get("uuid"),
-        format=tags.get("format"),
-        location=storage_uri(dataset) or None,
-        columns=columns or None,
-        collection=collection,
-        connection_ref=connection_ref_from_tags(tags),
-        owner=tags.get("owner") or None,
-        description=dataset.description or None,
-        labels=labels_from_tags(tags),
-        properties=props or None,
-        registered_by=tags.get("registered_by") or None,
-        updated_by=tags.get("updated_by") or None,
-        created_at=isoformat_ts(dataset.created_timestamp),
-        updated_at=isoformat_ts(dataset.last_updated_timestamp),
-    )
-
-
 def _get_table(
     registry: BaseRegistry, rhai_ns: str, collection: str, table: str
 ) -> SavedDataset:
@@ -166,7 +118,7 @@ def get_generic_table_router() -> APIRouter:
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         assets = [
-            _asset_response(dataset, col)
+            catalog_asset_response(dataset, col)
             for dataset in list_catalog_datasets(
                 registry, rhai_ns, col, asset_type="table"
             )
@@ -206,26 +158,24 @@ def get_generic_table_router() -> APIRouter:
             **label_tags,
             **ref_tags,
             "asset_type": "table",
-            "format": _table_format(body.format),
+            "format": body.format,
+            "owner": owner_from_identity(x_user, kubeflow_userid),
         }
-        for key in ("purpose", "license", "maturity", "domain", "pii", "owner"):
+        for key in ("purpose", "license", "maturity", "domain", "pii"):
             value = getattr(body, key)
             if value:
                 tags[key] = value
-        registered_by = x_user or kubeflow_userid
-        if registered_by:
-            tags["registered_by"] = registered_by
         dataset = insert_catalog_dataset(
             registry,
             rhai_ns=rhai_ns,
             collection=col,
             display_name=display,
-            location=(body.location or "").strip(),
+            location=(body.storage_location or "").strip(),
             tags=tags,
             description=body.description or "",
             columns=columns,
         )
-        return _asset_response(dataset, col)
+        return catalog_asset_response(dataset, col)
 
     @router.get(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
@@ -239,7 +189,7 @@ def get_generic_table_router() -> APIRouter:
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         dataset = _get_table(registry, rhai_ns, col, _display_name(table))
-        return _asset_response(dataset, col)
+        return catalog_asset_response(dataset, col)
 
     @router.patch(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
@@ -251,8 +201,6 @@ def get_generic_table_router() -> APIRouter:
         table: str,
         body: UpdateGenericTableRequest,
         request: Request,
-        x_user: str | None = Header(default=None, alias="X-User"),
-        kubeflow_userid: str | None = Header(default=None, alias="kubeflow-userid"),
     ) -> AssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
@@ -261,9 +209,7 @@ def get_generic_table_router() -> APIRouter:
         dataset = _get_table(registry, rhai_ns, col, _display_name(table))
         tags = dict(dataset.tags or {})
         if body.format is not None:
-            tags["format"] = _table_format(body.format)
-        if body.owner is not None:
-            tags["owner"] = body.owner
+            tags["format"] = body.format
         if "connection_ref" in body.model_fields_set:
             tags.pop("_connection_ref", None)
             try:
@@ -284,13 +230,11 @@ def get_generic_table_router() -> APIRouter:
             value = getattr(body, key)
             if value is not None:
                 tags[key] = value
-        updated_by = x_user or kubeflow_userid
-        if updated_by:
-            tags["updated_by"] = updated_by
         if body.description is not None:
             dataset.description = body.description
-        if body.location is not None:
-            dataset.storage = SavedDatasetFileStorage(path=body.location)
+        if "storage_location" in body.model_fields_set:
+            path = body.storage_location or ""
+            dataset.storage = SavedDatasetFileStorage(path=path)
         if body.schema_fields is not None:
             try:
                 dataset.columns = schema_fields_to_columns(body.schema_fields)
@@ -298,7 +242,7 @@ def get_generic_table_router() -> APIRouter:
                 raise _as_bad_request(exc) from exc
         dataset.tags = tags
         updated = replace_catalog_dataset(registry, dataset)
-        return _asset_response(updated, col)
+        return catalog_asset_response(updated, col)
 
     @router.delete(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
