@@ -37,6 +37,7 @@ NS = "demo-user-1"
 COL = "underwriting"
 OTHER = "other-user"
 EMPTY_NS = "empty-tenant-9"
+AUTH = {"X-User": "test-user"}
 
 
 @pytest.fixture
@@ -96,6 +97,7 @@ def _seed_underwriting(client):
                 "purpose": "fraud",
                 "labels": ["pii"],
             },
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -104,9 +106,11 @@ def _seed_underwriting(client):
             f"/v1/{NS}/namespaces/{COL}/volumes",
             json={
                 "name": "claims-pdfs",
-                "location": "s3://bucket/docs/",
-                "comment": "raw pdf dump",
+                "format": "documents",
+                "storage_location": "s3://bucket/docs/",
+                "description": "raw pdf dump",
             },
+            headers=AUTH,
         ).status_code
         == 200
     )
@@ -166,6 +170,7 @@ def test_does_not_leak_other_rhoai_project(sqlite_registry):
         client.post(
             f"/v1/{OTHER}/namespaces/{COL}/generic-tables",
             json={"name": "secret-table", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -213,6 +218,7 @@ def test_score_40_fuzzy_over_http(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "abcx", "format": "parquet", "description": "nope"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -231,6 +237,7 @@ def test_namespaces_filters_multiple_collections(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "in-underwriting", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -238,6 +245,7 @@ def test_namespaces_filters_multiple_collections(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{other_col}/generic-tables",
             json={"name": "in-claims", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -343,6 +351,7 @@ def test_asset_type_filters(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "plain-parquet", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -380,6 +389,7 @@ def test_properties_format_iceberg(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "plain-parquet", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -423,13 +433,15 @@ def test_iceberg_table_type_matches_format_case_insensitive(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "upper-fmt", "format": "ICEBERG"},
+            headers=AUTH,
         ).status_code
-        == 201
+        == 400
     )
     assert (
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "lower-fmt", "format": "iceberg"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -437,7 +449,7 @@ def test_iceberg_table_type_matches_format_case_insensitive(sqlite_registry):
         r["name"] for r in _search(client, asset_type="iceberg_table").json()["results"]
     }
     assert "lower-fmt" in names
-    assert "upper-fmt" in names
+    assert "upper-fmt" not in names
 
 
 def test_page_past_end_is_400(sqlite_registry):
@@ -448,6 +460,7 @@ def test_page_past_end_is_400(sqlite_registry):
             client.post(
                 f"/v1/{NS}/namespaces/{COL}/generic-tables",
                 json={"name": name, "format": "parquet"},
+                headers=AUTH,
             ).status_code
             == 201
         )
@@ -484,6 +497,7 @@ def test_pagination_feast_shape(sqlite_registry):
             client.post(
                 f"/v1/{NS}/namespaces/{COL}/generic-tables",
                 json={"name": name, "format": "parquet"},
+                headers=AUTH,
             ).status_code
             == 201
         )
@@ -569,7 +583,12 @@ def test_search_via_rest_registry_server(tmp_path, monkeypatch):
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     created = client.post(
         "/v1/demo-user-1/namespaces/default/volumes",
-        json={"name": "docs", "location": "s3://bucket/docs/"},
+        json={
+            "name": "docs",
+            "format": "documents",
+            "storage_location": "s3://bucket/docs/",
+        },
+        headers=AUTH,
     )
     assert created.status_code == 200, created.text
     resp = client.get("/v1/demo-user-1/search")
@@ -625,6 +644,7 @@ def test_sort_by_name_is_case_insensitive(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "Zebra", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -632,6 +652,7 @@ def test_sort_by_name_is_case_insensitive(sqlite_registry):
         client.post(
             f"/v1/{NS}/namespaces/{COL}/generic-tables",
             json={"name": "apple", "format": "parquet"},
+            headers=AUTH,
         ).status_code
         == 201
     )
@@ -654,7 +675,7 @@ def test_schema_and_storage_uri_are_searchable(sqlite_registry):
                 "name": "schema-tbl",
                 "format": "parquet",
                 "description": "nope",
-                "location": "s3://warehouse/schema-tbl/",
+                "storage_location": "s3://warehouse/schema-tbl/",
                 "schema_fields": [
                     {
                         "name": "claim_amount",
@@ -663,6 +684,7 @@ def test_schema_and_storage_uri_are_searchable(sqlite_registry):
                     }
                 ],
             },
+            headers=AUTH,
         ).status_code
         == 201
     )

@@ -35,6 +35,7 @@ from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
 NS = "demo-user-1"
 COL = "underwriting"
 VOL = "claims-pdfs"
+AUTH = {"X-User": "test-user"}
 
 
 @pytest.fixture
@@ -71,10 +72,14 @@ def _ensure_collection(client: TestClient, project: str = NS, collection: str = 
     )
 
 
-def _create_volume(client: TestClient, **body) -> TestClient:
-    payload = {"name": VOL, "location": "s3://bucket/claims/"}
+def _create_volume(client: TestClient, **body):
+    payload = {
+        "name": VOL,
+        "format": "documents",
+        "storage_location": "s3://bucket/claims/",
+    }
     payload.update(body)
-    return client.post(f"/v1/{NS}/namespaces/{COL}/volumes", json=payload)
+    return client.post(f"/v1/{NS}/namespaces/{COL}/volumes", json=payload, headers=AUTH)
 
 
 def test_list_empty_default(sqlite_registry):
@@ -98,11 +103,23 @@ def test_create_get_head_delete(sqlite_registry):
     assert created.status_code == 200, created.text
     body = created.json()
     assert body["name"] == VOL
-    assert body["catalog-name"] == NS
-    assert body["schema-name"] == COL
-    assert body["volume-type"] == "EXTERNAL"
-    assert body["storage-location"] == "s3://bucket/claims/"
-    assert body["config"] == {}
+    assert body["asset_type"] == "volume"
+    assert body["format"] == "documents"
+    assert body["collection"] == COL
+    assert body["uuid"]
+    assert body["owner"] == "test-user"
+    assert body["storage_location"] == "s3://bucket/claims/"
+    assert body["columns"] is None
+    for key in (
+        "catalog-name",
+        "schema-name",
+        "volume-type",
+        "config",
+        "comment",
+        "location",
+        "registered_by",
+    ):
+        assert key not in body
     assert "document_count" not in body
 
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/volumes")
@@ -129,10 +146,15 @@ def test_create_in_default_without_namespace_post(sqlite_registry):
     client = _client(sqlite_registry)
     created = client.post(
         f"/v1/{NS}/namespaces/{DEFAULT_COLLECTION}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/"},
+        json={
+            "name": VOL,
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
+        },
+        headers=AUTH,
     )
     assert created.status_code == 200, created.text
-    assert created.json()["schema-name"] == DEFAULT_COLLECTION
+    assert created.json()["collection"] == DEFAULT_COLLECTION
     stored = sqlite_registry.get_saved_dataset(
         scoped_name(NS, DEFAULT_COLLECTION, VOL), CATALOG_PROJECT, allow_cache=False
     )
@@ -158,54 +180,46 @@ def test_missing_volume_404(sqlite_registry):
     assert deleted.status_code == 404
 
 
-def test_update_comment_and_storage_location(sqlite_registry):
+def test_update_description_and_storage_location(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     _create_volume(client)
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
-        json={"comment": "claims PDFs", "storage_location": "s3://bucket/claims-v2/"},
+        json={
+            "description": "claims PDFs",
+            "storage_location": "s3://bucket/claims-v2/",
+        },
     )
     assert updated.status_code == 200
     body = updated.json()
-    assert body["comment"] == "claims PDFs"
-    assert body["storage-location"] == "s3://bucket/claims-v2/"
+    assert body["description"] == "claims PDFs"
+    assert body["storage_location"] == "s3://bucket/claims-v2/"
 
 
-def test_storage_location_alias_on_create(sqlite_registry):
+def test_volume_put_returns_405(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    created = client.post(
-        f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "storage-location": "s3://bucket/alias/"},
+    _create_volume(client)
+    assert (
+        client.put(
+            f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+            json={"description": "x"},
+        ).status_code
+        == 405
     )
-    assert created.status_code == 200
-    assert created.json()["storage-location"] == "s3://bucket/alias/"
 
 
-def test_projects_from_collection_and_volume(sqlite_registry):
+def test_v1_projects_route_removed(sqlite_registry):
     client = _client(sqlite_registry)
-    empty = client.get("/v1/projects")
-    assert empty.status_code == 200
-    assert empty.json() == {"projects": []}
-
-    _ensure_collection(client)
-    after_ns = client.get("/v1/projects")
-    assert after_ns.json() == {"projects": [NS]}
-
-    client.post(
-        f"/v1/demo-user-2/namespaces/{DEFAULT_COLLECTION}/volumes",
-        json={"name": VOL, "location": "s3://other/"},
-    )
-    projects = client.get("/v1/projects").json()["projects"]
-    assert projects == [NS, "demo-user-2"]
+    assert client.get("/v1/projects").status_code == 404
 
 
 def test_properties_cannot_turn_volume_into_iceberg_table(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     _create_volume(client)
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={
             "properties": {
@@ -219,7 +233,7 @@ def test_properties_cannot_turn_volume_into_iceberg_table(sqlite_registry):
     assert updated.status_code == 200, updated.text
     body = updated.json()
     assert body["properties"] == {"team": "uw"}
-    assert body["volume-type"] == "EXTERNAL"
+    assert body["format"] == "documents"
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert iceberg.json() == {"identifiers": []}
     got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
@@ -296,7 +310,11 @@ def test_concurrent_create_same_volume_is_created_and_409():
                     collection=COL,
                     display_name=VOL,
                     location=location,
-                    tags={"asset_type": "volume", "volume_type": "EXTERNAL"},
+                    tags={
+                        "asset_type": "volume",
+                        "format": "documents",
+                        "owner": "test-user",
+                    },
                 )
                 outcomes.append("created")
             except AlreadyExistsException:
@@ -322,7 +340,12 @@ def test_concurrent_create_same_volume_is_created_and_409():
         assert listed.json()["volumes"][0]["name"] == VOL
         again = client.post(
             f"/v1/{NS}/namespaces/{COL}/volumes",
-            json={"name": VOL, "location": "s3://after-race/"},
+            json={
+                "name": VOL,
+                "format": "documents",
+                "storage_location": "s3://after-race/",
+            },
+            headers=AUTH,
         )
         assert again.status_code == 409
         assert again.json()["error"]["type"] == "AlreadyExistsException"
@@ -336,8 +359,8 @@ def test_timestamps_populated_on_create(sqlite_registry):
     created = _create_volume(client)
     assert created.status_code == 200, created.text
     body = created.json()
-    assert body["created-at"] is not None
-    assert body["updated-at"] is not None
+    assert body["created_at"] is not None
+    assert body["updated_at"] is not None
 
 
 def test_updated_at_changes_after_update(sqlite_registry):
@@ -346,47 +369,85 @@ def test_updated_at_changes_after_update(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     created = _create_volume(client)
-    created_at = created.json()["created-at"]
-    updated_at_v1 = created.json()["updated-at"]
+    created_at = created.json()["created_at"]
+    updated_at_v1 = created.json()["updated_at"]
     assert created_at is not None
     assert updated_at_v1 is not None
 
     time.sleep(0.05)
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
-        json={"comment": "v2"},
+        json={"description": "v2"},
     )
     assert updated.status_code == 200
-    assert updated.json()["created-at"] == created_at  # unchanged
-    assert updated.json()["updated-at"] >= updated_at_v1  # moved forward
+    assert updated.json()["created_at"] == created_at  # unchanged
+    assert updated.json()["updated_at"] >= updated_at_v1  # moved forward
 
 
-def test_owner_round_trips_on_create_and_update(sqlite_registry):
+def test_create_without_identity_header_is_400(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    created = client.post(
+    resp = client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/", "owner": "uw-team"},
+        json={"name": VOL, "format": "documents"},
     )
-    assert created.status_code == 200, created.text
-    assert created.json()["owner"] == "uw-team"
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "BadRequestException"
 
-    updated = client.put(
-        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
-        json={"owner": "claims-team"},
+
+def test_create_with_owner_in_body_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={
+            "name": VOL,
+            "format": "documents",
+            "owner": "uw-team",
+        },
+        headers=AUTH,
     )
-    assert updated.status_code == 200
-    assert updated.json()["owner"] == "claims-team"
+    assert resp.status_code == 400
 
-    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
-    assert got.json()["owner"] == "claims-team"
+
+def test_create_with_location_field_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "format": "documents", "location": "s3://x/"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_without_format_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_parquet_format_on_volume_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "format": "parquet"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
 
 
 def test_update_add_labels(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     _create_volume(client)
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={"add_labels": ["pii"]},
     )
@@ -401,9 +462,15 @@ def test_update_remove_labels(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw", "pii"]},
+        json={
+            "name": VOL,
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
+            "labels": ["uw", "pii"],
+        },
+        headers=AUTH,
     )
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={"remove_labels": ["pii"]},
     )
@@ -416,9 +483,15 @@ def test_update_add_and_remove_labels_combined(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw", "old"]},
+        json={
+            "name": VOL,
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
+            "labels": ["uw", "old"],
+        },
+        headers=AUTH,
     )
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={"add_labels": ["new"], "remove_labels": ["old"]},
     )
@@ -431,9 +504,15 @@ def test_update_add_label_idempotent(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw"]},
+        json={
+            "name": VOL,
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
+            "labels": ["uw"],
+        },
+        headers=AUTH,
     )
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={"add_labels": ["uw"]},
     )
@@ -446,9 +525,15 @@ def test_update_remove_missing_label_noop(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": VOL, "location": "s3://bucket/claims/", "labels": ["uw"]},
+        json={
+            "name": VOL,
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
+            "labels": ["uw"],
+        },
+        headers=AUTH,
     )
-    updated = client.put(
+    updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={"remove_labels": ["nonexistent"]},
     )
@@ -463,12 +548,14 @@ def test_connection_ref_round_trips(sqlite_registry):
         f"/v1/{NS}/namespaces/{COL}/volumes",
         json={
             "name": VOL,
-            "location": "s3://bucket/claims/",
+            "format": "documents",
+            "storage_location": "s3://bucket/claims/",
             "connection_ref": {
                 "type": "rhai",
                 "secret_name": "aws-creds",  # pragma: allowlist secret
             },
         },
+        headers=AUTH,
     )
     assert created.status_code == 200, created.text
     assert created.json()["connection_ref"] == {
@@ -484,9 +571,11 @@ def test_connection_ref_round_trips(sqlite_registry):
         f"/v1/{NS}/namespaces/{COL}/volumes",
         json={
             "name": "other",
-            "location": "s3://bucket/other/",
+            "format": "documents",
+            "storage_location": "s3://bucket/other/",
             "connection_ref": {"type": "unknown"},
         },
+        headers=AUTH,
     )
     assert bad.status_code == 400, bad.text
     assert bad.json()["error"]["type"] == "BadRequestException"
