@@ -93,6 +93,7 @@ def _seed_iceberg_table(registry, name: str = TABLE) -> None:
                 "_catalog_managed": "true",
                 "asset_type": "table",
                 "format": "iceberg",
+                "owner": "uw",
                 "uuid": "00000000-0000-4000-8000-000000000001",
             },
         ),
@@ -145,6 +146,7 @@ def test_create_parquet_201_no_invented_user(sqlite_registry):
     assert body["collection"] == COL
     assert body["owner"] == "test-user"
     assert "registered_by" not in body
+    assert "schema_fields" not in body
     assert body["columns"][0]["name"] == "claim_id"
     assert "document_count" not in body
 

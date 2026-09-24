@@ -46,15 +46,12 @@ _DEFAULT_LIMIT = 50
 
 _SEARCHABLE_FIRST_CLASS = (
     "format",
-    "volume_type",
     "owner",
     "purpose",
     "license",
     "maturity",
     "domain",
     "pii",
-    "registered_by",
-    "updated_by",
 )
 
 _RESULT_NOTE_KEYS = ("purpose", "license", "maturity", "domain", "pii")
