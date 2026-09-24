@@ -184,7 +184,10 @@ class AssetResponse(BaseModel):
     created_at: str
     updated_at: str
     storage_location: str | None = None
-    columns: list[SchemaField] | None = None
+    columns: list[SchemaField] | None = Field(
+        default=None,
+        description="Table schema on GET/PATCH responses. Create/update requests use schema_fields.",
+    )
     connection_ref: ConnectionRef | None = None
     description: str | None = None
     labels: list[str] | None = None

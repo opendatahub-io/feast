@@ -410,6 +410,63 @@ def test_create_with_owner_in_body_is_400(sqlite_registry):
     assert resp.status_code == 400
 
 
+def test_get_without_format_is_400_not_other(sqlite_registry):
+    """Stored volume_type=EXTERNAL is not a stand-in for UnstructuredFormat."""
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    assert _create_volume(client).status_code == 200
+    stored = sqlite_registry.get_saved_dataset(
+        scoped_name(NS, COL, VOL), CATALOG_PROJECT, allow_cache=False
+    )
+    tags = dict(stored.tags or {})
+    tags.pop("format", None)
+    tags["volume_type"] = "EXTERNAL"
+    stored.tags = tags
+    sqlite_registry.apply_saved_dataset(stored, CATALOG_PROJECT)
+    resp = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "BadRequestException"
+    assert "format" in resp.json()["error"]["message"].lower()
+
+
+def test_get_without_owner_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    assert _create_volume(client).status_code == 200
+    stored = sqlite_registry.get_saved_dataset(
+        scoped_name(NS, COL, VOL), CATALOG_PROJECT, allow_cache=False
+    )
+    tags = dict(stored.tags or {})
+    tags.pop("owner", None)
+    tags["registered_by"] = "legacy-user"
+    stored.tags = tags
+    sqlite_registry.apply_saved_dataset(stored, CATALOG_PROJECT)
+    resp = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "BadRequestException"
+    assert "owner" in resp.json()["error"]["message"].lower()
+
+
+def test_patch_does_not_change_owner(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={"name": VOL, "format": "documents"},
+        headers={"X-User": "creator"},
+    )
+    assert created.status_code == 200, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"description": "updated"},
+        headers={"X-User": "editor"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["owner"] == "creator"
+    assert "registered_by" not in patched.json()
+    assert "updated_by" not in patched.json()
+
+
 def test_create_with_location_field_is_400(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)

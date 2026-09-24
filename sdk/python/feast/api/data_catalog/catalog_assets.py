@@ -345,14 +345,9 @@ def structured_format_from_tags(tags: dict[str, str]) -> str:
 
 def unstructured_format_from_tags(tags: dict[str, str]) -> str:
     fmt = tags.get("format")
-    if fmt in UNSTRUCTURED_FORMATS:
-        return fmt
-    volume_type = tags.get("volume_type")
-    if volume_type in UNSTRUCTURED_FORMATS:
-        return volume_type
-    if volume_type in (None, "", "EXTERNAL"):
-        return "other"
-    raise BadRequestException("volume asset has invalid format")
+    if not fmt or fmt not in UNSTRUCTURED_FORMATS:
+        raise BadRequestException("volume asset has invalid or missing format")
+    return fmt
 
 
 def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
@@ -362,7 +357,9 @@ def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetRespo
         format_value = unstructured_format_from_tags(tags)
     else:
         format_value = structured_format_from_tags(tags)
-    owner = tags.get("owner") or tags.get("registered_by") or ""
+    owner = (tags.get("owner") or "").strip()
+    if not owner:
+        raise BadRequestException("asset missing owner")
     uuid = tags.get("uuid")
     if not uuid:
         raise ServiceFailureException("asset missing uuid")
