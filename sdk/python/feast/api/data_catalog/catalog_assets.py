@@ -35,8 +35,12 @@ from feast.api.data_catalog.catalog_utils import (
     scoped_name,
     unscoped_name,
 )
-from feast.api.data_catalog.errors import AlreadyExistsException
-from feast.api.data_catalog.models import ConnectionRef
+from feast.api.data_catalog.errors import (
+    AlreadyExistsException,
+    BadRequestException,
+    ServiceFailureException,
+)
+from feast.api.data_catalog.models import AssetResponse, ConnectionRef, SchemaField
 from feast.errors import SavedDatasetAlreadyExists, SavedDatasetNotFound
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
@@ -74,6 +78,13 @@ _MAX_LABEL_COUNT = 1_000
 _MAX_LABEL_LEN = 255
 _MAX_CONNECTION_REF_JSON = 4_096
 _CONNECTION_REF_ADAPTER: TypeAdapter[ConnectionRef] = TypeAdapter(ConnectionRef)
+
+STRUCTURED_FORMATS = frozenset(
+    {"iceberg", "parquet", "csv", "delta", "postgresql", "milvus", "other"}
+)
+UNSTRUCTURED_FORMATS = frozenset(
+    {"documents", "images", "audio", "video", "binary", "other"}
+)
 
 
 def isoformat_ts(value: datetime | None) -> str | None:
@@ -311,6 +322,86 @@ def delete_catalog_dataset(
         return False
     registry.delete_saved_dataset(dataset.name, CATALOG_PROJECT)
     return True
+
+
+def owner_from_identity(
+    x_user: str | None,
+    kubeflow_userid: str | None,
+) -> str:
+    ident = (x_user or "").strip() or (kubeflow_userid or "").strip()
+    if not ident:
+        raise BadRequestException(
+            "Owner cannot be determined from authenticated identity"
+        )
+    return ident
+
+
+def structured_format_from_tags(tags: dict[str, str]) -> str:
+    fmt = tags.get("format")
+    if not fmt or fmt not in STRUCTURED_FORMATS:
+        raise BadRequestException("table asset has invalid or missing format")
+    return fmt
+
+
+def unstructured_format_from_tags(tags: dict[str, str]) -> str:
+    fmt = tags.get("format")
+    if not fmt or fmt not in UNSTRUCTURED_FORMATS:
+        raise BadRequestException("volume asset has invalid or missing format")
+    return fmt
+
+
+def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
+    tags = dataset.tags or {}
+    asset_type = tags.get("asset_type") or "table"
+    if asset_type == "volume":
+        format_value = unstructured_format_from_tags(tags)
+    else:
+        format_value = structured_format_from_tags(tags)
+    owner = (tags.get("owner") or "").strip()
+    if not owner:
+        raise BadRequestException("asset missing owner")
+    uuid = tags.get("uuid")
+    if not uuid:
+        raise ServiceFailureException("asset missing uuid")
+    columns: list[SchemaField] | None
+    if asset_type == "table":
+        columns = [
+            SchemaField(
+                name=column.name,
+                type=column.type,
+                description=column.description or "",
+                nullable=column.nullable,
+            )
+            for column in (dataset.columns or [])
+        ]
+        if not columns:
+            columns = None
+    else:
+        columns = None
+    props = public_properties(tags)
+    for key in ("purpose", "license", "maturity", "domain", "pii"):
+        if tags.get(key):
+            props[key] = tags[key]
+    created_at = isoformat_ts(dataset.created_timestamp)
+    updated_at = isoformat_ts(dataset.last_updated_timestamp)
+    if not created_at and not updated_at:
+        raise ServiceFailureException("asset missing timestamps")
+    return AssetResponse(
+        name=unscoped_name(dataset.name),
+        asset_type=asset_type,
+        uuid=uuid,
+        format=format_value,
+        storage_location=storage_uri(dataset) or None,
+        columns=columns,
+        collection=collection,
+        connection_ref=connection_ref_from_tags(tags),
+        owner=owner,
+        description=dataset.description or None,
+        labels=labels_from_tags(tags),
+        properties=props or None,
+        created_at=created_at or updated_at or "",
+        updated_at=updated_at or created_at or "",
+    )
 
 
 def schema_fields_to_columns(fields: list[Any] | None) -> list[SavedDatasetColumn]:

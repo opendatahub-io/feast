@@ -20,31 +20,27 @@ Does not create or delete object-storage files.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Header, Request, Response
 
 from feast.api.data_catalog.catalog_assets import (
-    connection_ref_from_tags,
+    catalog_asset_response,
     connection_ref_to_tag,
     delete_catalog_dataset,
     get_catalog_dataset,
     insert_catalog_dataset,
-    isoformat_ts,
-    labels_from_tags,
     labels_to_tag,
     list_catalog_datasets,
     merge_labels,
     merge_public_properties,
     notes_from_properties,
-    public_properties,
+    owner_from_identity,
     replace_catalog_dataset,
-    storage_uri,
 )
 from feast.api.data_catalog.catalog_utils import (
     _registry,
     _require_namespace,
     _require_part,
     resolve_namespace,
-    unscoped_name,
     validate_namespace_exists,
 )
 from feast.api.data_catalog.errors import (
@@ -53,16 +49,14 @@ from feast.api.data_catalog.errors import (
     NoSuchVolumeException,
 )
 from feast.api.data_catalog.models import (
+    AssetResponse,
     CreateVolumeRequest,
     ListVolumesResponse,
     UpdateVolumeRequest,
-    VolumeInfo,
 )
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.saved_dataset import SavedDataset
-
-_DEFAULT_VOLUME_TYPE = "EXTERNAL"
 
 
 def _as_bad_request(exc: ValueError) -> BadRequestException:
@@ -95,25 +89,6 @@ def _require_collection(registry: BaseRegistry, rhai_ns: str, collection: str) -
         raise NoSuchNamespaceException(f"Namespace does not exist: {collection}")
 
 
-def _volume_info(dataset: SavedDataset, rhai_ns: str, collection: str) -> VolumeInfo:
-    tags = dataset.tags or {}
-    return VolumeInfo(
-        name=unscoped_name(dataset.name),
-        catalog_name=rhai_ns,
-        schema_name=collection,
-        volume_type=tags.get("volume_type") or _DEFAULT_VOLUME_TYPE,
-        storage_location=storage_uri(dataset),
-        comment=dataset.description or tags.get("comment") or None,
-        owner=tags.get("owner") or None,
-        created_at=isoformat_ts(dataset.created_timestamp),
-        updated_at=isoformat_ts(dataset.last_updated_timestamp),
-        labels=labels_from_tags(tags),
-        properties=public_properties(tags),
-        config={},
-        connection_ref=connection_ref_from_tags(tags),
-    )
-
-
 def _get_volume(
     registry: BaseRegistry, rhai_ns: str, collection: str, volume: str
 ) -> SavedDataset:
@@ -129,7 +104,6 @@ def get_volume_router() -> APIRouter:
     @router.get(
         "/v1/{project}/namespaces/{collection}/volumes",
         response_model=ListVolumesResponse,
-        response_model_by_alias=True,
     )
     def list_volumes(
         project: str, collection: str, request: Request
@@ -139,7 +113,7 @@ def get_volume_router() -> APIRouter:
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         volumes = [
-            _volume_info(dataset, rhai_ns, col)
+            catalog_asset_response(dataset, col)
             for dataset in list_catalog_datasets(
                 registry, rhai_ns, col, asset_type="volume"
             )
@@ -148,21 +122,21 @@ def get_volume_router() -> APIRouter:
 
     @router.post(
         "/v1/{project}/namespaces/{collection}/volumes",
-        response_model=VolumeInfo,
-        response_model_by_alias=True,
+        response_model=AssetResponse,
     )
     def create_volume(
-        project: str, collection: str, body: CreateVolumeRequest, request: Request
-    ) -> VolumeInfo:
+        project: str,
+        collection: str,
+        body: CreateVolumeRequest,
+        request: Request,
+        x_user: str | None = Header(default=None, alias="X-User"),
+        kubeflow_userid: str | None = Header(default=None, alias="kubeflow-userid"),
+    ) -> AssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         display = _display_name(body.name)
-        location = (body.storage_location or body.location or "").strip()
-        volume_type = (
-            body.volume_type or body.content_type or _DEFAULT_VOLUME_TYPE
-        ).strip() or _DEFAULT_VOLUME_TYPE
         try:
             label_tags = labels_to_tag(body.labels)
             ref_tags = connection_ref_to_tag(body.connection_ref)
@@ -173,36 +147,37 @@ def get_volume_router() -> APIRouter:
             **label_tags,
             **ref_tags,
             "asset_type": "volume",
-            "volume_type": volume_type,
+            "format": body.format,
+            "owner": owner_from_identity(x_user, kubeflow_userid),
         }
-        if body.owner:
-            tags["owner"] = body.owner
-        comment = body.comment or body.description or ""
+        for key in ("purpose", "license", "maturity", "domain", "pii"):
+            value = getattr(body, key)
+            if value:
+                tags[key] = value
         dataset = insert_catalog_dataset(
             registry,
             rhai_ns=rhai_ns,
             collection=col,
             display_name=display,
-            location=location,
+            location=(body.storage_location or "").strip(),
             tags=tags,
-            description=comment,
+            description=body.description or "",
         )
-        return _volume_info(dataset, rhai_ns, col)
+        return catalog_asset_response(dataset, col)
 
     @router.get(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
-        response_model=VolumeInfo,
-        response_model_by_alias=True,
+        response_model=AssetResponse,
     )
     def get_volume(
         project: str, collection: str, volume: str, request: Request
-    ) -> VolumeInfo:
+    ) -> AssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         dataset = _get_volume(registry, rhai_ns, col, _display_name(volume))
-        return _volume_info(dataset, rhai_ns, col)
+        return catalog_asset_response(dataset, col)
 
     @router.head(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
@@ -218,10 +193,9 @@ def get_volume_router() -> APIRouter:
         _get_volume(registry, rhai_ns, col, _display_name(volume))
         return Response(status_code=204)
 
-    @router.put(
+    @router.patch(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
-        response_model=VolumeInfo,
-        response_model_by_alias=True,
+        response_model=AssetResponse,
     )
     def update_volume(
         project: str,
@@ -229,21 +203,21 @@ def get_volume_router() -> APIRouter:
         volume: str,
         body: UpdateVolumeRequest,
         request: Request,
-    ) -> VolumeInfo:
+    ) -> AssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
         dataset = _get_volume(registry, rhai_ns, col, _display_name(volume))
         tags = dict(dataset.tags or {})
-        if body.owner is not None:
-            tags["owner"] = body.owner
-        if body.properties is not None:
-            tags = merge_public_properties(tags, body.properties)
-            tags["asset_type"] = "volume"
-            tags.setdefault("volume_type", _DEFAULT_VOLUME_TYPE)
-        if body.comment is not None:
-            dataset.description = body.comment
+        if body.format is not None:
+            tags["format"] = body.format
+        if "connection_ref" in body.model_fields_set:
+            tags.pop("_connection_ref", None)
+            try:
+                tags.update(connection_ref_to_tag(body.connection_ref))
+            except ValueError as exc:
+                raise _as_bad_request(exc) from exc
         if body.add_labels or body.remove_labels:
             try:
                 tags = merge_labels(
@@ -251,11 +225,22 @@ def get_volume_router() -> APIRouter:
                 )
             except ValueError as exc:
                 raise _as_bad_request(exc) from exc
-        if body.storage_location is not None:
-            dataset.storage = SavedDatasetFileStorage(path=body.storage_location)
+        if body.properties is not None:
+            tags = merge_public_properties(tags, body.properties)
+            tags["asset_type"] = "volume"
+        for key in ("purpose", "license", "maturity", "domain", "pii"):
+            value = getattr(body, key)
+            if value is not None:
+                tags[key] = value
+        if body.description is not None:
+            dataset.description = body.description
+        if "storage_location" in body.model_fields_set:
+            path = body.storage_location or ""
+            dataset.storage = SavedDatasetFileStorage(path=path)
+        tags["asset_type"] = "volume"
         dataset.tags = tags
         updated = replace_catalog_dataset(registry, dataset)
-        return _volume_info(updated, rhai_ns, col)
+        return catalog_asset_response(updated, col)
 
     @router.delete(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",

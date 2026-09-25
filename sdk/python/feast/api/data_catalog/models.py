@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,10 +72,6 @@ class ListTablesResponse(BaseModel):
     identifiers: list[TableIdentifier]
 
 
-class ProjectListResponse(BaseModel):
-    projects: list[str]
-
-
 class SchemaField(BaseModel):
     name: str
     type: str
@@ -102,86 +98,76 @@ ConnectionRef = Annotated[
     Field(discriminator="type"),
 ]
 
-Maturity = Literal["experimental", "staging", "production", "deprecated"]
-
-
-class VolumeInfo(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
-
-    name: str
-    catalog_name: str = Field(serialization_alias="catalog-name")
-    schema_name: str = Field(serialization_alias="schema-name")
-    volume_type: str = Field(serialization_alias="volume-type")
-    storage_location: str = Field(serialization_alias="storage-location")
-    comment: str | None = None
-    owner: str | None = None
-    created_at: str | None = Field(default=None, serialization_alias="created-at")
-    updated_at: str | None = Field(default=None, serialization_alias="updated-at")
-    labels: list[str] | None = None
-    properties: dict[str, str] = Field(default_factory=dict)
-    config: dict[str, str] = Field(default_factory=dict)
-    connection_ref: ConnectionRef | None = None
+StructuredFormat = Literal[
+    "iceberg", "parquet", "csv", "delta", "postgresql", "milvus", "other"
+]
+UnstructuredFormat = Literal["documents", "images", "audio", "video", "binary", "other"]
 
 
 class CreateVolumeRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     name: str
-    location: str | None = None
-    storage_location: str | None = Field(default=None, alias="storage-location")
-    volume_type: str | None = Field(default=None, alias="volume-type")
-    content_type: str | None = None
+    format: UnstructuredFormat
+    storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
-    comment: str | None = None
     description: str | None = None
-    owner: str | None = None
+    purpose: str | None = None
+    license: str | None = None
+    maturity: str | None = None
+    domain: str | None = None
+    pii: str | None = None
     labels: list[str] | None = None
     properties: dict[str, str] = Field(default_factory=dict)
 
 
 class UpdateVolumeRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    comment: str | None = None
-    owner: str | None = None
-    storage_location: str | None = Field(default=None, alias="storage-location")
+    description: str | None = None
+    format: UnstructuredFormat | None = None
+    storage_location: str | None = None
+    connection_ref: ConnectionRef | None = None
+    purpose: str | None = None
+    license: str | None = None
+    maturity: str | None = None
+    domain: str | None = None
+    pii: str | None = None
     properties: dict[str, str] | None = None
     add_labels: list[str] | None = None
     remove_labels: list[str] | None = None
 
 
-class ListVolumesResponse(BaseModel):
-    volumes: list[VolumeInfo]
-
-
 class CreateGenericTableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     name: str
-    format: str | None = None
-    location: str | None = None
+    format: StructuredFormat
+    storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
     description: str | None = None
     purpose: str | None = None
     license: str | None = None
-    maturity: Maturity | None = None
+    maturity: str | None = None
     domain: str | None = None
     pii: str | None = None
-    owner: str | None = None
     labels: list[str] | None = None
     schema_fields: list[SchemaField] | None = None
     properties: dict[str, str] = Field(default_factory=dict)
 
 
 class UpdateGenericTableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     description: str | None = None
-    format: str | None = None
-    location: str | None = None
+    format: StructuredFormat | None = None
+    storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
     purpose: str | None = None
     license: str | None = None
-    maturity: Maturity | None = None
+    maturity: str | None = None
     domain: str | None = None
     pii: str | None = None
-    owner: str | None = None
     add_labels: list[str] | None = None
     remove_labels: list[str] | None = None
     schema_fields: list[SchemaField] | None = None
@@ -191,25 +177,29 @@ class UpdateGenericTableRequest(BaseModel):
 class AssetResponse(BaseModel):
     name: str
     asset_type: str
-    uuid: str | None = None
-    format: str | None = None
-    location: str | None = None
-    content_type: str | None = None
-    columns: list[SchemaField] | None = None
-    collection: str | None = None
+    uuid: str
+    format: str
+    collection: str
+    owner: str
+    created_at: str
+    updated_at: str
+    storage_location: str | None = None
+    columns: list[SchemaField] | None = Field(
+        default=None,
+        description="Table schema on GET/PATCH responses. Create/update requests use schema_fields.",
+    )
     connection_ref: ConnectionRef | None = None
-    owner: str | None = None
     description: str | None = None
     labels: list[str] | None = None
     properties: dict[str, str] | None = None
-    registered_by: str | None = None
-    updated_by: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
 
 
 class AssetListResponse(BaseModel):
     assets: list[AssetResponse]
+
+
+class ListVolumesResponse(BaseModel):
+    volumes: list[AssetResponse]
 
 
 # ----- Labels -----
@@ -225,6 +215,21 @@ class CreateLabelRequest(BaseModel):
 
 class LabelResponse(BaseModel):
     name: str
+
+
+class SearchResult(BaseModel):
+    type: str
+    namespace: list[str] = Field(min_length=1, max_length=1)
+    name: str
+    description: str | None = None
+    properties: dict[str, str] = Field(default_factory=dict)
+    score: int = 0
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[SearchResult]
+    pagination: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

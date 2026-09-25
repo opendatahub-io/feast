@@ -381,8 +381,8 @@ def test_t16_config_advertises_read_not_writes(sqlite_registry):
     assert "POST /v1/{prefix}/tables/rename" not in endpoints
     assert "GET /v1/{prefix}/namespaces/{namespace}/volumes" in endpoints
     assert "POST /v1/{prefix}/namespaces/{namespace}/generic-tables" in endpoints
-    assert "GET /v1/projects" in endpoints
-    assert all("/search" not in sig for sig in endpoints)
+    assert "GET /v1/projects" not in endpoints
+    assert "GET /v1/{prefix}/search" in endpoints
     assert "GET /v1/{prefix}/labels" in endpoints
     assert "POST /v1/{prefix}/labels" in endpoints
     assert "DELETE /v1/{prefix}/labels/{label}" in endpoints

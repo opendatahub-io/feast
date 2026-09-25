@@ -37,6 +37,7 @@ NS = "demo-user-1"
 COL = "underwriting"
 TABLE = "events"
 PARQUET = "claims-parquet"
+AUTH = {"X-User": "test-user"}
 
 
 @pytest.fixture
@@ -92,6 +93,8 @@ def _seed_iceberg_table(registry, name: str = TABLE) -> None:
                 "_catalog_managed": "true",
                 "asset_type": "table",
                 "format": "iceberg",
+                "owner": "uw",
+                "uuid": "00000000-0000-4000-8000-000000000001",
             },
         ),
         CATALOG_PROJECT,
@@ -104,18 +107,19 @@ def test_iceberg_format_post_inserts_catalog_row(sqlite_registry):
     resp_default = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": TABLE},
+        headers=AUTH,
     )
-    assert resp_default.status_code == 201
-    assert resp_default.json()["format"] == "iceberg"
+    assert resp_default.status_code == 400
     resp_explicit = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": "explicit-ice", "format": "iceberg"},
+        headers=AUTH,
     )
     assert resp_explicit.status_code == 201
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
-    assert len(listed.json()["assets"]) == 2
+    assert len(listed.json()["assets"]) == 1
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
-    assert len(iceberg.json()["identifiers"]) == 2
+    assert len(iceberg.json()["identifiers"]) == 1
 
 
 def test_create_parquet_201_no_invented_user(sqlite_registry):
@@ -126,20 +130,23 @@ def test_create_parquet_201_no_invented_user(sqlite_registry):
         json={
             "name": PARQUET,
             "format": "parquet",
-            "location": "s3://bucket/claims.parquet",
+            "storage_location": "s3://bucket/claims.parquet",
             "schema_fields": [
                 {"name": "claim_id", "type": "string", "nullable": False}
             ],
         },
+        headers=AUTH,
     )
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["name"] == PARQUET
     assert body["asset_type"] == "table"
     assert body["format"] == "parquet"
-    assert body["location"] == "s3://bucket/claims.parquet"
+    assert body["storage_location"] == "s3://bucket/claims.parquet"
     assert body["collection"] == COL
-    assert body["registered_by"] is None
+    assert body["owner"] == "test-user"
+    assert "registered_by" not in body
+    assert "schema_fields" not in body
     assert body["columns"][0]["name"] == "claim_id"
     assert "document_count" not in body
 
@@ -147,7 +154,7 @@ def test_create_parquet_201_no_invented_user(sqlite_registry):
     assert iceberg.json() == {"identifiers": []}
 
 
-def test_registered_by_from_header_only(sqlite_registry):
+def test_owner_from_header_only(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     created = client.post(
@@ -156,7 +163,8 @@ def test_registered_by_from_header_only(sqlite_registry):
         headers={"X-User": "uw-analyst"},
     )
     assert created.status_code == 201
-    assert created.json()["registered_by"] == "uw-analyst"
+    assert created.json()["owner"] == "uw-analyst"
+    assert "registered_by" not in created.json()
 
 
 def test_duplicate_is_409(sqlite_registry):
@@ -165,11 +173,15 @@ def test_duplicate_is_409(sqlite_registry):
     payload = {"name": PARQUET, "format": "parquet"}
     assert (
         client.post(
-            f"/v1/{NS}/namespaces/{COL}/generic-tables", json=payload
+            f"/v1/{NS}/namespaces/{COL}/generic-tables",
+            json=payload,
+            headers=AUTH,
         ).status_code
         == 201
     )
-    again = client.post(f"/v1/{NS}/namespaces/{COL}/generic-tables", json=payload)
+    again = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables", json=payload, headers=AUTH
+    )
     assert again.status_code == 409
     assert again.json()["error"]["type"] == "AlreadyExistsException"
 
@@ -181,10 +193,16 @@ def test_list_includes_seeded_iceberg_and_skips_volumes(sqlite_registry):
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet"},
+        headers=AUTH,
     )
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "docs", "location": "s3://bucket/docs/"},
+        json={
+            "name": "docs",
+            "format": "documents",
+            "storage_location": "s3://bucket/docs/",
+        },
+        headers=AUTH,
     )
     listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
     assert listed.status_code == 200
@@ -205,6 +223,7 @@ def test_patch_replaces_schema_and_rejects_iceberg_format(sqlite_registry):
             "schema_fields": [{"name": "a", "type": "string"}],
             "labels": ["uw"],
         },
+        headers=AUTH,
     )
     patched = client.patch(
         f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
@@ -236,6 +255,7 @@ def test_get_delete_and_missing(sqlite_registry):
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "csv"},
+        headers=AUTH,
     )
     got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
     assert got.status_code == 200
@@ -263,6 +283,7 @@ def test_create_in_default(sqlite_registry):
     created = client.post(
         f"/v1/{NS}/namespaces/{DEFAULT_COLLECTION}/generic-tables",
         json={"name": PARQUET, "format": "postgresql"},
+        headers=AUTH,
     )
     assert created.status_code == 201, created.text
     assert created.json()["collection"] == DEFAULT_COLLECTION
@@ -274,10 +295,12 @@ def test_label_query_filters_list(sqlite_registry):
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet", "labels": ["uw"]},
+        headers=AUTH,
     )
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": "other", "format": "csv", "labels": ["finance"]},
+        headers=AUTH,
     )
     filtered = client.get(
         f"/v1/{NS}/namespaces/{COL}/generic-tables", params={"label": "uw"}
@@ -291,6 +314,7 @@ def test_properties_cannot_set_format_to_iceberg(sqlite_registry):
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet"},
+        headers=AUTH,
     )
     patched = client.patch(
         f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
@@ -322,6 +346,7 @@ def test_metadata_fields_round_trip_in_properties(sqlite_registry):
             "domain": "claims",
             "pii": "none",
         },
+        headers=AUTH,
     )
     assert created.status_code == 201, created.text
     props = created.json()["properties"]
@@ -350,6 +375,7 @@ def test_uuid_and_timestamps_on_create(sqlite_registry):
     created = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet"},
+        headers=AUTH,
     )
     assert created.status_code == 201, created.text
     body = created.json()
@@ -358,28 +384,55 @@ def test_uuid_and_timestamps_on_create(sqlite_registry):
     assert body["updated_at"] is not None
 
 
-def test_owner_round_trips_on_create_and_update(sqlite_registry):
+def test_create_without_identity_header_is_400(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    created = client.post(
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "BadRequestException"
+
+
+def test_create_with_owner_in_body_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet", "owner": "uw-team"},
+        headers=AUTH,
     )
-    assert created.status_code == 201, created.text
-    assert created.json()["owner"] == "uw-team"
+    assert resp.status_code == 400
 
-    patched = client.patch(
-        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
-        json={"owner": "claims-team"},
+
+def test_create_with_location_field_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "location": "s3://bucket/x",
+        },
+        headers=AUTH,
     )
-    assert patched.status_code == 200, patched.text
-    assert patched.json()["owner"] == "claims-team"
-
-    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
-    assert got.json()["owner"] == "claims-team"
+    assert resp.status_code == 400
 
 
-def test_updated_by_set_from_header_on_patch(sqlite_registry):
+def test_create_documents_format_on_table_is_400(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    resp = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "documents"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_patch_does_not_change_owner_from_header(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
     client.post(
@@ -393,8 +446,9 @@ def test_updated_by_set_from_header_on_patch(sqlite_registry):
         headers={"X-User": "editor"},
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["registered_by"] == "creator"
-    assert patched.json()["updated_by"] == "editor"
+    assert patched.json()["owner"] == "creator"
+    assert "registered_by" not in patched.json()
+    assert "updated_by" not in patched.json()
 
 
 def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
@@ -410,6 +464,7 @@ def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
                 "secret_name": "aws-creds",  # pragma: allowlist secret
             },
         },
+        headers=AUTH,
     )
     assert created.status_code == 201, created.text
     assert created.json()["connection_ref"] == {
@@ -431,6 +486,7 @@ def test_updated_at_changes_after_patch(sqlite_registry):
     created = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet"},
+        headers=AUTH,
     )
     assert created.status_code == 201
     created_at = created.json()["created_at"]
