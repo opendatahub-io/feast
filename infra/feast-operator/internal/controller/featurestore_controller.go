@@ -72,9 +72,9 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services;configmaps;persistentvolumeclaims,verbs=get;list;create;update;watch;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;create;update;watch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;create;update;watch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;create;update;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=create;get;list
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role,verbs=update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;create
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-editor;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;update;delete
 // +kubebuilder:rbac:groups=core,resources=secrets;namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
@@ -117,6 +117,9 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if err := r.cleanupOpenLineageDiscovery(ctx, deletedCR); err != nil {
 				logger.Error(err, "Failed to clean up OpenLineage discovery entry for deleted FeatureStore")
 			}
+			if err := r.cleanupDataRegistryResources(ctx, deletedCR); err != nil {
+				logger.Error(err, "Failed to clean up data registry resources for deleted FeatureStore")
+			}
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Unable to get FeatureStore CR")
@@ -136,6 +139,10 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		if err := r.cleanupOpenLineageDiscovery(ctx, cr); err != nil {
 			logger.Error(err, "Failed to clean up OpenLineage discovery entry")
+			return ctrl.Result{}, err
+		}
+		if err := r.cleanupDataRegistryResources(ctx, cr); err != nil {
+			logger.Error(err, "Failed to clean up data registry resources")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -320,6 +327,23 @@ func (r *FeatureStoreReconciler) cleanupNamespaceRegistry(ctx context.Context, c
 	}
 
 	return feast.RemoveFromNamespaceRegistry()
+}
+
+// cleanupDataRegistryResources removes cluster-scoped data-registry RBAC that
+// survives CR garbage collection because it has no owner references.
+func (r *FeatureStoreReconciler) cleanupDataRegistryResources(ctx context.Context, cr *feastdevv1.FeatureStore) error {
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		return err
+	}
+	return feast.CleanupDataRegistryAuthDelegatorBinding()
 }
 
 // mlflowStatusChangedPredicate triggers the mapper only when the MLflow CR's

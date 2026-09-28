@@ -99,6 +99,12 @@ func (feast *FeastServices) applyMlflowDefaults() {
 
 // Deploy the feast services
 func (feast *FeastServices) Deploy() error {
+	// Data-registry mode: deploy a single registry-only pod with proxy sidecar
+	// and skip standard online/offline store deployments.
+	if feast.isDataRegistryEnabled() {
+		return feast.deployDataRegistryMode()
+	}
+
 	if feast.noLocalCoreServerConfigured() {
 		return errors.New("at least one local server must be configured. e.g. registry / online / offline")
 	}
@@ -135,6 +141,13 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
+	// Clean up any data-registry resources left from a previous enablement
+	// and remove the DataRegistryReady condition from status.
+	if err := feast.deployDataRegistry(); err != nil {
+		return err
+	}
+	apimeta.RemoveStatusCondition(&feast.Handler.FeatureStore.Status.Conditions,
+		FeastServiceConditions[DataRegistryFeastType][metav1.ConditionTrue].Type)
 	if err := feast.createOrDeleteHPA(); err != nil {
 		return err
 	}
@@ -167,6 +180,72 @@ func (feast *FeastServices) Deploy() error {
 	}
 
 	return nil
+}
+
+// deployDataRegistryMode handles the full reconciliation when the
+// dataregistry.opendatahub.io/enabled annotation is "true".
+// Standard online/offline store deployments are skipped; a single
+// registry-only pod with the kube-rbac-proxy sidecar is deployed instead.
+//
+// All validation failures and deployment errors are reported via a
+// DataRegistryReady status condition so users can kubectl describe
+// the CR to see exactly why it failed.
+func (feast *FeastServices) deployDataRegistryMode() error {
+	feast.validateDataRegistryAnnotation()
+
+	if err := feast.validateDataRegistryNamespace(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
+	if err := feast.validateDataRegistrySingleton(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
+	// PVC safety guard: refuse to switch to data-registry mode if this CR
+	// owns existing PVCs. Enabling data-registry mode would delete the standard
+	// Deployment and Services but the underlying PVC data would be lost.
+	// Users must create a dedicated CR for data-registry mode instead.
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType} {
+		pvc := feast.initPVC(feastType)
+		existing := &corev1.PersistentVolumeClaim{}
+		if err := feast.Handler.Get(feast.Handler.Context,
+			client.ObjectKey{Namespace: pvc.Namespace, Name: pvc.Name}, existing); err == nil {
+			if existing.DeletionTimestamp != nil {
+				continue
+			}
+			err := fmt.Errorf(
+				"cannot enable data-registry mode on FeatureStore %s/%s that owns existing PVC %s; "+
+					"create a dedicated FeatureStore CR for data-registry mode instead",
+				feast.Handler.FeatureStore.Namespace, feast.Handler.FeatureStore.Name, existing.Name,
+			)
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+		}
+	}
+
+	// Clean up standard-mode resources that are not needed in data-registry mode
+	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
+	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType, UIFeastType} {
+		if err := feast.removeFeastServiceByType(feastType); err != nil {
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+		}
+	}
+
+	if err := feast.createServiceAccount(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployDataRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployClient(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployNamespaceRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	return feast.setFeastServiceCondition(nil, DataRegistryFeastType)
 }
 
 // reconcileServices validates persistence and deploys or removes each feast
@@ -1302,8 +1381,14 @@ func (feast *FeastServices) GetFeastServiceName(feastType FeastServiceType) stri
 
 func (feast *FeastServices) GetDeployment() (appsv1.Deployment, error) {
 	deployment := appsv1.Deployment{}
-	obj := feast.GetObjectMeta()
-	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, &deployment)
+	var name string
+	if feast.isDataRegistryEnabled() {
+		name = feast.GetFeastServiceName(DataRegistryFeastType)
+	} else {
+		name = feast.GetObjectMeta().Name
+	}
+	ns := feast.Handler.FeatureStore.Namespace
+	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: ns, Name: name}, &deployment)
 	return deployment, err
 }
 
