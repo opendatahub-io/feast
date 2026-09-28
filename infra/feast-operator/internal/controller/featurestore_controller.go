@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -204,8 +205,20 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 
 	caps, capErr := capabilities.Load(ctx, r.Client)
 	if capErr != nil {
+		// Distinguish PlatformConfigMissing from generic errors.
+		reason := feastdevv1.FailedReason
+		msg := "Error: " + capErr.Error()
+		if _, ok := capErr.(*capabilities.PlatformConfigMissingError); ok {
+			reason = feastdevv1.PlatformConfigMissingReason
+			msg = capErr.Error()
+		}
 		logger.Error(capErr, "Failed to load feast-capabilities-config")
-		condition = metav1.Condition{Type: feastdevv1.ReadyType, Status: metav1.ConditionFalse, Reason: feastdevv1.FailedReason, Message: "Error: " + capErr.Error()}
+		condition = metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  reason,
+			Message: msg,
+		}
 		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 		cr.Status.Phase = feastdevv1.FailedPhase
 		return ctrl.Result{Requeue: true, RequeueAfter: RequeueDelayError}, capErr
@@ -220,6 +233,27 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 			cr.Status.Phase = feastdevv1.FailedPhase
 			logger.Info(condition.Message)
+			return ctrl.Result{}, nil
+		}
+		// Enforce exact namespace match when ConfigMap is present.
+		if caps.PlatformConfigPresent && cr.Namespace != caps.DataRegistryNamespace {
+			rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNamespaceRejectedMessage,
+				caps.DataRegistryNamespace, cr.Namespace)
+			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+			drCond.Reason = feastdevv1.DataRegistryNamespaceRejectedReason
+			drCond.Message = services.ErrorMessagePrefix + rejMsg
+			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+			condition = metav1.Condition{
+				Type:    feastdevv1.ReadyType,
+				Status:  metav1.ConditionFalse,
+				Reason:  feastdevv1.DataRegistryNamespaceRejectedReason,
+				Message: rejMsg,
+			}
+			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+			cr.Status.Phase = feastdevv1.FailedPhase
+			logger.Info("Data Registry namespace rejected",
+				"cr", cr.Name, "crNamespace", cr.Namespace,
+				"expectedNamespace", caps.DataRegistryNamespace)
 			return ctrl.Result{}, nil
 		}
 	} else if !caps.FeatureStoreEnabled {
