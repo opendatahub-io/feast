@@ -392,8 +392,10 @@ class ValidationReference:
 
             if not self.profiler:
                 raise RuntimeError(
-                    "Failed to calculate profile: profiler is not set on this ValidationReference."
+                    "Failed to calculate profile: profiler is not set on this "
+                    "ValidationReference."
                 )
+
             self._profile = self.profiler.analyze_dataset(self._dataset.to_df())
         return self._profile
 
@@ -401,6 +403,15 @@ class ValidationReference:
     def from_proto(
         cls, proto: ValidationReferenceProto, skip_udf: bool = False
     ) -> "ValidationReference":
+        """Build a ValidationReference from its proto.
+
+        Args:
+            proto: the serialized validation reference.
+            skip_udf: when True, leave ``profiler`` and the cached profile unset
+                instead of deserializing them. Both are dill payloads, so callers
+                that only need identity metadata (notably authorization checks in
+                the registry server) must not deserialize them.
+        """
         profiler: Optional[Profiler] = None
         profile: Optional[Profile] = None
 
