@@ -355,10 +355,15 @@ def delete_catalog_dataset(
 
 
 def owner_from_identity(
+    x_remote_user: str | None,
     x_user: str | None,
     kubeflow_userid: str | None,
 ) -> str:
-    ident = (x_user or "").strip() or (kubeflow_userid or "").strip()
+    ident = (
+        (x_remote_user or "").strip()
+        or (x_user or "").strip()
+        or (kubeflow_userid or "").strip()
+    )
     if not ident:
         raise BadRequestException(
             "Owner cannot be determined from authenticated identity"

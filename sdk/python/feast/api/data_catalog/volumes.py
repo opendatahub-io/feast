@@ -131,6 +131,7 @@ def get_volume_router() -> APIRouter:
         collection: str,
         body: CreateVolumeRequest,
         request: Request,
+        x_remote_user: str | None = Header(default=None, alias="X-Remote-User"),
         x_user: str | None = Header(default=None, alias="X-User"),
         kubeflow_userid: str | None = Header(default=None, alias="kubeflow-userid"),
     ) -> AssetResponse:
@@ -150,7 +151,7 @@ def get_volume_router() -> APIRouter:
             **ref_tags,
             "asset_type": "volume",
             "format": body.format,
-            "owner": owner_from_identity(x_user, kubeflow_userid),
+            "owner": owner_from_identity(x_remote_user, x_user, kubeflow_userid),
         }
         for key in ("purpose", "license", "maturity", "domain", "pii"):
             value = getattr(body, key)
