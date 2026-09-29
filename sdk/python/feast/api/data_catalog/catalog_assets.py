@@ -72,6 +72,7 @@ RESERVED_TAGS = {
     "updated-at",
 }
 
+GOVERNANCE_KEYS = frozenset({"purpose", "license", "maturity", "domain", "pii"})
 
 _MAX_LABELS_JSON = 10_000
 _MAX_LABEL_COUNT = 1_000
@@ -200,14 +201,43 @@ def notes_from_properties(properties: dict[str, str] | None) -> dict[str, str]:
 def merge_public_properties(
     tags: dict[str, str], properties: dict[str, str]
 ) -> dict[str, str]:
-    """Replace public notes. Reserved tags always win over ``properties``."""
-    reserved = {key: tags[key] for key in RESERVED_TAGS if key in tags}
+    """Merge user properties into tags. Omitted keys remain unchanged."""
     updated = dict(tags)
-    for key in list(public_properties(updated)):
-        updated.pop(key, None)
-    updated.update(notes_from_properties(properties))
-    updated.update(reserved)
+    for key, value in notes_from_properties(properties).items():
+        updated[key] = value
     return updated
+
+
+def remove_custom_properties(
+    tags: dict[str, str],
+    keys_to_remove: list[str],
+) -> dict[str, str]:
+    """Remove user-specified keys from tags. Rejects governance keys."""
+    updated = dict(tags)
+    for key in keys_to_remove:
+        if key in GOVERNANCE_KEYS:
+            raise BadRequestException(
+                f"Cannot remove governance property '{key}'. "
+                "Use the top-level field to update it."
+            )
+        if key in RESERVED_TAGS:
+            continue
+        updated.pop(key, None)
+    return updated
+
+
+def validate_property_overlap(
+    properties: dict[str, str] | None,
+    remove_properties: list[str] | None,
+) -> None:
+    """400 if the same key appears in both properties and remove_properties."""
+    if not properties or not remove_properties:
+        return
+    overlap = sorted(set(properties) & set(remove_properties))
+    if overlap:
+        raise BadRequestException(
+            "Cannot set and remove the same property: " + ", ".join(overlap)
+        )
 
 
 def insert_catalog_dataset(

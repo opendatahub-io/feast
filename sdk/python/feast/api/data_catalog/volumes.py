@@ -34,7 +34,9 @@ from feast.api.data_catalog.catalog_assets import (
     merge_public_properties,
     notes_from_properties,
     owner_from_identity,
+    remove_custom_properties,
     replace_catalog_dataset,
+    validate_property_overlap,
 )
 from feast.api.data_catalog.catalog_utils import (
     _registry,
@@ -225,13 +227,19 @@ def get_volume_router() -> APIRouter:
                 )
             except ValueError as exc:
                 raise _as_bad_request(exc) from exc
+        if body.properties is not None or body.remove_properties:
+            validate_property_overlap(body.properties, body.remove_properties)
         if body.properties is not None:
             tags = merge_public_properties(tags, body.properties)
-            tags["asset_type"] = "volume"
+        if body.remove_properties:
+            tags = remove_custom_properties(tags, body.remove_properties)
         for key in ("purpose", "license", "maturity", "domain", "pii"):
-            value = getattr(body, key)
-            if value is not None:
-                tags[key] = value
+            if key in body.model_fields_set:
+                value = getattr(body, key)
+                if value is None:
+                    tags.pop(key, None)
+                else:
+                    tags[key] = value
         if body.description is not None:
             dataset.description = body.description
         if "storage_location" in body.model_fields_set:

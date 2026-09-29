@@ -636,3 +636,126 @@ def test_connection_ref_round_trips(sqlite_registry):
     )
     assert bad.status_code == 400, bad.text
     assert bad.json()["error"]["type"] == "BadRequestException"
+
+
+def test_remove_custom_property(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, properties={"team": "a", "cost": "high"})
+    assert created.status_code == 200, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"remove_properties": ["cost"]},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    props = got.json()["properties"]
+    assert props.get("team") == "a"
+    assert "cost" not in props
+
+
+def test_remove_property_governance_key_rejected(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _create_volume(client)
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"remove_properties": ["purpose"]},
+    )
+    assert patched.status_code == 400
+
+
+def test_remove_property_overlap_with_set_rejected(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _create_volume(client)
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"properties": {"x": "1"}, "remove_properties": ["x"]},
+    )
+    assert patched.status_code == 400
+
+
+def test_remove_nonexistent_property_is_noop(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _create_volume(client)
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"remove_properties": ["nokey"]},
+    )
+    assert patched.status_code == 200, patched.text
+
+
+def test_properties_merge_not_replace(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, properties={"a": "1", "b": "2"})
+    assert created.status_code == 200, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"properties": {"b": "3"}},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    props = got.json()["properties"]
+    assert props.get("a") == "1"
+    assert props.get("b") == "3"
+
+
+def test_license_enum_valid(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, license="cc-by-4.0")
+    assert created.status_code == 200, created.text
+
+
+def test_license_enum_invalid(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, license="free-for-all")
+    assert created.status_code == 400
+
+
+def test_maturity_enum_valid(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, maturity="production")
+    assert created.status_code == 200, created.text
+
+
+def test_pii_enum_invalid(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, pii="maybe")
+    assert created.status_code == 400
+
+
+def test_governance_null_clears(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, purpose="train", license="apache-2.0")
+    assert created.status_code == 200, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"purpose": None, "license": None},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    props = got.json().get("properties") or {}
+    assert "purpose" not in props
+    assert "license" not in props
+
+
+def test_governance_absent_is_noop(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = _create_volume(client, purpose="train")
+    assert created.status_code == 200, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"description": "new"},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
+    assert got.json()["properties"].get("purpose") == "train"
