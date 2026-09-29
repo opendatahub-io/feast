@@ -103,6 +103,12 @@ StructuredFormat = Literal[
 ]
 UnstructuredFormat = Literal["documents", "images", "audio", "video", "binary", "other"]
 
+LicenseType = Literal[
+    "internal-use", "cc-by-4.0", "apache-2.0", "proprietary", "restricted"
+]
+MaturityType = Literal["experimental", "staging", "production", "deprecated"]
+PiiStatus = Literal["none", "contains-pii", "contains-sensitive", "anonymized"]
+
 
 class CreateVolumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -113,10 +119,10 @@ class CreateVolumeRequest(BaseModel):
     connection_ref: ConnectionRef | None = None
     description: str | None = None
     purpose: str | None = None
-    license: str | None = None
-    maturity: str | None = None
+    license: LicenseType | None = None
+    maturity: MaturityType | None = None
     domain: str | None = None
-    pii: str | None = None
+    pii: PiiStatus | None = None
     labels: list[str] | None = None
     properties: dict[str, str] = Field(default_factory=dict)
 
@@ -129,13 +135,14 @@ class UpdateVolumeRequest(BaseModel):
     storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
     purpose: str | None = None
-    license: str | None = None
-    maturity: str | None = None
+    license: LicenseType | None = None
+    maturity: MaturityType | None = None
     domain: str | None = None
-    pii: str | None = None
+    pii: PiiStatus | None = None
     properties: dict[str, str] | None = None
     add_labels: list[str] | None = None
     remove_labels: list[str] | None = None
+    remove_properties: list[str] | None = None
 
 
 class CreateGenericTableRequest(BaseModel):
@@ -147,10 +154,10 @@ class CreateGenericTableRequest(BaseModel):
     connection_ref: ConnectionRef | None = None
     description: str | None = None
     purpose: str | None = None
-    license: str | None = None
-    maturity: str | None = None
+    license: LicenseType | None = None
+    maturity: MaturityType | None = None
     domain: str | None = None
-    pii: str | None = None
+    pii: PiiStatus | None = None
     labels: list[str] | None = None
     schema_fields: list[SchemaField] | None = None
     properties: dict[str, str] = Field(default_factory=dict)
@@ -164,14 +171,15 @@ class UpdateGenericTableRequest(BaseModel):
     storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
     purpose: str | None = None
-    license: str | None = None
-    maturity: str | None = None
+    license: LicenseType | None = None
+    maturity: MaturityType | None = None
     domain: str | None = None
-    pii: str | None = None
+    pii: PiiStatus | None = None
     add_labels: list[str] | None = None
     remove_labels: list[str] | None = None
     schema_fields: list[SchemaField] | None = None
     properties: dict[str, str] | None = None
+    remove_properties: list[str] | None = None
 
 
 class AssetResponse(BaseModel):

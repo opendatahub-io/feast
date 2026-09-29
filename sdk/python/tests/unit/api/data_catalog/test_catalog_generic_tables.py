@@ -341,7 +341,7 @@ def test_metadata_fields_round_trip_in_properties(sqlite_registry):
             "name": "annotated",
             "format": "parquet",
             "purpose": "analytics",
-            "license": "MIT",
+            "license": "proprietary",
             "maturity": "production",
             "domain": "claims",
             "pii": "none",
@@ -351,7 +351,7 @@ def test_metadata_fields_round_trip_in_properties(sqlite_registry):
     assert created.status_code == 201, created.text
     props = created.json()["properties"]
     assert props["purpose"] == "analytics"
-    assert props["license"] == "MIT"
+    assert props["license"] == "proprietary"
     assert props["maturity"] == "production"
     assert props["domain"] == "claims"
     assert props["pii"] == "none"
@@ -360,7 +360,7 @@ def test_metadata_fields_round_trip_in_properties(sqlite_registry):
     assert got.status_code == 200
     got_props = got.json()["properties"]
     assert got_props["purpose"] == "analytics"
-    assert got_props["license"] == "MIT"
+    assert got_props["license"] == "proprietary"
     assert got_props["maturity"] == "production"
     assert got_props["domain"] == "claims"
     assert got_props["pii"] == "none"
@@ -523,3 +523,113 @@ def test_generic_delete_unregisters_iceberg_catalog_row(sqlite_registry):
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert iceberg.json() == {"identifiers": []}
     assert client.head(f"/v1/{NS}/namespaces/{COL}/tables/{TABLE}").status_code == 404
+
+
+def test_remove_custom_property(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "properties": {"team": "a", "cost": "high"},
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"remove_properties": ["cost"]},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    props = got.json()["properties"]
+    assert props.get("team") == "a"
+    assert "cost" not in props
+
+
+def test_remove_property_governance_key_rejected(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet"},
+        headers=AUTH,
+    )
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"remove_properties": ["purpose"]},
+    )
+    assert patched.status_code == 400
+
+
+def test_properties_merge_not_replace(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "properties": {"a": "1", "b": "2"},
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"properties": {"b": "3"}},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    props = got.json()["properties"]
+    assert props.get("a") == "1"
+    assert props.get("b") == "3"
+
+
+def test_governance_null_clears(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "purpose": "train",
+            "license": "apache-2.0",
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+    patched = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"purpose": None, "license": None},
+    )
+    assert patched.status_code == 200, patched.text
+    got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
+    props = got.json().get("properties") or {}
+    assert "purpose" not in props
+    assert "license" not in props
+
+
+def test_maturity_enum_valid_on_create(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet", "maturity": "staging"},
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+
+
+def test_pii_enum_invalid_on_create(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={"name": PARQUET, "format": "parquet", "pii": "unknown"},
+        headers=AUTH,
+    )
+    assert created.status_code == 400
