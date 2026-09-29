@@ -105,11 +105,13 @@ Four things that are easy to get wrong:
 - **`spec.config.port` must match `server.port` in the yaml.** The operator uses
   its value for the Service and the container port, but only the yaml decides
   what the process actually binds.
-- **Health probes must not use `httpGet: /healthz`.** The server exposes only
-  `/mcp` (or `/sse`); there is no health route. Use a `tcpSocket` probe.
+- **Health probes should use `httpGet: /health`, not `/healthz`.** The server
+  exposes an unauthenticated `GET /health` alongside `/mcp` (or `/sse`). A
+  `tcpSocket` probe also works if you prefer not to hit the HTTP path.
 - **The MCP server runs in its own Deployment**, not alongside the feature
   server, so `features.url` has to be the Feast Service's cluster DNS name.
-  `localhost` only works in the Feast-operator sidecar model.
+  `localhost` only works when the Feast operator runs MCP as a container in
+  the shared Feast pod.
 - **`mcp.stateless: true` drops the Service's ClientIP affinity.** Fine for
   `auth.mode: passthrough`, but `auth.mode: oidc` keeps its authorize/callback
   state per-node, so a callback can land on a replica that never saw the

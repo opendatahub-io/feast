@@ -174,7 +174,7 @@ feast mcp --config feast_mcp.yaml --auth-mode oidc --oidc-discovery-url https://
 
 ### Kubernetes authentication
 
-There is no `kubernetes` value for `--auth-mode`. Kubernetes tokens are handled by the upstream Feast servers instead: the client sends its Service Account or user token as a bearer token, `passthrough` forwards it unchanged, and Feast validates it through the Token Access Review API.
+This example uses `--auth-mode passthrough`: the client sends its Service Account or user token as a bearer token, the MCP server forwards it unchanged, and the upstream Feast servers validate it using the TokenReview API. For an in-cluster MCP deployment, `--auth-mode kubernetes` also validates the token at the MCP server before forwarding it. See the [Kubernetes authentication requirements](../../docs/reference/feature-servers/mcp-server.md#kubernetes-authentication) for the required dependencies and Service Account permissions.
 
 The demo client sends whatever is in the `MCP_TOKEN` environment variable as its bearer token:
 
@@ -229,4 +229,4 @@ The Feast Operator enables Kubernetes authentication by default, so the online s
 Two operator-specific behaviors are worth noting:
 
 - The operator sets `--host` and `--port` so that they match the generated Service. The `server.transport` value in the ConfigMap is still honored, but `server.host` and `server.port` are not.
-- A CEL validation rule enforces that at least one upstream is available: either `onlineStore` is present and not disabled, or `registry.local.server.restAPI` is `true`.
+- A CEL validation rule enforces that at least one upstream is available: either `onlineStore` is not disabled (omitting it is fine — the operator defaults an online feature server), or `registry.local.server.restAPI` is `true`.

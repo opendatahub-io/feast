@@ -18,7 +18,7 @@ Example ``feast_mcp.yaml``::
       url: http://localhost:6566
 
     registry:
-      url: http://localhost:8080
+      url: http://localhost:6572
 
     auth:
       mode: oidc              # passthrough | kubernetes | oidc
