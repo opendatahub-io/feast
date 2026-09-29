@@ -7284,10 +7284,9 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: 'mcpServer requires at least one upstream: either onlineStore
-                    must be present and not disabled, or registry must have restAPI
-                    enabled.'
-                  rule: '!has(self.mcpServer) || (has(self.onlineStore) && (!has(self.onlineStore.disabled)
-                    || !self.onlineStore.disabled)) || (has(self.registry) && has(self.registry.local)
+                    must not be disabled, or registry must have restAPI enabled.'
+                  rule: '!has(self.mcpServer) || !has(self.onlineStore) || !has(self.onlineStore.disabled)
+                    || !self.onlineStore.disabled || (has(self.registry) && has(self.registry.local)
                     && has(self.registry.local.server) && has(self.registry.local.server.restAPI)
                     && self.registry.local.server.restAPI == true)'
             required:
@@ -14651,13 +14650,11 @@ spec:
                     type: object
                     x-kubernetes-validations:
                     - message: 'mcpServer requires at least one upstream: either onlineStore
-                        must be present and not disabled, or registry must have restAPI
-                        enabled.'
-                      rule: '!has(self.mcpServer) || (has(self.onlineStore) && (!has(self.onlineStore.disabled)
-                        || !self.onlineStore.disabled)) || (has(self.registry) &&
-                        has(self.registry.local) && has(self.registry.local.server)
-                        && has(self.registry.local.server.restAPI) && self.registry.local.server.restAPI
-                        == true)'
+                        must not be disabled, or registry must have restAPI enabled.'
+                      rule: '!has(self.mcpServer) || !has(self.onlineStore) || !has(self.onlineStore.disabled)
+                        || !self.onlineStore.disabled || (has(self.registry) && has(self.registry.local)
+                        && has(self.registry.local.server) && has(self.registry.local.server.restAPI)
+                        && self.registry.local.server.restAPI == true)'
                 required:
                 - feastProject
                 type: object

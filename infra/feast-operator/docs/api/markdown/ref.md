@@ -588,10 +588,12 @@ McpServerConfig configures a standalone Feast MCP server container (the `feast m
 The server proxies to the online feature server and/or REST registry server over HTTP. Its
 transport, upstream URLs, authentication and observability are read from a feast_mcp.yaml
 config file supplied via a ConfigMap. The operator owns the container's bind host and port
-(used for the generated Service).
+(used for the generated Service). The container image defaults to the shared feature-server
+image (which already includes `feast mcp` via the `minimal` extra).
 
-NOTE: operator-managed TLS is not supported for the MCP server yet; the `tls` field of the
-embedded server configs is ignored.
+NOTE: the following embedded ServerConfigs fields are ignored for mcpServer:
+`tls` (operator-managed TLS is not supported yet), `metrics`, and `workerConfigs`.
+To run multiple gunicorn workers, set `server.workers` in the feast_mcp.yaml ConfigMap.
 
 _Appears in:_
 - [FeatureStoreServices](#featurestoreservices)
@@ -616,7 +618,10 @@ volume definition in the Volumes field. |
 These options are primarily used for production deployments to optimize performance. |
 | `config` _[McpServerConfigSource](#mcpserverconfigsource)_ | Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`.
 This file drives the MCP transport (http/sse), upstream feature/registry URLs, auth and
-observability. When omitted, `feast mcp` relies on environment variables and defaults. |
+observability. When omitted, `feast mcp` relies on environment variables and defaults.
+If transport is left unset, the process default is stdio, which cannot serve the HTTP
+Service the operator creates — set `server.transport: http` (or streamable-http/sse) in
+the ConfigMap for in-cluster use. |
 
 
 #### McpServerConfigSource

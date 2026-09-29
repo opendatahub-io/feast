@@ -10,7 +10,7 @@ server:
   transport: http           # stdio | http | streamable-http | sse
   host: 0.0.0.0
   port: 8000
-  # workers: 4              # gunicorn; requires http transport, not sse
+  # workers: 4              # gunicorn; not supported with sse
 
 # At least one of features.url / registry.url is required. Each one that is
 # set mounts its tool namespace; each one omitted mounts nothing.
@@ -28,13 +28,14 @@ observability:
 # The MCP server enforces no RBAC of its own -- it forwards the caller's bearer
 # token to Feast, which applies its own permission model. `passthrough` (the
 # default) accepts connections without a token, which is what this local demo
-# wants. Switch to `oidc` to give IDE clients a browser login flow.
+# wants. Use `kubernetes` in-cluster to validate tokens at the MCP layer, or
+# `oidc` to give IDE clients a browser login flow.
 #
 # OAuth state is stored per-node, so `oidc` assumes a single replica: with more
 # than one, /callback may land on a replica that never saw the /authorize.
 #
 # auth:
-#   mode: oidc
+#   mode: oidc              # passthrough | kubernetes | oidc
 #   discovery_url: https://keycloak.example.com/realms/feast/.well-known/openid-configuration
 #   client_id: feast-mcp
 #   base_url: http://localhost:8000

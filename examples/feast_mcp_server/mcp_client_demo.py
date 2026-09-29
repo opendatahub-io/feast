@@ -18,6 +18,7 @@ Requires the same extra as the server: pip install 'feast[mcp-server]'
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 
@@ -34,7 +35,15 @@ def _unwrap(result):
         return data
     content = getattr(result, "content", None)
     if content:
-        return getattr(content[0], "text", content[0])
+        # Older fastmcp versions only expose the JSON as text, so decode it to
+        # match what `result.data` returns; keep non-JSON text as-is.
+        payload = getattr(content[0], "text", content[0])
+        if isinstance(payload, str):
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                pass
+        return payload
     return result
 
 

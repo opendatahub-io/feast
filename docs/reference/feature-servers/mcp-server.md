@@ -77,7 +77,7 @@ server:
   transport: http           # stdio | http | streamable-http | sse
   host: 0.0.0.0
   port: 8000
-  # workers: 4              # gunicorn; http transport only
+  # workers: 4              # gunicorn; not supported with sse
 
 # At least one of features.url / registry.url is required.
 features:
@@ -90,9 +90,10 @@ timeout: 30
 observability:
   level: INFO               # DEBUG | INFO | WARNING | ERROR
   format: json              # text | json
+  # stdio: true             # also log to stderr (default true)
 
 # auth:
-#   mode: oidc              # passthrough | oidc
+#   mode: oidc              # passthrough | kubernetes | oidc
 #   discovery_url: https://keycloak.example.com/realms/feast/.well-known/openid-configuration
 #   client_id: feast-mcp
 #   client_secret: null
@@ -117,6 +118,7 @@ observability:
 | `FEAST_MCP_BASE_URL` | `auth.base_url` |
 | `FEAST_MCP_LOG_LEVEL` | `observability.level` |
 | `FEAST_MCP_LOG_FORMAT` | `observability.format` |
+| `FEAST_MCP_LOG_STDIO` | `observability.stdio` |
 
 > **Note:** `server.host` and `server.port` have no environment equivalent. They can only be set on the command line or in the config file.
 
@@ -155,6 +157,8 @@ There are three modes. They use the same names as the `auth.type` values in `fea
 * **`kubernetes`**: Service Account and user tokens are checked with the Token Access Review API before any tool runs. See [Kubernetes authentication](#kubernetes-authentication) below.
 * **`oidc`**: the server fronts an OIDC provider so that IDE clients such as Cursor and VS Code can complete a browser login flow. The resulting access token is forwarded on every tool call. Programmatic clients can also send OIDC provider tokens directly as bearer tokens, which are validated against the provider's JWKS. This mode requires `--oidc-discovery-url` and `--oidc-client-id`, typically the same values already configured as `auth.oidc_discovery_url` in `feature_store.yaml`.
 
+The CLI rejects unknown `--auth-mode` values. Values set via `auth.mode` in YAML or `FEAST_MCP_AUTH_MODE` that are not `oidc` or `kubernetes` are treated as `passthrough`.
+
 > **Note:** `oidc` mode assumes a single replica. The OAuth state store is FastMCP's default, which is per-node and on disk, so a callback routed to a different replica than the authorize request will fail. Run one replica, or use client affinity, until a shared state backend is supported.
 
 ### Kubernetes authentication
@@ -187,9 +191,9 @@ This mode has three requirements:
 
 If the MCP server runs outside the cluster, use `passthrough` instead. Feast still checks the token it receives, so callers are still authenticated. The check just happens one hop later.
 
-> **Note:** The caller must send a token in every mode. The MCP container does not read its own pod Service Account token, and the operator does not add one for it.
+> **Note:** The MCP container never injects its own pod Service Account token, and the operator does not add one for it. Only a token supplied by the MCP client is forwarded to Feast. In `passthrough` mode the MCP layer itself accepts connections without a token; whether upstream Feast then requires one depends on Feast's own auth settings.
 
-> **Note:** The Feast Operator turns on Kubernetes authentication by default for all deployed services. So an MCP client that connects without a token gets `401 Unauthorized`. In `kubernetes` mode the error comes from the MCP server, and in `passthrough` mode it comes from the feature server or the registry. Either send a token, or set `spec.authz.noAuth: true` on the FeatureStore for development.
+> **Note:** The Feast Operator turns on Kubernetes authentication by default for all deployed services. So an MCP client that connects without a token gets `401 Unauthorized` from upstream. In `kubernetes` mode the error comes from the MCP server, and in `passthrough` mode it comes from the feature server or the registry. Either send a token, or set `spec.authz.noAuth: true` on the FeatureStore for development.
 
 ## Running with Docker
 
@@ -261,11 +265,11 @@ spec:
 | `config.configMapRef.name` | string | — | ConfigMap in the same namespace holding the MCP config |
 | `config.configMapKey` | string | `feast_mcp.yaml` | Key in the ConfigMap holding the config content |
 
-`mcpServer` also accepts the standard container settings shared by the other servers: `image`, `env`, `envFrom`, `imagePullPolicy`, `resources`, `nodeSelector`, and `logLevel`. Readiness is reported on the `McpServer` status condition, and the generated Service hostname on `status.serviceHostnames.mcpServer`.
+`mcpServer` also accepts the standard container settings shared by the other servers: `image`, `env`, `envFrom`, `imagePullPolicy`, `resources`, `nodeSelector`, and `logLevel`. When `image` is omitted, the operator uses the shared `feature-server` image (which already includes `feast mcp`). Readiness is reported on the `McpServer` status condition (probed at `GET /health`), and the generated Service hostname on `status.serviceHostnames.mcpServer`.
 
-A CEL validation rule enforces that at least one Feast service is available: either `onlineStore` is present and not disabled, or `registry.local.server.restAPI` is `true`.
+A CEL validation rule enforces that at least one Feast service is available: either `onlineStore` is not disabled (omitting it is fine — the operator defaults an online feature server), or `registry.local.server.restAPI` is `true`.
 
-> **Note:** Operator-managed TLS is not yet supported for the MCP server. The `tls` field is ignored.
+> **Note:** Operator-managed TLS is not yet supported for the MCP server. The `tls` field is ignored. The embedded `metrics` and `workerConfigs` fields are also ignored for `mcpServer`; set `server.workers` in the ConfigMap if you need multiple gunicorn workers.
 
 ## Connecting an MCP client
 
@@ -295,5 +299,5 @@ See [examples/feast_mcp_server](https://github.com/feast-dev/feast/tree/master/e
 - If you see `The standalone MCP server could not be imported`, the `mcp-server` extra is not installed. Install it with `pip install 'feast[mcp-server]'`.
 - If the server exits with `At least one of --feast-url or --registry-url must be provided`, no Feast URL was resolved from the CLI, the environment, or the config file. If you expected the file to supply it, check that you are running from the directory that holds `feast_mcp.yaml`, or pass `--config` explicitly.
 - If a setting in `feast_mcp.yaml` appears to be ignored, check for a `FEAST_MCP_*` environment variable, which takes precedence over the file.
-- If the server rejects `--workers` with `SSE transport does not support multiple workers`, switch to `--transport http` or omit `--workers`.
+- If the server rejects `--workers` with `SSE transport does not support multiple workers`, switch to `--transport http` or `streamable-http`, or omit `--workers`.
 - If a tool namespace is missing, its Feast URL was not configured. The `features_*` tools require `--feast-url`, and the `registry_*` tools require `--registry-url` together with a registry server started using `--rest-api`.
