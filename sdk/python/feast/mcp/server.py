@@ -26,26 +26,32 @@ from starlette.responses import JSONResponse
 
 from feast.mcp.auth import create_kubernetes_auth, create_oidc_auth
 from feast.mcp.client import FeastClient
-from feast.mcp.config import Config, load_config
+from feast.mcp.config import AUTH_MODES, Config, load_config
 from feast.mcp.logging_config import configure_logging, load_logging_config
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP(
-    "feast",
-    instructions=(
-        "Feast Feature Store — retrieve online features, search documents, "
-        "manage materialization, and browse the feature registry."
-    ),
-)
+
+def create_mcp(cfg: Config) -> FastMCP:
+    """Build a fresh MCP server for ``cfg``, with sub-servers mounted and auth set."""
+    mcp = FastMCP(
+        "feast",
+        instructions=(
+            "Feast Feature Store — retrieve online features, search documents, "
+            "manage materialization, and browse the feature registry."
+        ),
+    )
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "healthy", "service": "mcp-server"})
+
+    _mount_servers(mcp, cfg)
+    _configure_auth(mcp, cfg)
+    return mcp
 
 
-@mcp.custom_route("/health", methods=["GET"])
-async def health_check(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "healthy", "service": "mcp-server"})
-
-
-def _mount_servers(cfg: Config) -> None:
+def _mount_servers(mcp: FastMCP, cfg: Config) -> None:
     if cfg.features.url:
         from feast.mcp.features import create_features_mcp
 
@@ -61,15 +67,24 @@ def _mount_servers(cfg: Config) -> None:
         logger.info("Registry tools mounted from %s", cfg.registry.url)
 
 
-def _configure_auth(cfg: Config) -> None:
+def _configure_auth(mcp: FastMCP, cfg: Config) -> None:
+    # click.Choice only guards --auth-mode. A typo in FEAST_MCP_AUTH_MODE or
+    # auth.mode must stop startup, not fall through to passthrough.
+    if cfg.auth.mode not in AUTH_MODES:
+        raise click.UsageError(
+            f"Unknown auth mode {cfg.auth.mode!r}. Expected one of: "
+            f"{', '.join(AUTH_MODES)} (set via --auth-mode, FEAST_MCP_AUTH_MODE "
+            "or auth.mode in feast_mcp.yaml)"
+        )
+
+    if cfg.auth.mode == "passthrough":
+        return
+
     if cfg.auth.mode == "kubernetes":
         # Uses Feast's own KubernetesTokenParser, so this server accepts
         # the same tokens as the feature server and the registry.
         mcp.auth = create_kubernetes_auth()
         logger.info("Kubernetes authentication enabled (Token Access Review)")
-        return
-
-    if cfg.auth.mode != "oidc":
         return
 
     base_url = cfg.auth.base_url or f"http://localhost:{cfg.server.port}"
@@ -82,7 +97,7 @@ def _configure_auth(cfg: Config) -> None:
     )
 
 
-def _build_http_app(cfg: Config):
+def _build_http_app(mcp: FastMCP, cfg: Config):
     if cfg.server.transport == "sse":
         kwargs = {"path": "/sse", "transport": "sse"}
     else:
@@ -90,17 +105,17 @@ def _build_http_app(cfg: Config):
     return mcp.http_app(**kwargs)  # type: ignore[arg-type]
 
 
-def _run_uvicorn(cfg: Config) -> None:
+def _run_uvicorn(mcp: FastMCP, cfg: Config) -> None:
     import uvicorn
 
-    app = _build_http_app(cfg)
+    app = _build_http_app(mcp, cfg)
     uvicorn.run(app, host=cfg.server.host, port=cfg.server.port)
 
 
-def _run_gunicorn(cfg: Config) -> None:
+def _run_gunicorn(mcp: FastMCP, cfg: Config) -> None:
     from gunicorn.app.base import BaseApplication
 
-    asgi_app = _build_http_app(cfg)
+    asgi_app = _build_http_app(mcp, cfg)
 
     class FeastMCPApplication(BaseApplication):
         def load_config(self) -> None:
@@ -163,16 +178,15 @@ def run_server(
         )
 
     # --- Setup ---
-    _mount_servers(cfg)
-    _configure_auth(cfg)
+    mcp = create_mcp(cfg)
 
     # --- Run ---
     if cfg.server.transport == "stdio":
         mcp.run(transport="stdio")
     elif cfg.server.workers:
-        _run_gunicorn(cfg)
+        _run_gunicorn(mcp, cfg)
     else:
-        _run_uvicorn(cfg)
+        _run_uvicorn(mcp, cfg)
 
 
 # Every option below defaults to ``None`` on purpose. Real defaults live in
@@ -228,7 +242,7 @@ def run_server(
 # --- authentication ---
 @click.option(
     "--auth-mode",
-    type=click.Choice(["passthrough", "kubernetes", "oidc"]),
+    type=click.Choice(AUTH_MODES),
     default=None,
     help=(
         "Auth mode. 'kubernetes' checks ServiceAccount and user tokens with "

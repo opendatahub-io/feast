@@ -215,9 +215,11 @@ def create_kubernetes_auth() -> KubernetesTokenVerifier:
 def _request_context() -> tuple[Optional[str], Optional[str]]:
     """Best-effort ``(client_ip, "METHOD /path")`` of the current request.
 
-    The IP honors ``X-Forwarded-For`` / ``X-Real-IP`` first (the caller is
-    usually behind a load balancer or reverse proxy), then the direct socket
-    peer. Both are ``None`` outside of an HTTP request (e.g. stdio transport).
+    The IP is the direct socket peer. Forwarding headers are not read here,
+    because any caller can set them. Behind a reverse proxy, list the proxy in
+    ``FORWARDED_ALLOW_IPS`` and uvicorn replaces the peer with the client from
+    ``X-Forwarded-For``. Both are ``None`` outside of an HTTP request (e.g.
+    stdio transport).
     """
     try:
         request = get_http_request()
@@ -226,15 +228,8 @@ def _request_context() -> tuple[Optional[str], Optional[str]]:
     if request is None:
         return None, None
 
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # First hop is the original client.
-        ip: Optional[str] = forwarded.split(",")[0].strip()
-    elif request.headers.get("x-real-ip"):
-        ip = request.headers["x-real-ip"].strip()
-    else:
-        client = getattr(request, "client", None)
-        ip = getattr(client, "host", None) if client else None
+    client = getattr(request, "client", None)
+    ip: Optional[str] = getattr(client, "host", None) if client else None
 
     method = getattr(request, "method", None)
     path = getattr(getattr(request, "url", None), "path", None)

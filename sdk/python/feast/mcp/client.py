@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -23,6 +24,17 @@ def _error_detail(response: httpx.Response) -> str:
             if value:
                 return str(value)[:_MAX_DETAIL_CHARS]
     return str(body)[:_MAX_DETAIL_CHARS]
+
+
+def path_segment(value: str) -> str:
+    """Encode a tool argument as exactly one URL path segment.
+
+    Tool arguments come from the LLM, so ``/`` must not open another route.
+    ``quote`` leaves a bare ``.`` or ``..`` alone and httpx would resolve it,
+    so those are encoded as well.
+    """
+    segment = quote(value, safe="")
+    return segment.replace(".", "%2E") if segment in (".", "..") else segment
 
 
 class FeastClient:

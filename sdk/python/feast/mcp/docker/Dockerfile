@@ -4,10 +4,13 @@
 # feast and its dependencies, so this only sets the entrypoint.
 #
 #     docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile \
-#       -t feast-mcp:0.66.0 --load .
+#       --build-arg BASE_TAG=0.66.0 -t feast-mcp:0.66.0 --load .
 
 ARG BASE_IMAGE=quay.io/feastdev/feature-server
-ARG BASE_TAG=latest
+# Required, with no default: a mutable tag such as latest can pull a different
+# base on every build. Use a feature-server release whose `minimal` extra
+# includes mcp-server.
+ARG BASE_TAG
 
 FROM ${BASE_IMAGE}:${BASE_TAG}
 

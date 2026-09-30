@@ -2267,7 +2267,7 @@ spec:
                     type: string
                   mcpServer:
                     description: McpServer deploys a standalone Feast MCP (Model Context
-                      Protocol) server container.
+                      Protocol) server container (`feast mcp`).
                     properties:
                       config:
                         description: Config references a ConfigMap holding the feast_mcp.yaml
@@ -2294,6 +2294,10 @@ spec:
                         required:
                         - configMapRef
                         type: object
+                        x-kubernetes-validations:
+                        - message: configMapRef.name is required
+                          rule: has(self.configMapRef.name) && size(self.configMapRef.name)
+                            > 0
                       env:
                         items:
                           description: EnvVar represents an environment variable present
@@ -9572,7 +9576,7 @@ spec:
                         type: string
                       mcpServer:
                         description: McpServer deploys a standalone Feast MCP (Model
-                          Context Protocol) server container.
+                          Context Protocol) server container (`feast mcp`).
                         properties:
                           config:
                             description: Config references a ConfigMap holding the
@@ -9599,6 +9603,10 @@ spec:
                             required:
                             - configMapRef
                             type: object
+                            x-kubernetes-validations:
+                            - message: configMapRef.name is required
+                              rule: has(self.configMapRef.name) && size(self.configMapRef.name)
+                                > 0
                           env:
                             items:
                               description: EnvVar represents an environment variable

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastmcp import FastMCP
 
 from feast.mcp.auth import get_auth_token
-from feast.mcp.client import FeastClient
+from feast.mcp.client import FeastClient, path_segment
 
 
 def create_features_mcp(client: FeastClient) -> FastMCP:
@@ -96,7 +96,7 @@ def create_features_mcp(client: FeastClient) -> FastMCP:
         """
         return await client.request(
             "GET",
-            f"/v1/vector_stores/{vector_store_id}",
+            f"/v1/vector_stores/{path_segment(vector_store_id)}",
             token=get_auth_token(),
         )
 
@@ -119,7 +119,7 @@ def create_features_mcp(client: FeastClient) -> FastMCP:
         }
         return await client.request(
             "POST",
-            f"/v1/vector_stores/{vector_store_id}/search",
+            f"/v1/vector_stores/{path_segment(vector_store_id)}/search",
             token=get_auth_token(),
             json=body,
         )

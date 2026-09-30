@@ -157,7 +157,7 @@ There are three modes. They use the same names as the `auth.type` values in `fea
 * **`kubernetes`**: Service Account and user tokens are checked with the Token Access Review API before any tool runs. See [Kubernetes authentication](#kubernetes-authentication) below.
 * **`oidc`**: the server fronts an OIDC provider so that IDE clients such as Cursor and VS Code can complete a browser login flow. The resulting access token is forwarded on every tool call. Programmatic clients can also send OIDC provider tokens directly as bearer tokens, which are validated against the provider's JWKS. This mode requires `--oidc-discovery-url` and `--oidc-client-id`, typically the same values already configured as `auth.oidc_discovery_url` in `feature_store.yaml`.
 
-The CLI rejects unknown `--auth-mode` values. Values set via `auth.mode` in YAML or `FEAST_MCP_AUTH_MODE` that are not `oidc` or `kubernetes` are treated as `passthrough`.
+Mode names are case-sensitive. The server refuses to start with an unknown mode, whether it comes from `--auth-mode`, `FEAST_MCP_AUTH_MODE` or `auth.mode` in YAML, so a typo can never switch authentication off.
 
 > **Note:** `oidc` mode assumes a single replica. The OAuth state store is FastMCP's default, which is per-node and on disk, so a callback routed to a different replica than the authorize request will fail. Run one replica, or use client affinity, until a shared state backend is supported.
 
@@ -200,7 +200,8 @@ If the MCP server runs outside the cluster, use `passthrough` instead. Feast sti
 The image entrypoint is the server itself, and its default `CMD` is `--config /config/feast_mcp.yaml`:
 
 ```bash
-docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile -t feast-mcp:0.66.0 --load .
+docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile \
+  --build-arg BASE_TAG=0.66.0 -t feast-mcp:0.66.0 --load .
 ```
 
 ```bash
@@ -218,6 +219,8 @@ See [sdk/python/feast/mcp/docker/README.md](https://github.com/feast-dev/feast/b
 ## Deploying with the Feast Operator
 
 Setting `spec.services.mcpServer` adds a dedicated `feast mcp` container to the FeatureStore deployment, exposed on its own Service on port 8100. The operator sets `--host` and `--port` so that they match the generated Service. Every other setting comes from a `feast_mcp.yaml` supplied in a ConfigMap, which the operator mounts read-only at `/etc/feast/mcp`.
+
+The ConfigMap must set `server.transport` to `http`, `streamable-http` or `sse`, because the default `stdio` cannot serve the Service. Without a ConfigMap, the operator passes `--transport http`, unless `FEAST_MCP_TRANSPORT` is set in the container `env`.
 
 ```yaml
 apiVersion: v1
