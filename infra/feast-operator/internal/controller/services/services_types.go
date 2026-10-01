@@ -108,8 +108,8 @@ const (
 
 	// DataRegistryNamespaceLabel is the label that must be present on a
 	// namespace for the operator to allow a data-registry CR in it.
-	// This is more flexible than a hardcoded namespace name because ODH,
-	// RHOAI, and custom installs can each label their chosen namespace.
+	// This is a secondary guard; the primary enforcement is the exact namespace
+	// name match (always rhoai-data-registry). Custom namespace selection is deferred.
 	DataRegistryNamespaceLabel = "opendatahub.io/data-registry"
 	// DataRegistryPlatformNamespaceLabel is applied by feast-module-operator on rhoai-data-registry.
 	DataRegistryPlatformNamespaceLabel = "dataregistry.opendatahub.io/enabled"

@@ -404,8 +404,11 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			logger.Info(condition.Message)
 			return ctrl.Result{}, nil
 		}
-		// Enforce exact namespace match when ConfigMap is present.
-		if caps.PlatformConfigPresent && cr.Namespace != caps.DataRegistryNamespace {
+		// Enforce exact namespace match. The data-registry namespace is always
+		// rhoai-data-registry (custom namespace selection is deferred). The
+		// check runs regardless of whether the ConfigMap is present because
+		// caps.DataRegistryNamespace defaults to rhoai-data-registry.
+		if cr.Namespace != caps.DataRegistryNamespace {
 			rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNamespaceRejectedMessage,
 				caps.DataRegistryNamespace, cr.Namespace)
 			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
