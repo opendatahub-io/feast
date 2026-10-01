@@ -233,6 +233,24 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 			cr.Status.Phase = feastdevv1.FailedPhase
 			logger.Info(condition.Message)
+
+			// Clean up data-registry owned resources so they don't remain
+			// active while the CR reports the capability as disabled.
+			feast := services.FeastServices{
+				Handler: feasthandler.FeastHandler{
+					Client:       r.Client,
+					Context:      ctx,
+					FeatureStore: cr,
+					Scheme:       r.Scheme,
+				},
+			}
+			if cleanupErr := feast.CleanupDataRegistryResources(); cleanupErr != nil {
+				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
+			}
+			if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
+				controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
+			}
+
 			return ctrl.Result{}, nil
 		}
 		// Enforce exact namespace match. The data-registry namespace is always
@@ -264,6 +282,21 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 		cr.Status.Phase = feastdevv1.FailedPhase
 		logger.Info(condition.Message)
+
+		// Clean up standard Feast owned resources so they don't remain
+		// active while the CR reports the capability as disabled.
+		feast := services.FeastServices{
+			Handler: feasthandler.FeastHandler{
+				Client:       r.Client,
+				Context:      ctx,
+				FeatureStore: cr,
+				Scheme:       r.Scheme,
+			},
+		}
+		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
+			logger.Error(cleanupErr, "Failed to cleanup standard resources after capability disabled")
+		}
+
 		return ctrl.Result{}, nil
 	}
 	feast := services.FeastServices{
