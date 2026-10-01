@@ -153,7 +153,7 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 // When the annotation is removed or absent, all resources are cleaned up.
 func (feast *FeastServices) deployDataRegistry() error {
 	if !feast.isDataRegistryEnabled() {
-		if err := feast.cleanupDataRegistryResources(); err != nil {
+		if err := feast.CleanupDataRegistryResources(); err != nil {
 			return err
 		}
 		// Remove the finalizer once all cluster-scoped resources have been cleaned up.
@@ -203,8 +203,9 @@ func (feast *FeastServices) deployDataRegistry() error {
 	return nil
 }
 
-// cleanupDataRegistryResources removes all data-registry owned resources.
-func (feast *FeastServices) cleanupDataRegistryResources() error {
+// CleanupDataRegistryResources removes all data-registry owned resources.
+// Exported so the controller can call it when the platform capability is disabled.
+func (feast *FeastServices) CleanupDataRegistryResources() error {
 	if isOpenShift {
 		if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryRoute()); err != nil {
 			return err
@@ -435,13 +436,15 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects bypasses proxy auth because it requires server-side
-			// per-namespace SSAR filtering that cannot be expressed as a single
-			// resource SAR. The Feast server reads the bearer token from the
-			// request, performs TokenReview + per-namespace SubjectAccessReview,
-			// and returns only authorized results. The proxy must pass the
+			// /projects and /search bypass proxy auth because they require
+			// server-side per-namespace SSAR filtering that cannot be expressed
+			// as a single resource SAR. /search uses ?projects= (plural,
+			// multi-value) and the proxy can only extract a single value.
+			// The Feast server reads the bearer token from the request,
+			// performs TokenReview + per-namespace SubjectAccessReview, and
+			// returns only authorized results. The proxy must pass the
 			// Authorization header through unchanged for catalog_ssar.py.
-			"--ignore-paths=/projects,/api/v1/projects",
+			"--ignore-paths=/projects,/api/v1/projects,/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
 			"--auth-header-fields-enabled",
@@ -636,9 +639,9 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 // endpoints, with a Format1 fallback for unmatched paths.
 //
 // Resource CRUD endpoints (GET/DELETE with ?project=<ns>) get per-namespace
-// SAR via byQueryParameter rewrite. POST endpoints (project in body) and
-// /search (multi-project via ?projects=) fall through to Format1's static
-// SAR gate. /projects is handled by --ignore-paths + server-side SSAR.
+// SAR via byQueryParameter rewrite. POST endpoints (project in body) fall
+// through to Format1's static SAR gate. /projects and /search are handled
+// by --ignore-paths + server-side SSAR (catalog_ssar.py).
 func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 	ns := feast.Handler.FeatureStore.Namespace
 	apiGroup := dataRegistryAPIGroup
@@ -659,10 +662,14 @@ func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 		"/data_sources/*",
 		"/saved_datasets",
 		"/saved_datasets/*",
+		"/saved_datasets/data/*",
 		"/permissions",
 		"/permissions/*",
 		"/features",
 		"/features/*",
+		"/features/*/*",
+		"/labels",
+		"/labels/*",
 		"/label_views",
 		"/label_views/*",
 	}
@@ -695,21 +702,6 @@ func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 		b.WriteString("                apiGroup: " + apiGroup + "\n")
 		b.WriteString("                resource: registries\n")
 	}
-
-	// /search: static SAR gate (authentication + coarse authorization).
-	// /search uses ?projects= (plural, multi-value) — the proxy can only
-	// extract a single value, so per-namespace filtering remains a server-side
-	// concern. The Format2 rule ensures /search has an explicit auth gate
-	// rather than relying on the Format1 fallback behavior.
-	b.WriteString("    - path: /search\n")
-	b.WriteString("      mappings:\n")
-	b.WriteString("        - methods: [get]\n")
-	b.WriteString("          resources:\n")
-	b.WriteString("            - resourceAttributes:\n")
-	b.WriteString("                namespace: " + ns + "\n")
-	b.WriteString("                apiGroup: " + apiGroup + "\n")
-	b.WriteString("                resource: registries\n")
-	b.WriteString("                verb: get\n")
 
 	return b.String()
 }
