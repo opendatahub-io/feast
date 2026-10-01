@@ -63,10 +63,11 @@ func (feast *FeastServices) validateDataRegistryAnnotation() {
 	}
 }
 
-// validateDataRegistryNamespace ensures the namespace hosting the data-registry
-// CR carries the label opendatahub.io/data-registry=true.  A label-based
-// check is more flexible than a hardcoded name: ODH, RHOAI, and custom
-// installs each label their chosen namespace without operator changes.
+// validateDataRegistryNamespace is a secondary guard that ensures the namespace
+// hosting the data-registry CR carries the required platform label. The primary
+// enforcement is the exact namespace name match performed by the controller
+// (comparing against dataRegistryNamespace from the capabilities ConfigMap,
+// which defaults to rhoai-data-registry). Custom namespace selection is deferred.
 func (feast *FeastServices) validateDataRegistryNamespace() error {
 	ns := &corev1.Namespace{}
 	nsName := feast.Handler.FeatureStore.Namespace
