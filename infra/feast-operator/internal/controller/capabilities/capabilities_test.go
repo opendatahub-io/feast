@@ -97,7 +97,7 @@ func TestLoadDataRegistryNamespaceFromConfigMap(t *testing.T) {
 		Data: map[string]string{
 			KeyFeatureStoreEnabled:   "true",
 			KeyDataRegistryEnabled:   "true",
-			KeyDataRegistryNamespace: "catalog-prod",
+			KeyDataRegistryNamespace: "rhoai-data-registry",
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
@@ -106,8 +106,8 @@ func TestLoadDataRegistryNamespaceFromConfigMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.DataRegistryNamespace != "catalog-prod" {
-		t.Fatalf("expected DR namespace %q, got %q", "catalog-prod", cfg.DataRegistryNamespace)
+	if cfg.DataRegistryNamespace != "rhoai-data-registry" {
+		t.Fatalf("expected DR namespace %q, got %q", "rhoai-data-registry", cfg.DataRegistryNamespace)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestStrictModeSucceedsWithValidConfigMap(t *testing.T) {
 		Data: map[string]string{
 			KeyFeatureStoreEnabled:   "false",
 			KeyDataRegistryEnabled:   "true",
-			KeyDataRegistryNamespace: "catalog-prod",
+			KeyDataRegistryNamespace: "rhoai-data-registry",
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
@@ -185,8 +185,8 @@ func TestStrictModeSucceedsWithValidConfigMap(t *testing.T) {
 	if !cfg.DataRegistryEnabled {
 		t.Fatal("expected data registry enabled")
 	}
-	if cfg.DataRegistryNamespace != "catalog-prod" {
-		t.Fatalf("expected DR namespace %q, got %q", "catalog-prod", cfg.DataRegistryNamespace)
+	if cfg.DataRegistryNamespace != "rhoai-data-registry" {
+		t.Fatalf("expected DR namespace %q, got %q", "rhoai-data-registry", cfg.DataRegistryNamespace)
 	}
 }
 
