@@ -251,16 +251,16 @@ var _ = Describe("Data Registry", func() {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects bypasses proxy for server-side SSAR (bearer token passthrough)
-			"--ignore-paths=/projects,/api/v1/projects",
+			// /projects and /search bypass proxy for server-side SSAR (bearer token passthrough)
+			"--ignore-paths=/projects,/api/v1/projects,/search",
 			"--auth-header-fields-enabled",
 			"--auth-header-user-field-name=X-Remote-User",
 		))
-		// /search and /api/v1/search must NOT appear in ignore-paths.
-		// /search gets its own Format2 endpoint rule in auth.yaml.
+		// /search and /api/v1/search must NOT appear in ignore-paths separately
+		// because /search is already included; verify it's present.
 		for _, arg := range proxyCtr.Args {
 			if strings.Contains(arg, "ignore-paths") {
-				Expect(arg).NotTo(ContainSubstring("/search"), "--ignore-paths must not contain /search")
+				Expect(arg).To(ContainSubstring("/search"), "--ignore-paths must contain /search for server-side SSAR")
 			}
 		}
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
@@ -357,20 +357,24 @@ var _ = Describe("Data Registry", func() {
 
 		// Resource CRUD endpoints use byQueryParameter to extract ?project=<ns>
 		for _, path := range []string{"/entities", "/feature_views", "/data_sources",
-			"/feature_services", "/saved_datasets", "/permissions", "/features", "/label_views"} {
+			"/feature_services", "/saved_datasets", "/permissions", "/features",
+			"/labels", "/label_views"} {
 			Expect(authContent).To(ContainSubstring("path: " + path))
 		}
 		// Wildcard paths for sub-resource endpoints (e.g. /entities/{name})
 		Expect(authContent).To(ContainSubstring("path: /entities/*"))
 		Expect(authContent).To(ContainSubstring("path: /feature_views/*"))
+		// Deep paths for multi-segment routes
+		Expect(authContent).To(ContainSubstring("path: /features/*/*"))
+		Expect(authContent).To(ContainSubstring("path: /saved_datasets/data/*"))
 
 		// byQueryParameter rewrite extracts project from ?project=<ns>
 		Expect(authContent).To(ContainSubstring("byQueryParameter:"))
 		Expect(authContent).To(ContainSubstring("name: project"))
 		Expect(authContent).To(ContainSubstring(`namespace: "{{ .Value }}"`))
 
-		// /search endpoint with explicit auth gate (static SAR, not byQueryParameter)
-		Expect(authContent).To(ContainSubstring("path: /search"))
+		// /search is handled by --ignore-paths (server-side SSAR), not auth.yaml
+		Expect(authContent).NotTo(ContainSubstring("path: /search"))
 
 		// Owner reference
 		Expect(cm.OwnerReferences).To(HaveLen(1))
