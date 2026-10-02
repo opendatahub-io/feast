@@ -1,10 +1,10 @@
 """
 Server-side SubjectAccessReview (SSAR) filtering for data-registry catalog endpoints.
 
-When the data registry is enabled (DATACATALOG_ENABLED=true), endpoints like
-/v1/projects and /v1/search bypass kube-rbac-proxy auth (--ignore-paths) and
-perform their own per-namespace authorization. This module provides the SSAR
-check utilities consumed by those endpoints.
+When CATALOG_SSAR_API_GROUP is set, Feast feature-registry ``GET /projects``
+filters the project list with per-namespace SubjectAccessReview. Catalog Data
+Registry routes use path ``{project}`` (Kubernetes namespace) and are not
+listed here — OpenAPI 0.8 removed catalog ``GET /v1/projects``.
 
 Environment variables (set by the Feast operator):
     CATALOG_SSAR_API_GROUP: API group for SAR checks (e.g. "dataregistry.opendatahub.io")
