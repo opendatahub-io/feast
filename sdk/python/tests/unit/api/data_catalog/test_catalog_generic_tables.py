@@ -308,27 +308,66 @@ def test_label_query_filters_list(sqlite_registry):
     assert [asset["name"] for asset in filtered.json()["assets"]] == [PARQUET]
 
 
-def test_properties_cannot_set_format_to_iceberg(sqlite_registry):
+def test_properties_cannot_overwrite_reserved_tags(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    client.post(
+    created = client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": PARQUET, "format": "parquet"},
         headers=AUTH,
     )
+    assert created.status_code == 201, created.text
+    original = created.json()
     patched = client.patch(
         f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
         json={
-            "properties": {"team": "uw", "format": "iceberg", "asset_type": "volume"}
+            "properties": {
+                "team": "uw",
+                "format": "iceberg",
+                "asset_type": "volume",
+                "uuid": "00000000-0000-4000-8000-000000000000",
+                "owner": "attacker",
+            }
         },
     )
     assert patched.status_code == 200, patched.text
     body = patched.json()
     assert body["format"] == "parquet"
     assert body["asset_type"] == "table"
+    assert body["uuid"] == original["uuid"]
+    assert body["owner"] == original["owner"]
     assert body["properties"] == {"team": "uw"}
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert iceberg.json() == {"identifiers": []}
+
+
+def test_storage_location_omitted_is_preserved_and_null_clears(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "format": "parquet",
+            "storage_location": "s3://bucket/claims.parquet",
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+
+    preserved = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"description": "claims"},
+    )
+    assert preserved.status_code == 200, preserved.text
+    assert preserved.json()["storage_location"] == "s3://bucket/claims.parquet"
+
+    cleared = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"storage_location": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["storage_location"] is None
 
 
 def test_metadata_fields_round_trip_in_properties(sqlite_registry):

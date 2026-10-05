@@ -197,6 +197,26 @@ def test_update_description_and_storage_location(sqlite_registry):
     assert body["storage_location"] == "s3://bucket/claims-v2/"
 
 
+def test_storage_location_omitted_is_preserved_and_null_clears(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    assert _create_volume(client).status_code == 200
+
+    preserved = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"description": "claims PDFs"},
+    )
+    assert preserved.status_code == 200, preserved.text
+    assert preserved.json()["storage_location"] == "s3://bucket/claims/"
+
+    cleared = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"storage_location": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["storage_location"] is None
+
+
 def test_volume_put_returns_405(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
@@ -215,10 +235,12 @@ def test_v1_projects_route_removed(sqlite_registry):
     assert client.get("/v1/projects").status_code == 404
 
 
-def test_properties_cannot_turn_volume_into_iceberg_table(sqlite_registry):
+def test_properties_cannot_overwrite_reserved_tags(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
-    _create_volume(client)
+    created = _create_volume(client)
+    assert created.status_code == 200, created.text
+    original = created.json()
     updated = client.patch(
         f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
         json={
@@ -227,6 +249,8 @@ def test_properties_cannot_turn_volume_into_iceberg_table(sqlite_registry):
                 "asset_type": "table",
                 "format": "iceberg",
                 "_catalog_managed": "false",
+                "uuid": "00000000-0000-4000-8000-000000000000",
+                "owner": "attacker",
             }
         },
     )
@@ -234,6 +258,9 @@ def test_properties_cannot_turn_volume_into_iceberg_table(sqlite_registry):
     body = updated.json()
     assert body["properties"] == {"team": "uw"}
     assert body["format"] == "documents"
+    assert body["asset_type"] == "volume"
+    assert body["uuid"] == original["uuid"]
+    assert body["owner"] == original["owner"]
     iceberg = client.get(f"/v1/{NS}/namespaces/{COL}/tables")
     assert iceberg.json() == {"identifiers": []}
     got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
