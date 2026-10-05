@@ -348,6 +348,17 @@ func SetupNotebookEnvironment(namespace, configMapName, notebookFile, featureRep
 	return nil
 }
 
+// CreateNotebookServiceAccount creates the dedicated ServiceAccount required by
+// notebooks-validation.opendatahub.io (must match the Notebook name).
+func CreateNotebookServiceAccount(namespace, saName, testDir string) error {
+	cmd := exec.Command("kubectl", "create", "serviceaccount", saName, "-n", namespace)
+	output, err := testutils.Run(cmd, testDir)
+	if err != nil {
+		return fmt.Errorf("failed to create serviceaccount %s: %w\nOutput: %s", saName, err, output)
+	}
+	return nil
+}
+
 // prepareNotebookTestResources sets namespace context, ConfigMap, PVC, and rolebinding for notebook E2E tests.
 func prepareNotebookTestResources(namespace, configMapName, notebookFile, featureRepoPath, pvcFile, rolebindingName, notebookPVC, testDir string) {
 	By(fmt.Sprintf("Setting namespace context to : %s", namespace))
@@ -365,6 +376,11 @@ func prepareNotebookTestResources(namespace, configMapName, notebookFile, featur
 	By(fmt.Sprintf("Creating rolebinding %s for the user", rolebindingName))
 	Expect(CreateNotebookRoleBinding(namespace, rolebindingName, GetOCUser(testDir), testDir)).To(Succeed())
 	fmt.Printf("Created rolebinding %s successfully\n", rolebindingName)
+
+	const notebookSA = "jupyter-nb-kube-3aadmin"
+	By(fmt.Sprintf("Creating ServiceAccount %s", notebookSA))
+	Expect(CreateNotebookServiceAccount(namespace, notebookSA, testDir)).To(Succeed())
+	fmt.Printf("ServiceAccount %s created successfully\n", notebookSA)
 }
 
 // CreateNotebookTest performs all the setup steps and creates a notebook.
