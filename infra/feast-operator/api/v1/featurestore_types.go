@@ -508,11 +508,7 @@ type FeatureStoreServices struct {
 	Registry     *Registry     `json:"registry,omitempty"`
 	// Creates a UI server container
 	UI *ServerConfigs `json:"ui,omitempty"`
-	// McpServer deploys a standalone Feast MCP (Model Context Protocol) server container.
-	// This runs the `feast mcp` command in its own container, exposed on its own Service and
-	// port. It proxies to the in-pod online feature server and/or REST registry server.
-	// This is distinct from the embedded MCP support on the online store (services.onlineStore.serving.mcp)
-	// and the registry (services.registry.local.server.mcp).
+	// McpServer deploys a standalone Feast MCP (Model Context Protocol) server container (`feast mcp`). It is separate from the embedded MCP of services.onlineStore.serving.mcp and services.registry.local.server.mcp.
 	// +optional
 	McpServer          *McpServerConfig           `json:"mcpServer,omitempty"`
 	DeploymentStrategy *appsv1.DeploymentStrategy `json:"deploymentStrategy,omitempty"`
@@ -757,17 +753,13 @@ type McpConfig struct {
 type McpServerConfig struct {
 	ServerConfigs `json:",inline"`
 
-	// Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`.
-	// This file drives the MCP transport (http/sse), upstream feature/registry URLs, auth and
-	// observability. When omitted, `feast mcp` relies on environment variables and defaults.
-	// If transport is left unset, the process default is stdio, which cannot serve the HTTP
-	// Service the operator creates — set `server.transport: http` (or streamable-http/sse) in
-	// the ConfigMap for in-cluster use.
+	// Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`. Its transport must be http, streamable-http or sse, because the stdio default cannot serve the Service. If omitted, the operator passes `--transport http` unless FEAST_MCP_TRANSPORT is set in env.
 	// +optional
 	Config *McpServerConfigSource `json:"config,omitempty"`
 }
 
 // McpServerConfigSource references a ConfigMap key holding the feast_mcp.yaml content.
+// +kubebuilder:validation:XValidation:rule="has(self.configMapRef.name) && size(self.configMapRef.name) > 0",message="configMapRef.name is required"
 type McpServerConfigSource struct {
 	// ConfigMapRef is a reference to a ConfigMap in the same namespace containing the MCP config.
 	ConfigMapRef corev1.LocalObjectReference `json:"configMapRef"`

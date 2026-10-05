@@ -57,6 +57,9 @@ class RegistryConfig:
     url: Optional[str] = None
 
 
+AUTH_MODES = ("passthrough", "kubernetes", "oidc")
+
+
 @dataclass(frozen=True)
 class AuthConfig:
     #: One of ``passthrough`` (check nothing, pass the caller's token on),
@@ -113,20 +116,6 @@ def load_config(
                 break
 
     cli = cli_args or {}
-
-    def _resolve(
-        cli_key: str, env_key: str, yaml_section: str, yaml_key: str, default=None
-    ):
-        return (
-            cli.get(cli_key)
-            or _env(env_key)
-            or file_data.get(yaml_section, {}).get(yaml_key)
-            if isinstance(file_data.get(yaml_section), dict)
-            else cli.get(cli_key) or _env(env_key)
-        ) or default
-
-    def _resolve_flat(cli_key: str, env_key: str, yaml_key: str, default=None):
-        return cli.get(cli_key) or _env(env_key) or file_data.get(yaml_key, default)
 
     srv = (
         file_data.get("server", {}) if isinstance(file_data.get("server"), dict) else {}

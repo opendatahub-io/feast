@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from fastmcp import FastMCP
 
 from feast.mcp.auth import get_auth_token
-from feast.mcp.client import FeastClient
+from feast.mcp.client import FeastClient, path_segment
 
 
 def create_registry_mcp(client: FeastClient) -> FastMCP:
@@ -37,7 +37,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
             name: Project name.
         """
         return await client.request(
-            "GET", f"/api/v1/projects/{name}", token=get_auth_token()
+            "GET", f"/api/v1/projects/{path_segment(name)}", token=get_auth_token()
         )
 
     # ------------------------------------------------------------------
@@ -71,7 +71,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
         """
         return await client.request(
             "GET",
-            f"/api/v1/entities/{name}",
+            f"/api/v1/entities/{path_segment(name)}",
             token=get_auth_token(),
             params={"project": project},
         )
@@ -129,7 +129,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
         """
         return await client.request(
             "GET",
-            f"/api/v1/feature_views/{name}",
+            f"/api/v1/feature_views/{path_segment(name)}",
             token=get_auth_token(),
             params={"project": project},
         )
@@ -197,7 +197,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
         """
         return await client.request(
             "GET",
-            f"/api/v1/feature_services/{name}",
+            f"/api/v1/feature_services/{path_segment(name)}",
             token=get_auth_token(),
             params={"project": project},
         )
@@ -233,7 +233,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
         """
         return await client.request(
             "GET",
-            f"/api/v1/data_sources/{name}",
+            f"/api/v1/data_sources/{path_segment(name)}",
             token=get_auth_token(),
             params={"project": project},
         )
@@ -283,7 +283,7 @@ def create_registry_mcp(client: FeastClient) -> FastMCP:
         if object_type and object_name:
             return await client.request(
                 "GET",
-                f"/api/v1/lineage/objects/{object_type}/{object_name}",
+                f"/api/v1/lineage/objects/{path_segment(object_type)}/{path_segment(object_name)}",
                 token=get_auth_token(),
                 params={"project": project},
             )

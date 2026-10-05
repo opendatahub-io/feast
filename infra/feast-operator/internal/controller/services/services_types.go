@@ -220,6 +220,7 @@ const (
 	mcpServerConfigVolumeName = "mcp-server-config"
 	mcpServerConfigMountPath  = "/etc/feast/mcp"
 	mcpServerConfigDefaultKey = "feast_mcp.yaml"
+	mcpServerTransportEnvVar  = "FEAST_MCP_TRANSPORT"
 
 	// Test-specific constants
 	dataOnlineDbPath              = "/data/online.db"

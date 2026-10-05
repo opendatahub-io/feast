@@ -11,12 +11,14 @@ everything `feast mcp` needs is already present. This image only sets the
 entrypoint, and inherits the UBI base and the arbitrary-uid permission setup.
 
 ```bash
-docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile -t feast-mcp:0.66.0 --load .
+docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile \
+  --build-arg BASE_TAG=0.66.0 -t feast-mcp:0.66.0 --load .
 ```
 
-`BASE_IMAGE` and `BASE_TAG` select the feature-server image to build on, and
-default to `quay.io/feastdev/feature-server:latest`. To build against a
-different repository or a published tag:
+`BASE_IMAGE` and `BASE_TAG` select the feature-server image to build on.
+`BASE_IMAGE` defaults to `quay.io/feastdev/feature-server`. `BASE_TAG` is
+required and has no `latest` default, so every build uses the same base. To
+build against a different repository or a published tag:
 
 ```bash
 docker buildx build -f sdk/python/feast/mcp/docker/Dockerfile \

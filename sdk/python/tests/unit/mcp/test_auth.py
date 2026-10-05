@@ -413,7 +413,7 @@ class TestDescribeUser:
 
 
 class TestRequestContext:
-    """Client IP resolution for the audit log, proxy headers first."""
+    """Client IP resolution for the audit log: the socket peer only."""
 
     @staticmethod
     def _request(headers, client_host="10.0.0.9", method="POST", path="/mcp"):
@@ -436,20 +436,17 @@ class TestRequestContext:
         request.url = url
         return request
 
-    def test_x_forwarded_for_wins_and_takes_the_first_hop(self):
-        request = self._request({"x-forwarded-for": "203.0.113.5, 70.41.3.18"})
+    def test_forwarding_headers_are_ignored(self):
+        # Any caller can set these, so they must not reach the audit log.
+        request = self._request(
+            {"x-forwarded-for": "203.0.113.5, 70.41.3.18", "x-real-ip": "203.0.113.7"}
+        )
         with patch.object(auth_mod, "get_http_request", return_value=request):
             ip, where = auth_mod._request_context()
-        assert ip == "203.0.113.5"
+        assert ip == "10.0.0.9"
         assert where == "POST /mcp"
 
-    def test_x_real_ip_is_used_next(self):
-        request = self._request({"x-real-ip": "203.0.113.7"})
-        with patch.object(auth_mod, "get_http_request", return_value=request):
-            ip, _ = auth_mod._request_context()
-        assert ip == "203.0.113.7"
-
-    def test_socket_peer_is_the_last_resort(self):
+    def test_socket_peer_is_the_client_ip(self):
         with patch.object(auth_mod, "get_http_request", return_value=self._request({})):
             ip, _ = auth_mod._request_context()
         assert ip == "10.0.0.9"

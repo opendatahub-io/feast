@@ -273,11 +273,7 @@ _Appears in:_
 | `onlineStore` _[OnlineStore](#onlinestore)_ |  |
 | `registry` _[Registry](#registry)_ |  |
 | `ui` _[ServerConfigs](#serverconfigs)_ | Creates a UI server container |
-| `mcpServer` _[McpServerConfig](#mcpserverconfig)_ | McpServer deploys a standalone Feast MCP (Model Context Protocol) server container.
-This runs the `feast mcp` command in its own container, exposed on its own Service and
-port. It proxies to the in-pod online feature server and/or REST registry server.
-This is distinct from the embedded MCP support on the online store (services.onlineStore.serving.mcp)
-and the registry (services.registry.local.server.mcp). |
+| `mcpServer` _[McpServerConfig](#mcpserverconfig)_ | McpServer deploys a standalone Feast MCP (Model Context Protocol) server container (`feast mcp`). It is separate from the embedded MCP of services.onlineStore.serving.mcp and services.registry.local.server.mcp. |
 | `deploymentStrategy` _[DeploymentStrategy](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#deploymentstrategy-v1-apps)_ |  |
 | `securityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#podsecuritycontext-v1-core)_ |  |
 | `podAnnotations` _object (keys:string, values:string)_ | PodAnnotations are annotations to be applied to the Deployment's PodTemplate metadata.
@@ -616,12 +612,7 @@ required by the Feast components. Ensure that each volume mount has a correspond
 volume definition in the Volumes field. |
 | `workerConfigs` _[WorkerConfigs](#workerconfigs)_ | WorkerConfigs defines the worker configuration for the Feast server.
 These options are primarily used for production deployments to optimize performance. |
-| `config` _[McpServerConfigSource](#mcpserverconfigsource)_ | Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`.
-This file drives the MCP transport (http/sse), upstream feature/registry URLs, auth and
-observability. When omitted, `feast mcp` relies on environment variables and defaults.
-If transport is left unset, the process default is stdio, which cannot serve the HTTP
-Service the operator creates — set `server.transport: http` (or streamable-http/sse) in
-the ConfigMap for in-cluster use. |
+| `config` _[McpServerConfigSource](#mcpserverconfigsource)_ | Config references a ConfigMap holding the feast_mcp.yaml file passed to `feast mcp --config`. Its transport must be http, streamable-http or sse, because the stdio default cannot serve the Service. If omitted, the operator passes `--transport http` unless FEAST_MCP_TRANSPORT is set in env. |
 
 
 #### McpServerConfigSource

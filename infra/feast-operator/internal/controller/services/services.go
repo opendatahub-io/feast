@@ -942,7 +942,8 @@ func (feast *FeastServices) getContainerCommand(feastType FeastServiceType) []st
 // getMcpServerCommand builds the `feast mcp` command for the standalone MCP server container.
 // The operator owns the bind host/port (so they match the generated Service); everything else
 // (transport, upstream feature/registry URLs, auth, observability) is read from the mounted
-// feast_mcp.yaml config file when provided.
+// feast_mcp.yaml config file when provided. Without one, the transport defaults to http,
+// because the process default (stdio) cannot serve the Service.
 func (feast *FeastServices) getMcpServerCommand() []string {
 	cmd := []string{feastCommand}
 	if logLevel := feast.getLogLevelForType(McpServerFeastType); logLevel != nil {
@@ -952,8 +953,19 @@ func (feast *FeastServices) getMcpServerCommand() []string {
 	cmd = append(cmd, "mcp", "--host", hostAllIPv4, "--port", strconv.Itoa(int(targetPort)))
 	if configPath := feast.getMcpServerConfigPath(); configPath != "" {
 		cmd = append(cmd, "--config", configPath)
+	} else if !feast.hasMcpServerTransportEnv() {
+		cmd = append(cmd, "--transport", "http")
 	}
 	return cmd
+}
+
+// hasMcpServerTransportEnv reports whether the user set the MCP transport through mcpServer.env.
+func (feast *FeastServices) hasMcpServerTransportEnv() bool {
+	if !feast.isMcpServer() {
+		return false
+	}
+	env := feast.Handler.FeatureStore.Status.Applied.Services.McpServer.Env
+	return env != nil && getEnvVar(mcpServerTransportEnvVar, *env) != -1
 }
 
 // getMcpServerConfigPath returns the in-container path to the mounted feast_mcp.yaml, or ""
