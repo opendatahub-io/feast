@@ -132,13 +132,15 @@ func Load(ctx context.Context, c client.Client) (Config, error) {
 		return defaults, fmt.Errorf("invalid %s ConfigMap: required key %q is missing", ConfigMapName, KeyDataRegistryEnabled)
 	}
 
-	if v, ok := cm.Data[KeyDataRegistryNamespace]; ok && v != "" {
-		out.DataRegistryNamespace = v
-	}
-
-	if strictMode && out.DataRegistryEnabled && out.DataRegistryNamespace == "" {
-		return defaults, fmt.Errorf("invalid %s ConfigMap: %s is enabled but %s is empty",
-			ConfigMapName, KeyDataRegistryEnabled, KeyDataRegistryNamespace)
+	if v, ok := cm.Data[KeyDataRegistryNamespace]; ok {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" && strictMode && out.DataRegistryEnabled {
+			return defaults, fmt.Errorf("invalid %s ConfigMap: %s is enabled but %s is empty",
+				ConfigMapName, KeyDataRegistryEnabled, KeyDataRegistryNamespace)
+		}
+		if trimmed != "" {
+			out.DataRegistryNamespace = trimmed
+		}
 	}
 
 	return out, nil
