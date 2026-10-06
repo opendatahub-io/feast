@@ -79,6 +79,7 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;watch;update;delete
 // +kubebuilder:rbac:groups=core,resources=secrets;namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch,resourceNames=feast-capabilities-config
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
@@ -246,6 +247,7 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			}
 			if cleanupErr := feast.CleanupDataRegistryResources(); cleanupErr != nil {
 				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
+				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 			}
 			if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
 				controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
@@ -295,6 +297,7 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		}
 		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
 			logger.Error(cleanupErr, "Failed to cleanup standard resources after capability disabled")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 		}
 
 		return ctrl.Result{}, nil
