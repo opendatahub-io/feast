@@ -82,7 +82,7 @@ type FeatureStoreReconciler struct {
 // namespaces update is required by access.EnsureNamespaceLabel and
 // RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
 // discovery label. Not present upstream; do not drop when syncing.
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch,resourceNames=feast-capabilities-config
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get,resourceNames=feast-capabilities-config
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
@@ -415,6 +415,7 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			}
 			if cleanupErr := feast.CleanupDataRegistryResources(); cleanupErr != nil {
 				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
+				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 			}
 			if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
 				controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
@@ -469,6 +470,7 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		}
 		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
 			logger.Error(cleanupErr, "Failed to cleanup standard resources after capability disabled")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 		}
 
 		return ctrl.Result{}, nil

@@ -19,6 +19,7 @@ package capabilities
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -250,5 +251,87 @@ func TestNonStrictModeDefaultsWhenConfigMapMissing(t *testing.T) {
 	}
 	if !cfg.FeatureStoreEnabled || !cfg.DataRegistryEnabled {
 		t.Fatalf("expected both enabled in non-strict mode, got %+v", cfg)
+	}
+}
+
+func TestStrictModeRejectsExplicitlyEmptyNamespace(t *testing.T) {
+	t.Setenv(podNamespaceEnvVar, "redhat-ods-applications")
+	t.Setenv(platformCapabilitiesRequiredEnvVar, "true")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ConfigMapName,
+			Namespace: "redhat-ods-applications",
+		},
+		Data: map[string]string{
+			KeyFeatureStoreEnabled:   "false",
+			KeyDataRegistryEnabled:   "true",
+			KeyDataRegistryNamespace: "",
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+
+	_, err := Load(context.Background(), cl)
+	if err == nil {
+		t.Fatal("expected error for explicitly empty namespace with data registry enabled in strict mode")
+	}
+	if !strings.Contains(err.Error(), KeyDataRegistryNamespace) {
+		t.Fatalf("error should mention %s, got: %v", KeyDataRegistryNamespace, err)
+	}
+}
+
+func TestStrictModeAcceptsWhitespaceOnlyNamespaceAsEmpty(t *testing.T) {
+	t.Setenv(podNamespaceEnvVar, "redhat-ods-applications")
+	t.Setenv(platformCapabilitiesRequiredEnvVar, "true")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ConfigMapName,
+			Namespace: "redhat-ods-applications",
+		},
+		Data: map[string]string{
+			KeyFeatureStoreEnabled:   "false",
+			KeyDataRegistryEnabled:   "true",
+			KeyDataRegistryNamespace: "  ",
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+
+	_, err := Load(context.Background(), cl)
+	if err == nil {
+		t.Fatal("expected error for whitespace-only namespace with data registry enabled in strict mode")
+	}
+}
+
+func TestNonStrictModeDefaultsNamespaceWhenExplicitlyEmpty(t *testing.T) {
+	t.Setenv(podNamespaceEnvVar, "redhat-ods-applications")
+	t.Setenv(platformCapabilitiesRequiredEnvVar, "false")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ConfigMapName,
+			Namespace: "redhat-ods-applications",
+		},
+		Data: map[string]string{
+			KeyFeatureStoreEnabled:   "true",
+			KeyDataRegistryEnabled:   "true",
+			KeyDataRegistryNamespace: "",
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+
+	cfg, err := Load(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DataRegistryNamespace != DefaultDataRegistryNamespace {
+		t.Fatalf("expected default namespace %q for empty value in non-strict mode, got %q",
+			DefaultDataRegistryNamespace, cfg.DataRegistryNamespace)
 	}
 }
