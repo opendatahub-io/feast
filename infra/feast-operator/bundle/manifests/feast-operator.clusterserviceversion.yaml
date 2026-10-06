@@ -147,7 +147,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-08-21T03:30:58Z"
+    createdAt: "2026-09-09T12:33:32Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: feast-operator.v0.66.0
@@ -177,6 +177,14 @@ spec:
       - rules:
         - apiGroups:
           - ""
+          resourceNames:
+          - feast-capabilities-config
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
           resources:
           - configmaps
           verbs:
@@ -190,12 +198,22 @@ spec:
           - watch
         - apiGroups:
           - ""
+          resourceNames:
+          - feast-capabilities-config
+          resources:
+          - configmaps
+          verbs:
+          - get
+        - apiGroups:
+          - ""
           resources:
           - namespaces
           - secrets
           verbs:
+          - create
           - get
           - list
+          - update
           - watch
         - apiGroups:
           - ""
@@ -369,12 +387,15 @@ spec:
           - rbac.authorization.k8s.io
           resources:
           - clusterrolebindings
+          - rolebindings
+          - roles
           verbs:
           - create
           - delete
           - get
           - list
           - update
+          - watch
         - apiGroups:
           - rbac.authorization.k8s.io
           resources:
@@ -386,6 +407,9 @@ spec:
         - apiGroups:
           - rbac.authorization.k8s.io
           resourceNames:
+          - feast-data-registry-admin
+          - feast-data-registry-editor
+          - feast-data-registry-viewer
           - feast-discover-namespaces
           - feast-oidc-token-review
           - feast-token-review-cluster-role
@@ -394,18 +418,6 @@ spec:
           verbs:
           - delete
           - update
-        - apiGroups:
-          - rbac.authorization.k8s.io
-          resources:
-          - rolebindings
-          - roles
-          verbs:
-          - create
-          - delete
-          - get
-          - list
-          - update
-          - watch
         - apiGroups:
           - route.openshift.io
           resources:
@@ -471,6 +483,11 @@ spec:
                   value: quay.io/feastdev/feature-server:0.66.0
                 - name: RELATED_IMAGE_CRON_JOB
                   value: quay.io/openshift/origin-cli:4.17
+                - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
                 - name: GOMEMLIMIT
                   value: 230MiB
                 - name: OIDC_ISSUER_URL
@@ -568,4 +585,6 @@ spec:
     name: feature-server
   - image: quay.io/openshift/origin-cli:4.17
     name: cron-job
+  - image: ""
+    name: odh-kube-rbac-proxy-image
   version: 0.66.0

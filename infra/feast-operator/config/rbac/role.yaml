@@ -19,10 +19,19 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resourceNames:
+  - feast-capabilities-config
+  resources:
+  - configmaps
+  verbs:
+  - get
+- apiGroups:
+  - ""
   resources:
   - namespaces
   - secrets
   verbs:
+  - create
   - get
   - list
   - watch
@@ -198,12 +207,15 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
+  - rolebindings
+  - roles
   verbs:
   - create
   - delete
   - get
   - list
   - update
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -215,6 +227,9 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
+  - feast-data-registry-admin
+  - feast-data-registry-editor
+  - feast-data-registry-viewer
   - feast-discover-namespaces
   - feast-oidc-token-review
   - feast-token-review-cluster-role
@@ -223,18 +238,6 @@ rules:
   verbs:
   - delete
   - update
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  - roles
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
 - apiGroups:
   - route.openshift.io
   resources:
