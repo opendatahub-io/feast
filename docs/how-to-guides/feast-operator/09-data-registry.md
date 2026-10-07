@@ -93,7 +93,7 @@ they are cleaned up when the CR is deleted or the annotation is removed.
 ```
 kube-rbac-proxy :8443 (HTTPS)  ──HTTP 127.0.0.1:6572──►  feast-server
      │                                                         │
-     │ TokenReview + SAR                          SSAR (/projects)
+     │ TokenReview + SAR                           SAR (/projects)
      │ on "registries" resource                   per-namespace filtering
      │                                                         │
      └─── :8000 /metrics (Prometheus, direct scrape) ──────────┘
@@ -101,8 +101,8 @@ kube-rbac-proxy :8443 (HTTPS)  ──HTTP 127.0.0.1:6572──►  feast-server
 
 - **kube-rbac-proxy** handles TLS termination and coarse-grained authorization via
   SubjectAccessReview on `dataregistry.opendatahub.io/registries`.
-- **feast-server** runs `feast serve_registry --rest-api` with `DATACATALOG_ENABLED=true`.
-  It performs server-side SubjectAccessReview (SSAR) for cross-namespace `/projects` listing.
+- **feast-server** runs `feast serve_registry --rest-api` with `DATA_REGISTRY_ENABLED=true`.
+  It performs SubjectAccessReview (SAR) checks for cross-namespace `/projects` listing.
 
 ### Resource limits
 
@@ -146,7 +146,7 @@ Data Registry monitoring follows the same model as the [online feature server](0
 and the [Feast feature server monitoring guide](https://feast.dev/blog/feast-feature-server-monitoring/):
 
 - The feast-server starts a Prometheus metrics endpoint on **`:8000/metrics`** when
-  `DATACATALOG_ENABLED=true` (automatic in data-registry mode).
+  `DATA_REGISTRY_ENABLED=true` (automatic in Data Registry mode).
 - The operator exposes port `8000` on the Service (named `metrics`) so Prometheus can scrape
   directly — **no bearer token required** (metrics bypass kube-rbac-proxy).
 - When the `ServiceMonitor` CRD is available, the operator creates a **ServiceMonitor** targeting

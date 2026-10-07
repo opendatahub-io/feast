@@ -111,7 +111,6 @@ def test_create_get_head_delete(sqlite_registry):
     assert body["storage_location"] == "s3://bucket/claims/"
     assert body["columns"] is None
     for key in (
-        "catalog-name",
         "schema-name",
         "volume-type",
         "config",

@@ -476,9 +476,13 @@ class SqlRegistry(CachingRegistry):
         return gaps
 
     @staticmethod
-    def _is_datacatalog_enabled() -> bool:
-        """True when this Feast process is running as the Data Catalog server."""
-        return os.environ.get("DATACATALOG_ENABLED", "").lower() in ("1", "true", "yes")
+    def _is_data_registry_enabled() -> bool:
+        """True when this Feast process is running as the Data Registry server."""
+        return os.environ.get("DATA_REGISTRY_ENABLED", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
     @staticmethod
     def _require_saved_dataset_hierarchy_columns(
@@ -494,14 +498,14 @@ class SqlRegistry(CachingRegistry):
     ) -> bool:
         """Return True when hierarchy SQL columns are present and usable.
 
-        When ``DATACATALOG_ENABLED`` is set, missing hierarchy schema raises
+        When ``DATA_REGISTRY_ENABLED`` is set, missing hierarchy schema raises
         ``FeastRegistryHierarchySchemaError``. Otherwise log a warning and return
         False so list paths can fall back to proto-side filtering.
         """
         gaps = SqlRegistry._saved_dataset_hierarchy_gaps(engine)
         if not gaps:
             return True
-        if SqlRegistry._is_datacatalog_enabled():
+        if SqlRegistry._is_data_registry_enabled():
             raise FeastRegistryHierarchySchemaError(gaps, engine_role=engine_role)
         logger.warning(
             "saved_datasets is missing hierarchy schema (%s); "

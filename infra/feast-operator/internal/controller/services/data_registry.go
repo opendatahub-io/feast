@@ -342,7 +342,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		},
 	}
 
-	// SSAR env vars are consumed by the Feast Python server (not by kube-rbac-proxy).
+	// SAR env vars are consumed by the Feast Python server (not by kube-rbac-proxy).
 	// The proxy uses auth.yaml for its initial authentication gate, but the server
 	// performs its own SubjectAccessReview calls during cross-namespace search to
 	// determine which namespaces a given user is authorized to browse.
@@ -369,9 +369,9 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			// the standard feast-init container, which this pod does not run.
 			{Name: FeatureStoreYamlEnvVar, Value: fsYamlB64},
 			{Name: "FEAST_USAGE", Value: "False"},
-			{Name: DataCatalogEnabledEnvVar, Value: "true"},
-			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
-			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
+			{Name: DataRegistryEnabledEnvVar, Value: "true"},
+			{Name: DataRegistrySARApiGroupEnvVar, Value: dataRegistryAPIGroup},
+			{Name: DataRegistrySARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
 			{Name: FeastProjectEnvVar, Value: DataRegistryProject},
 		},
 		Resources: corev1.ResourceRequirements{
@@ -421,7 +421,7 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
 			// /projects bypasses proxy auth because it requires server-side
-			// per-namespace SSAR filtering that cannot be expressed as a single
+			// per-namespace SAR filtering that cannot be expressed as a single
 			// resource SAR. The Feast server reads the bearer token from the
 			// request, performs TokenReview + per-namespace SubjectAccessReview,
 			// and returns only authorized results.
@@ -594,7 +594,7 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	// Static SAR attributes are the coarse auth gate for Feast REST
 	// (/entities, /feature_views, …). kube-rbac-proxy maps GET→get and
 	// POST→create on this resource. /projects bypasses this gate via
-	// --ignore-paths and uses server-side SSAR instead. /search goes through
+	// --ignore-paths and uses server-side SAR instead. /search goes through
 	// the proxy gate (no ignore-paths entry) to prevent unauthenticated access.
 	//
 	// Do not set `rewrites`. kube-rbac-proxy v0.18.1 only supports
