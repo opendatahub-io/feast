@@ -31,6 +31,7 @@ from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
 
 NS = "demo-user-1"
 COL = "underwriting"
+AUTH = {"X-User": "test-user"}
 
 
 @pytest.fixture
@@ -95,7 +96,13 @@ def test_list_labels_discovered_from_volume(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["uw", "claims"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["uw", "claims"],
+        },
+        headers=AUTH,
     )
     resp = client.get(f"/v1/{NS}/labels")
     assert resp.status_code == 200
@@ -108,6 +115,7 @@ def test_list_labels_discovered_from_generic_table(sqlite_registry):
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": "scores", "format": "parquet", "labels": ["ml"]},
+        headers=AUTH,
     )
     resp = client.get(f"/v1/{NS}/labels")
     assert resp.status_code == 200
@@ -120,7 +128,13 @@ def test_list_labels_merges_explicit_and_discovered(sqlite_registry):
     client.post(f"/v1/{NS}/labels", json={"name": "pii"})
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["uw"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["uw"],
+        },
+        headers=AUTH,
     )
     resp = client.get(f"/v1/{NS}/labels")
     assert resp.status_code == 200
@@ -134,7 +148,13 @@ def test_list_labels_no_duplicates(sqlite_registry):
     client.post(f"/v1/{NS}/labels", json={"name": "pii"})
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["pii"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["pii"],
+        },
+        headers=AUTH,
     )
     resp = client.get(f"/v1/{NS}/labels")
     assert resp.status_code == 200
@@ -167,7 +187,13 @@ def test_create_label_discovered_on_asset_409(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["uw"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["uw"],
+        },
+        headers=AUTH,
     )
     resp = client.post(f"/v1/{NS}/labels", json={"name": "uw"})
     assert resp.status_code == 409
@@ -193,7 +219,13 @@ def test_assign_label_with_slash_rejected(sqlite_registry):
     _ensure_collection(client)
     resp = client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "v1", "location": "s3://b/c/", "labels": ["team/data"]},
+        json={
+            "name": "v1",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["team/data"],
+        },
+        headers=AUTH,
     )
     assert resp.status_code == 400
 
@@ -233,7 +265,13 @@ def test_delete_discovered_label_cascades(sqlite_registry):
     _ensure_collection(client)
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["uw", "pii"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["uw", "pii"],
+        },
+        headers=AUTH,
     )
     resp = client.delete(f"/v1/{NS}/labels/pii")
     assert resp.status_code == 204
@@ -250,11 +288,18 @@ def test_delete_explicit_label_cascades_to_assets(sqlite_registry):
     client.post(f"/v1/{NS}/labels", json={"name": "pii"})
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["pii", "uw"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["pii", "uw"],
+        },
+        headers=AUTH,
     )
     client.post(
         f"/v1/{NS}/namespaces/{COL}/generic-tables",
         json={"name": "scores", "format": "parquet", "labels": ["pii"]},
+        headers=AUTH,
     )
     resp = client.delete(f"/v1/{NS}/labels/pii")
     assert resp.status_code == 204
@@ -275,11 +320,23 @@ def test_delete_label_does_not_affect_other_projects(sqlite_registry):
     client.post("/v1/other-user/labels", json={"name": "pii"})
     client.post(
         f"/v1/{NS}/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/c/", "labels": ["pii"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/c/",
+            "labels": ["pii"],
+        },
+        headers=AUTH,
     )
     client.post(
         f"/v1/other-user/namespaces/{COL}/volumes",
-        json={"name": "claims", "location": "s3://b/d/", "labels": ["pii"]},
+        json={
+            "name": "claims",
+            "format": "documents",
+            "storage_location": "s3://b/d/",
+            "labels": ["pii"],
+        },
+        headers=AUTH,
     )
     client.delete(f"/v1/{NS}/labels/pii")
     assert client.get(f"/v1/{NS}/labels").json()["labels"] == []
