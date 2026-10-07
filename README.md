@@ -5,6 +5,8 @@
       <img src="https://raw.githubusercontent.com/feast-dev/feast/master/docs/assets/feast_logo.png" width="550">
     </a>
 </p>
+
+
 <br />
 
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/feast)](https://pypi.org/project/feast/)
