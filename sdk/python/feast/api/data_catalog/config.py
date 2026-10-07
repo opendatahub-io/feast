@@ -26,16 +26,15 @@ handlers. Mounting on RestRegistryServer is RHAI-390.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query
 
-from feast.api.data_catalog.catalog_utils import _http_namespace, list_catalog_projects
-from feast.api.data_catalog.models import DataRegistryConfig, ProjectListResponse
+from feast.api.data_catalog.catalog_utils import _http_namespace
+from feast.api.data_catalog.models import DataRegistryConfig
 
 # Iceberg clients match ``{prefix}`` in these strings, not OpenAPI ``{project}``.
 CATALOG_CONFIG_ENDPOINTS = [
     "GET /v1/config",
     "GET /v1/{prefix}/config",
-    "GET /v1/projects",
     "GET /v1/{prefix}/namespaces",
     "POST /v1/{prefix}/namespaces",
     "GET /v1/{prefix}/namespaces/{namespace}",
@@ -49,7 +48,7 @@ CATALOG_CONFIG_ENDPOINTS = [
     "POST /v1/{prefix}/namespaces/{namespace}/volumes",
     "GET /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
     "HEAD /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
-    "PUT /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
+    "PATCH /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
     "DELETE /v1/{prefix}/namespaces/{namespace}/volumes/{volume}",
     "GET /v1/{prefix}/namespaces/{namespace}/generic-tables",
     "POST /v1/{prefix}/namespaces/{namespace}/generic-tables",
@@ -59,6 +58,7 @@ CATALOG_CONFIG_ENDPOINTS = [
     "GET /v1/{prefix}/labels",
     "POST /v1/{prefix}/labels",
     "DELETE /v1/{prefix}/labels/{label}",
+    "GET /v1/{prefix}/search",
 ]
 
 
@@ -100,17 +100,5 @@ def get_config_router() -> APIRouter:
         Auth: ``kube-rbac-proxy`` · Rate limit: ingress/gateway.
         """
         return data_catalog_config(prefix=_config_prefix(project))
-
-    @router.get("/v1/projects", response_model=ProjectListResponse)
-    def list_projects(request: Request) -> ProjectListResponse:
-        """Catalog DISTINCT of RHAI namespaces with rows or collection tags.
-
-        Not a Kubernetes SSAR list. Caller auth is kube-rbac-proxy, not this
-        handler. Rate limits belong on the ingress, not in-process.
-        """
-        registry = getattr(request.app.state, "registry", None)
-        if registry is None:
-            return ProjectListResponse(projects=[])
-        return ProjectListResponse(projects=list_catalog_projects(registry))
 
     return router
