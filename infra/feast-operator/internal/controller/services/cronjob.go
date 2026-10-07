@@ -184,6 +184,7 @@ func (feast *FeastServices) setCronJobContainers(podSpec *corev1.PodSpec) {
 }
 
 func (feast *FeastServices) getCronJobContainer(containerName, cronJobCmd string) corev1.Container {
+	intraCommCMName := GetIntraCommunicationConfigMapName(feast.Handler.FeatureStore.Name)
 	container := getContainer(
 		containerName,
 		"",
@@ -194,6 +195,7 @@ func (feast *FeastServices) getCronJobContainer(containerName, cronJobCmd string
 		},
 		feast.Handler.FeatureStore.Status.Applied.CronJob.ContainerConfigs.ContainerConfigs,
 		"",
+		intraCommCMName,
 	)
 	container.SecurityContext = &corev1.SecurityContext{
 		AllowPrivilegeEscalation: boolPtr(false),

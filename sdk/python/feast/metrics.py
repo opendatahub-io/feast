@@ -56,8 +56,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Iterable, List, Optional
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
-import psutil
-
 if TYPE_CHECKING:
     from feast.feature_store import FeatureStore
 
@@ -519,6 +517,8 @@ def update_feature_freshness(
 
 def monitor_resources(interval: int = 5):
     """Background thread target that updates CPU and memory usage gauges."""
+    import psutil
+
     logger.debug("Starting resource monitoring with interval %d seconds", interval)
     p = psutil.Process()
     logger.debug("PID is %d", p.pid)

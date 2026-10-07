@@ -17,6 +17,8 @@ limitations under the License.
 package services
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"path"
@@ -97,6 +99,12 @@ func (feast *FeastServices) applyMlflowDefaults() {
 
 // Deploy the feast services
 func (feast *FeastServices) Deploy() error {
+	// Data-registry mode: deploy a single registry-only pod with proxy sidecar
+	// and skip standard online/offline store deployments.
+	if feast.isDataRegistryEnabled() {
+		return feast.deployDataRegistryMode()
+	}
+
 	if feast.noLocalCoreServerConfigured() {
 		return errors.New("at least one local server must be configured. e.g. registry / online / offline")
 	}
@@ -127,9 +135,19 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.reconcileBatchEngineRBAC(); err != nil {
 		return err
 	}
+	if err := feast.createIntraCommunicationConfigMap(); err != nil {
+		return err
+	}
 	if err := feast.createDeployment(); err != nil {
 		return err
 	}
+	// Clean up any data-registry resources left from a previous enablement
+	// and remove the DataRegistryReady condition from status.
+	if err := feast.deployDataRegistry(); err != nil {
+		return err
+	}
+	apimeta.RemoveStatusCondition(&feast.Handler.FeatureStore.Status.Conditions,
+		FeastServiceConditions[DataRegistryFeastType][metav1.ConditionTrue].Type)
 	if err := feast.createOrDeleteHPA(); err != nil {
 		return err
 	}
@@ -162,6 +180,72 @@ func (feast *FeastServices) Deploy() error {
 	}
 
 	return nil
+}
+
+// deployDataRegistryMode handles the full reconciliation when the
+// dataregistry.opendatahub.io/enabled annotation is "true".
+// Standard online/offline store deployments are skipped; a single
+// registry-only pod with the kube-rbac-proxy sidecar is deployed instead.
+//
+// All validation failures and deployment errors are reported via a
+// DataRegistryReady status condition so users can kubectl describe
+// the CR to see exactly why it failed.
+func (feast *FeastServices) deployDataRegistryMode() error {
+	feast.validateDataRegistryAnnotation()
+
+	if err := feast.validateDataRegistryNamespace(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
+	if err := feast.validateDataRegistrySingleton(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
+	// PVC safety guard: refuse to switch to data-registry mode if this CR
+	// owns existing PVCs. Enabling data-registry mode would delete the standard
+	// Deployment and Services but the underlying PVC data would be lost.
+	// Users must create a dedicated CR for data-registry mode instead.
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType} {
+		pvc := feast.initPVC(feastType)
+		existing := &corev1.PersistentVolumeClaim{}
+		if err := feast.Handler.Get(feast.Handler.Context,
+			client.ObjectKey{Namespace: pvc.Namespace, Name: pvc.Name}, existing); err == nil {
+			if existing.DeletionTimestamp != nil {
+				continue
+			}
+			err := fmt.Errorf(
+				"cannot enable data-registry mode on FeatureStore %s/%s that owns existing PVC %s; "+
+					"create a dedicated FeatureStore CR for data-registry mode instead",
+				feast.Handler.FeatureStore.Namespace, feast.Handler.FeatureStore.Name, existing.Name,
+			)
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+		}
+	}
+
+	// Clean up standard-mode resources that are not needed in data-registry mode
+	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
+	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType, UIFeastType} {
+		if err := feast.removeFeastServiceByType(feastType); err != nil {
+			return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+		}
+	}
+
+	if err := feast.createServiceAccount(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployDataRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployClient(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployNamespaceRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	return feast.setFeastServiceCondition(nil, DataRegistryFeastType)
 }
 
 // reconcileServices validates persistence and deploys or removes each feast
@@ -233,6 +317,16 @@ func (feast *FeastServices) reconcileServices() error {
 		}
 	} else {
 		if err := feast.removeFeastServiceByType(LineageFeastType); err != nil {
+			return err
+		}
+	}
+
+	if feast.isMcpServer() {
+		if err := feast.deployFeastServiceByType(McpServerFeastType); err != nil {
+			return err
+		}
+	} else {
+		if err := feast.removeFeastServiceByType(McpServerFeastType); err != nil {
 			return err
 		}
 	}
@@ -416,6 +510,38 @@ func (feast *FeastServices) createServiceAccount() error {
 	return nil
 }
 
+// GetIntraCommunicationConfigMapName returns the name of the ConfigMap holding the intra-communication token.
+func GetIntraCommunicationConfigMapName(featureStoreName string) string {
+	return handler.FeastPrefix + featureStoreName + "-intra-comm"
+}
+
+func (feast *FeastServices) createIntraCommunicationConfigMap() error {
+	logger := log.FromContext(feast.Handler.Context)
+	cr := feast.Handler.FeatureStore
+	cmName := GetIntraCommunicationConfigMapName(cr.Name)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: cr.Namespace},
+	}
+	if op, err := controllerutil.CreateOrUpdate(feast.Handler.Context, feast.Handler.Client, cm, controllerutil.MutateFn(func() error {
+		if cm.Data == nil || cm.Data[intraCommunicationTokenKey] == "" {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				return err
+			}
+			cm.Data = map[string]string{
+				intraCommunicationTokenKey: base64.StdEncoding.EncodeToString(b),
+			}
+		}
+		cm.Labels = feast.getLabels()
+		return controllerutil.SetControllerReference(cr, cm, feast.Handler.Scheme)
+	})); err != nil {
+		return err
+	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
+		logger.Info("Successfully reconciled", "ConfigMap", cmName, "operation", op)
+	}
+	return nil
+}
+
 func (feast *FeastServices) createDeployment() error {
 	logger := log.FromContext(feast.Handler.Context)
 	deploy := feast.initFeastDeploy()
@@ -514,6 +640,7 @@ func (feast *FeastServices) setPod(podSpec *corev1.PodSpec) error {
 	feast.mountTlsConfigs(podSpec)
 	feast.mountPvcConfigs(podSpec)
 	feast.mountEmptyDirVolumes(podSpec)
+	feast.mountMcpServerConfig(podSpec)
 	feast.mountUserDefinedVolumes(podSpec)
 	feast.applyNodeSelector(podSpec)
 	feast.applyTolerations(podSpec)
@@ -547,6 +674,9 @@ func (feast *FeastServices) setContainers(podSpec *corev1.PodSpec) error {
 	if feast.isUiServer() {
 		feast.setContainer(&podSpec.Containers, UIFeastType, fsYamlB64)
 	}
+	if feast.isMcpServer() {
+		feast.setContainer(&podSpec.Containers, McpServerFeastType, fsYamlB64)
+	}
 
 	// When the CR is annotated as a protected project, set FEAST_PROTECTED_PROJECT=true
 	// so the registry server tags its own project in the shared registry.
@@ -569,7 +699,8 @@ func (feast *FeastServices) setContainer(containers *[]corev1.Container, feastTy
 		name := string(feastType)
 		workingDir := feast.getFeatureRepoDir()
 		cmd := feast.getContainerCommand(feastType)
-		container := getContainer(name, workingDir, cmd, serverConfigs.ContainerConfigs, fsYamlB64)
+		intraCommCMName := GetIntraCommunicationConfigMapName(feast.Handler.FeatureStore.Name)
+		container := getContainer(name, workingDir, cmd, serverConfigs.ContainerConfigs, fsYamlB64, intraCommCMName)
 		tls := feast.getTlsConfigs(feastType)
 		probeHandler := feast.getProbeHandler(feastType, tls)
 		container.Ports = []corev1.ContainerPort{}
@@ -660,7 +791,7 @@ func (feast *FeastServices) injectMlflowEnv(container *corev1.Container) {
 	}
 }
 
-func getContainer(name, workingDir string, cmd []string, containerConfigs feastdevv1.ContainerConfigs, fsYamlB64 string) *corev1.Container {
+func getContainer(name, workingDir string, cmd []string, containerConfigs feastdevv1.ContainerConfigs, fsYamlB64, intraCommCMName string) *corev1.Container {
 	container := &corev1.Container{
 		Name:    name,
 		Command: cmd,
@@ -668,13 +799,22 @@ func getContainer(name, workingDir string, cmd []string, containerConfigs feastd
 	if len(workingDir) > 0 {
 		container.WorkingDir = workingDir
 	}
-	if len(fsYamlB64) > 0 {
-		container.Env = []corev1.EnvVar{
-			{
-				Name:  TmpFeatureStoreYamlEnvVar,
-				Value: fsYamlB64,
+	container.Env = []corev1.EnvVar{
+		{
+			Name: IntraCommunicationBase64EnvVar,
+			ValueFrom: &corev1.EnvVarSource{
+				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: intraCommCMName},
+					Key:                  intraCommunicationTokenKey,
+				},
 			},
-		}
+		},
+	}
+	if len(fsYamlB64) > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  TmpFeatureStoreYamlEnvVar,
+			Value: fsYamlB64,
+		})
 	}
 	applyCtrConfigs(container, containerConfigs)
 	return container
@@ -723,6 +863,12 @@ func (feast *FeastServices) setRoute(route *routev1.Route, feastType FeastServic
 }
 
 func (feast *FeastServices) getContainerCommand(feastType FeastServiceType) []string {
+	// The standalone MCP server (`feast mcp`) has its own flag surface (no -p/--grpc/TLS
+	// args), so it does not go through the shared serve-command builder below.
+	if feastType == McpServerFeastType {
+		return feast.getMcpServerCommand()
+	}
+
 	baseCommand := feastCommand
 	options := []string{}
 	logLevel := feast.getLogLevelForType(feastType)
@@ -791,6 +937,81 @@ func (feast *FeastServices) getContainerCommand(feastType FeastServiceType) []st
 	feastCommand = append(feastCommand, deploySettings.Args...)
 
 	return feastCommand
+}
+
+// getMcpServerCommand builds the `feast mcp` command for the standalone MCP server container.
+// The operator owns the bind host/port (so they match the generated Service); everything else
+// (transport, upstream feature/registry URLs, auth, observability) is read from the mounted
+// feast_mcp.yaml config file when provided. Without one, the transport defaults to http,
+// because the process default (stdio) cannot serve the Service.
+func (feast *FeastServices) getMcpServerCommand() []string {
+	cmd := []string{feastCommand}
+	if logLevel := feast.getLogLevelForType(McpServerFeastType); logLevel != nil {
+		cmd = append(cmd, "--log-level", strings.ToUpper(*logLevel))
+	}
+	targetPort := FeastServiceConstants[McpServerFeastType].TargetHttpPort
+	cmd = append(cmd, "mcp", "--host", hostAllIPv4, "--port", strconv.Itoa(int(targetPort)))
+	if configPath := feast.getMcpServerConfigPath(); configPath != "" {
+		cmd = append(cmd, "--config", configPath)
+	} else if !feast.hasMcpServerTransportEnv() {
+		cmd = append(cmd, "--transport", "http")
+	}
+	return cmd
+}
+
+// hasMcpServerTransportEnv reports whether the user set the MCP transport through mcpServer.env.
+func (feast *FeastServices) hasMcpServerTransportEnv() bool {
+	if !feast.isMcpServer() {
+		return false
+	}
+	env := feast.Handler.FeatureStore.Status.Applied.Services.McpServer.Env
+	return env != nil && getEnvVar(mcpServerTransportEnvVar, *env) != -1
+}
+
+// getMcpServerConfigPath returns the in-container path to the mounted feast_mcp.yaml, or ""
+// when no config ConfigMap is referenced.
+func (feast *FeastServices) getMcpServerConfigPath() string {
+	if !feast.isMcpServer() {
+		return ""
+	}
+	config := feast.Handler.FeatureStore.Status.Applied.Services.McpServer.Config
+	if config == nil {
+		return ""
+	}
+	key := config.ConfigMapKey
+	if len(key) == 0 {
+		key = mcpServerConfigDefaultKey
+	}
+	return mcpServerConfigMountPath + "/" + key
+}
+
+// mountMcpServerConfig mounts the user-supplied feast_mcp.yaml ConfigMap into the MCP server
+// container only. No-op when the MCP server is not configured or has no config reference.
+func (feast *FeastServices) mountMcpServerConfig(podSpec *corev1.PodSpec) {
+	if !feast.isMcpServer() {
+		return
+	}
+	config := feast.Handler.FeatureStore.Status.Applied.Services.McpServer.Config
+	if config == nil {
+		return
+	}
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: mcpServerConfigVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: config.ConfigMapRef,
+			},
+		},
+	})
+	for i := range podSpec.Containers {
+		if podSpec.Containers[i].Name == string(McpServerFeastType) {
+			podSpec.Containers[i].VolumeMounts = append(podSpec.Containers[i].VolumeMounts, corev1.VolumeMount{
+				Name:      mcpServerConfigVolumeName,
+				MountPath: mcpServerConfigMountPath,
+				ReadOnly:  true,
+			})
+		}
+	}
 }
 
 func (feast *FeastServices) getDeploymentStrategy() appsv1.DeploymentStrategy {
@@ -1079,6 +1300,10 @@ func (feast *FeastServices) getServerConfigs(feastType FeastServiceType) *feastd
 		}
 	case UIFeastType:
 		return appliedServices.UI
+	case McpServerFeastType:
+		if feast.isMcpServer() {
+			return &appliedServices.McpServer.ServerConfigs
+		}
 	}
 	return nil
 }
@@ -1159,7 +1384,7 @@ func (feast *FeastServices) applyNodeSelector(podSpec *corev1.PodSpec) {
 	}
 
 	// Check all service types for node selector configuration
-	allServiceTypes := append(feastServerTypes, UIFeastType)
+	allServiceTypes := append(feastServerTypes, UIFeastType, McpServerFeastType)
 	for _, feastType := range allServiceTypes {
 		if selector := feast.getNodeSelectorForType(feastType); selector != nil && len(*selector) > 0 {
 			for k, v := range *selector {
@@ -1276,8 +1501,14 @@ func (feast *FeastServices) GetFeastServiceName(feastType FeastServiceType) stri
 
 func (feast *FeastServices) GetDeployment() (appsv1.Deployment, error) {
 	deployment := appsv1.Deployment{}
-	obj := feast.GetObjectMeta()
-	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, &deployment)
+	var name string
+	if feast.isDataRegistryEnabled() {
+		name = feast.GetFeastServiceName(DataRegistryFeastType)
+	} else {
+		name = feast.GetObjectMeta().Name
+	}
+	ns := feast.Handler.FeatureStore.Namespace
+	err := feast.Handler.Get(feast.Handler.Context, client.ObjectKey{Namespace: ns, Name: name}, &deployment)
 	return deployment, err
 }
 
@@ -1364,6 +1595,13 @@ func (feast *FeastServices) setServiceHostnames() error {
 		}
 		feast.Handler.FeatureStore.Status.ServiceHostnames.Lineage = objMeta.Name + "." + objMeta.Namespace + domain +
 			getPortStr(tls)
+	}
+	if feast.isMcpServer() {
+		objMeta := feast.initFeastSvc(McpServerFeastType)
+		// The MCP server does not support operator-managed TLS yet, so its Service always
+		// listens on the plain HTTP port.
+		feast.Handler.FeatureStore.Status.ServiceHostnames.McpServer = objMeta.Name + "." + objMeta.Namespace + domain +
+			getPortStr(nil)
 	}
 	return nil
 }
@@ -1633,6 +1871,11 @@ func (feast *FeastServices) setLineageDeployment(deploy *appsv1.Deployment) erro
 	return controllerutil.SetControllerReference(cr, deploy, feast.Handler.Scheme)
 }
 
+func (feast *FeastServices) isMcpServer() bool {
+	appliedServices := feast.Handler.FeatureStore.Status.Applied.Services
+	return appliedServices != nil && appliedServices.McpServer != nil
+}
+
 func (feast *FeastServices) initFeastDeploy() *appsv1.Deployment {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: feast.GetObjectMeta(),
@@ -1855,7 +2098,7 @@ func (feast *FeastServices) getProbeHandler(feastType FeastServiceType, tls *fea
 			return probeHandler
 		}
 	}
-	if feastType == OnlineFeastType {
+	if feastType == OnlineFeastType || feastType == McpServerFeastType {
 		probeHandler := corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/health",

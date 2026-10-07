@@ -350,6 +350,32 @@ def test_sql_registry(sqlite_registry):
         sqlite_registry.get_entity("test_entity", "test_project")
 
 
+def test_cas_touch_project_only_for_data_registry(sqlite_registry):
+    from unittest.mock import patch
+
+    entity = Entity(
+        name="test_entity",
+        description="Test entity for testing",
+        tags={"test": "transaction"},
+    )
+    with patch.object(sqlite_registry, "_cas_touch_project") as spy:
+        sqlite_registry.apply_entity(entity, "test_project")
+        spy.assert_not_called()
+        sqlite_registry.delete_entity("test_entity", "test_project")
+        spy.assert_not_called()
+
+    catalog_entity = Entity(
+        name="catalog_entity",
+        description="Catalog project entity",
+        tags={"test": "transaction"},
+    )
+    with patch.object(
+        sqlite_registry, "_cas_touch_project", wraps=sqlite_registry._cas_touch_project
+    ) as spy:
+        sqlite_registry.apply_entity(catalog_entity, "data-registry")
+        spy.assert_called()
+
+
 def test_delete_permission_refreshes_cache(sqlite_registry):
     permission = Permission(
         name="reader",
