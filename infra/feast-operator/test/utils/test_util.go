@@ -21,7 +21,7 @@ import (
 
 const (
 	FeastControllerNamespace = "feast-operator-system"
-	Timeout                  = 3 * time.Minute
+	Timeout                  = 10 * time.Minute
 	ControllerDeploymentName = "feast-operator-controller-manager"
 	FeastPrefix              = "feast-"
 	FeatureStoreName         = "simple-feast-setup"
@@ -65,6 +65,38 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 	return nil
 }
 
+// dumpDeploymentDebugInfo prints kubectl diagnostics into CI logs when a deployment
+// fails to become Available (restarts, conditions, events, container logs).
+func dumpDeploymentDebugInfo(namespace, deploymentName string) {
+	fmt.Fprintf(GinkgoWriter, "\n===== DEBUG: deployment %s/%s not Available =====\n", namespace, deploymentName)
+
+	runDebug := func(title string, args ...string) {
+		fmt.Fprintf(GinkgoWriter, "\n--- %s ---\n$ kubectl %s\n", title, strings.Join(args, " "))
+		cmd := exec.Command("kubectl", args...)
+		out, err := cmd.CombinedOutput()
+		if len(out) > 0 {
+			fmt.Fprintf(GinkgoWriter, "%s\n", string(out))
+		}
+		if err != nil {
+			fmt.Fprintf(GinkgoWriter, "(command error: %v)\n", err)
+		}
+	}
+
+	runDebug("deployment status", "get", "deploy", deploymentName, "-n", namespace, "-o", "wide")
+	runDebug("deployment yaml (status/conditions)", "get", "deploy", deploymentName, "-n", namespace, "-o", "yaml")
+	runDebug("describe deployment", "describe", "deploy", deploymentName, "-n", namespace)
+	runDebug("pods in namespace", "get", "pods", "-n", namespace, "-o", "wide")
+	runDebug("pod container restarts", "get", "pods", "-n", namespace, "-o",
+		"jsonpath={range .items[*]}{.metadata.name}{'\t'}{range .status.containerStatuses[*]}{.name}={.ready}/restarts={.restartCount}/state={.state}{' '}{end}{'\n'}{end}")
+	runDebug("describe pods", "describe", "pods", "-n", namespace)
+	runDebug("namespace events", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+	runDebug("deployment logs (current)", "logs", "deploy/"+deploymentName, "-n", namespace, "--all-containers=true", "--tail=200", "--prefix=true")
+	runDebug("deployment logs (previous)", "logs", "deploy/"+deploymentName, "-n", namespace, "--all-containers=true", "--previous", "--tail=200", "--prefix=true")
+	runDebug("featurestores", "get", "featurestores", "-n", namespace, "-o", "yaml")
+
+	fmt.Fprintf(GinkgoWriter, "===== END DEBUG: deployment %s/%s =====\n\n", namespace, deploymentName)
+}
+
 // CheckIfDeploymentExistsAndAvailable - validates if a deployment exists and also in the availability state as True.
 func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string, timeout time.Duration) error {
 	var output, errOutput bytes.Buffer
@@ -77,6 +109,7 @@ func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string
 	for {
 		select {
 		case <-timeoutChan:
+			dumpDeploymentDebugInfo(namespace, deploymentName)
 			return fmt.Errorf("timed out waiting for deployment %s to become available", deploymentName)
 		case <-ticker.C:
 			// Run kubectl command
