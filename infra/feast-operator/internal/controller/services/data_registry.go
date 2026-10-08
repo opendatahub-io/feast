@@ -293,7 +293,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 				Annotations: map[string]string{
 					// kube-rbac-proxy reads auth.yaml only at process start.
 					// Bump this when SAR config semantics change so pods roll.
-					"dataregistry.opendatahub.io/auth-config-revision": "format2-endpoints-v1",
+					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v1",
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -422,10 +422,9 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 // The proxy listens on 0.0.0.0:8443 (HTTPS) and forwards authenticated
 // requests to the feast-server at 127.0.0.1:6572.
 //
-// Auth.yaml uses Format2 endpoint rules (per-path SAR with byQueryParameter
-// namespace extraction) for resource CRUD endpoints and a Format1 fallback
-// for POST / miscellaneous paths. Requires the ODH kube-rbac-proxy fork
-// with named path capture support (opendatahub-io/kube-rbac-proxy#28).
+// Auth.yaml uses Format2 endpoint rules: path capture on /v1/{project}/... and
+// byQueryParameter on legacy registry REST. Requires ODH kube-rbac-proxy
+// v3.6.0-ea.2+ (named path captures, opendatahub-io/kube-rbac-proxy#28).
 func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 	return corev1.Container{
 		Name:  DataRegistryProxyContainerName,
@@ -436,15 +435,9 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects and /search bypass proxy auth because they require
-			// server-side per-namespace SSAR filtering that cannot be expressed
-			// as a single resource SAR. /search uses ?projects= (plural,
-			// multi-value) and the proxy can only extract a single value.
-			// The Feast server reads the bearer token from the request,
-			// performs TokenReview + per-namespace SubjectAccessReview, and
-			// returns only authorized results. The proxy must pass the
-			// Authorization header through unchanged for catalog_ssar.py.
-			"--ignore-paths=/projects,/api/v1/projects,/search",
+			// Multi-tenant list/search endpoints bypass proxy SAR: the server
+			// performs TokenReview + per-namespace SSAR (catalog_ssar.py).
+			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
 			"--auth-header-fields-enabled",
@@ -608,23 +601,8 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cr := feast.Handler.FeatureStore
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
-	// Two-layer auth.yaml using Format1 + Format2 (endpoint rules).
-	//
-	// Format2 endpoints (path-scoped rules) take priority when the request
-	// path matches. They use byQueryParameter to extract the Feast project
-	// (= Kubernetes namespace) from ?project=<ns> and perform a per-namespace
-	// SubjectAccessReview, giving fine-grained per-tenant authorization.
-	//
-	// Format1 (top-level resourceAttributes) is the fallback for paths NOT
-	// matched by any Format2 endpoint — e.g. POST requests where project is
-	// in the body, not the query string. It gates on a static SAR against the
-	// CR's namespace (coarse authentication + authorization gate).
-	//
-	// /projects is in --ignore-paths so the proxy passes the bearer token
-	// through unchanged for server-side SSAR (catalog_ssar.py).
-	//
-	// Requires the ODH kube-rbac-proxy fork with named path capture support
-	// (opendatahub-io/kube-rbac-proxy#28).
+	// Per-tenant SAR via Format2 endpoints only (path capture + ?project=).
+	// List/search paths are in --ignore-paths for server-side SSAR.
 	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{
@@ -632,78 +610,6 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	}
 
 	return controllerutil.SetControllerReference(cr, cm, feast.Handler.Scheme)
-}
-
-// buildDataRegistryAuthYaml generates the kube-rbac-proxy auth.yaml using
-// Format2 endpoint rules for per-namespace authorization on resource CRUD
-// endpoints, with a Format1 fallback for unmatched paths.
-//
-// Resource CRUD endpoints (GET/DELETE with ?project=<ns>) get per-namespace
-// SAR via byQueryParameter rewrite. POST endpoints (project in body) fall
-// through to Format1's static SAR gate. /projects and /search are handled
-// by --ignore-paths + server-side SSAR (catalog_ssar.py).
-func (feast *FeastServices) buildDataRegistryAuthYaml() string {
-	ns := feast.Handler.FeatureStore.Namespace
-	apiGroup := dataRegistryAPIGroup
-
-	// Format2 endpoint rules for resource paths that carry ?project=<namespace>.
-	// The proxy extracts the project query param and runs a per-namespace SAR.
-	// GET→get, DELETE→delete verbs are mapped automatically by kube-rbac-proxy.
-	// POST endpoints are NOT listed here because the project is in the request
-	// body, not the query string — they fall through to the Format1 fallback.
-	endpointPaths := []string{
-		"/entities",
-		"/entities/*",
-		"/feature_views",
-		"/feature_views/*",
-		"/feature_services",
-		"/feature_services/*",
-		"/data_sources",
-		"/data_sources/*",
-		"/saved_datasets",
-		"/saved_datasets/*",
-		"/saved_datasets/data/*",
-		"/permissions",
-		"/permissions/*",
-		"/features",
-		"/features/*",
-		"/features/*/*",
-		"/labels",
-		"/labels/*",
-		"/label_views",
-		"/label_views/*",
-	}
-
-	var b strings.Builder
-	b.WriteString("authorization:\n")
-
-	// Format1 fallback: static SAR for paths not matched by any Format2 endpoint.
-	// This catches POST requests (project in body), miscellaneous paths, and any
-	// new endpoints added to the Feast REST API that aren't yet listed above.
-	b.WriteString("  resourceAttributes:\n")
-	b.WriteString("    namespace: " + ns + "\n")
-	b.WriteString("    apiGroup: " + apiGroup + "\n")
-	b.WriteString("    resource: registries\n")
-
-	// Format2 endpoint rules.
-	b.WriteString("  endpoints:\n")
-
-	// Per-namespace endpoints: extract ?project=<ns> from query params.
-	for _, path := range endpointPaths {
-		b.WriteString("    - path: " + path + "\n")
-		b.WriteString("      mappings:\n")
-		b.WriteString("        - methods: [get, delete]\n")
-		b.WriteString("          resources:\n")
-		b.WriteString("            - rewrites:\n")
-		b.WriteString("                byQueryParameter:\n")
-		b.WriteString("                  name: project\n")
-		b.WriteString("              resourceAttributes:\n")
-		b.WriteString("                namespace: \"{{ .Value }}\"\n")
-		b.WriteString("                apiGroup: " + apiGroup + "\n")
-		b.WriteString("                resource: registries\n")
-	}
-
-	return b.String()
 }
 
 // ---------------------------------------------------------------------------
