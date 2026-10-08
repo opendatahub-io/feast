@@ -1,0 +1,68 @@
+# ServiceAccounts for integration testing
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: feast-test-admin
+  namespace: test-ns-feast-rest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: feast-test-viewer
+  namespace: test-ns-feast-rest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: feast-test-unauthorized
+  namespace: test-ns-feast-rest
+---
+# RoleBindings for Feast Kubernetes auth (feast-auth CR)
+# The operator creates empty Roles named feast-admin and feast-viewer
+# per the CR spec.authz.kubernetes.roles list.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-admin-binding
+  namespace: test-ns-feast-rest
+subjects:
+  - kind: ServiceAccount
+    name: feast-test-admin
+    namespace: test-ns-feast-rest
+roleRef:
+  kind: Role
+  name: feast-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-viewer-binding
+  namespace: test-ns-feast-rest
+subjects:
+  - kind: ServiceAccount
+    name: feast-test-viewer
+    namespace: test-ns-feast-rest
+roleRef:
+  kind: Role
+  name: feast-viewer
+  apiGroup: rbac.authorization.k8s.io
+---
+# Data Registry RBAC — grant feast-test-admin access via aggregated ClusterRoles.
+# The operator creates ClusterRoles feast-data-registry-viewer/editor/admin
+# with rules for API group dataregistry.opendatahub.io.
+# A namespaced RoleBinding grants the SA access scoped to test-ns-feast-rest,
+# which is what the kube-rbac-proxy auth.yaml SAR check expects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-admin-binding
+  namespace: test-ns-feast-rest
+subjects:
+  - kind: ServiceAccount
+    name: feast-test-admin
+    namespace: test-ns-feast-rest
+roleRef:
+  kind: ClusterRole
+  name: feast-data-registry-editor
+  apiGroup: rbac.authorization.k8s.io
