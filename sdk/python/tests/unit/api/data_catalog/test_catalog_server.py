@@ -118,3 +118,19 @@ def test_s7_flag_on_volume_and_search(sql_repo_config, monkeypatch):
     assert search.status_code == 200, search.text
     assert search.json()["query"] == ""
     assert "pagination" in search.json()
+
+
+def test_connection_ref_openapi_schema(sql_repo_config, monkeypatch):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    store = FeatureStore(config=sql_repo_config)
+    client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
+
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    dch = schemas["DchConnectionRef"]["properties"]
+    secret = schemas["RhaiConnectionRef"]["properties"]
+
+    assert dch["type"]["const"] == "dch"
+    assert secret["type"]["const"] == "secret"
+    for properties in (dch, secret):
+        assert properties["name"]["readOnly"] is True
+        assert properties["connectionType"]["readOnly"] is True

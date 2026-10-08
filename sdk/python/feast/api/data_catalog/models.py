@@ -84,13 +84,35 @@ class DchConnectionRef(BaseModel):
 
     type: Literal["dch"]
     id: UUID
+    name: str | None = Field(
+        default=None,
+        description="Current display name, resolved at lookup time; never persisted with assets.",
+        json_schema_extra={"readOnly": True},
+    )
+    connection_type: str | None = Field(
+        default=None,
+        alias="connectionType",
+        description="Connection provider label, such as s3 or postgres; never persisted with assets.",
+        json_schema_extra={"readOnly": True},
+    )
 
 
 class RhaiConnectionRef(BaseModel):
     """OpenAPI RhaiConnectionRef. Catalog stores secret_name; does not read the Secret."""
 
-    type: Literal["rhai"]
+    type: Literal["secret"]
     secret_name: str
+    name: str | None = Field(
+        default=None,
+        description="Current display name, resolved at lookup time; never persisted with assets.",
+        json_schema_extra={"readOnly": True},
+    )
+    connection_type: str | None = Field(
+        default=None,
+        alias="connectionType",
+        description="Connection provider label, such as s3 or postgres; never persisted with assets.",
+        json_schema_extra={"readOnly": True},
+    )
 
 
 ConnectionRef = Annotated[
