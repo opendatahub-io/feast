@@ -183,7 +183,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
 		Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(
-			"dataregistry.opendatahub.io/auth-config-revision", "format2-endpoints-v1"))
+			"dataregistry.opendatahub.io/auth-config-revision", "format2-path-capture-v1"))
 
 		// Owner reference
 		Expect(deploy.OwnerReferences).To(HaveLen(1))
