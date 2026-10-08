@@ -252,7 +252,7 @@ var _ = Describe("Data Registry", func() {
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
 			// /projects and /search bypass proxy for server-side SSAR (bearer token passthrough)
-			"--ignore-paths=/projects,/api/v1/projects,/search",
+			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			"--auth-header-fields-enabled",
 			"--auth-header-user-field-name=X-Remote-User",
 		))
@@ -335,7 +335,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(svc.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
 
-	It("creates an auth.yaml ConfigMap with Format2 endpoint rules and Format1 fallback", func() {
+	It("creates an auth.yaml ConfigMap with per-tenant Format2 endpoint rules", func() {
 		setAnnotation("true")
 
 		cm := feast.initDataRegistryAuthCM()
@@ -346,37 +346,38 @@ var _ = Describe("Data Registry", func() {
 
 		authContent := cm.Data["auth.yaml"]
 
-		// Format1 fallback: static SAR for unmatched paths and POST requests
-		Expect(authContent).To(ContainSubstring("resourceAttributes:"))
-		Expect(authContent).To(ContainSubstring("namespace: " + featureStore.Namespace))
 		Expect(authContent).To(ContainSubstring("dataregistry.opendatahub.io"))
 		Expect(authContent).To(ContainSubstring("resource: registries"))
-
-		// Format2 endpoint rules: per-path SAR with byQueryParameter rewrite
 		Expect(authContent).To(ContainSubstring("endpoints:"))
 
-		// Resource CRUD endpoints use byQueryParameter to extract ?project=<ns>
+		// No Format1 fallback on the data-registry install namespace.
+		Expect(authContent).NotTo(ContainSubstring("namespace: " + featureStore.Namespace))
+
+		// Catalog: path capture for Feast project (= K8s namespace).
+		Expect(authContent).To(ContainSubstring("path: /v1/{project}/namespaces"))
+		Expect(authContent).To(ContainSubstring(`namespace: "{{ index .PathParams "project" }}"`))
+
+		// Legacy registry REST: ?project= and /api/v1 prefix.
 		for _, path := range []string{"/entities", "/feature_views", "/data_sources",
 			"/feature_services", "/saved_datasets", "/permissions", "/features",
 			"/labels", "/label_views"} {
 			Expect(authContent).To(ContainSubstring("path: " + path))
+			Expect(authContent).To(ContainSubstring("path: /api/v1" + path))
 		}
-		// Wildcard paths for sub-resource endpoints (e.g. /entities/{name})
 		Expect(authContent).To(ContainSubstring("path: /entities/*"))
-		Expect(authContent).To(ContainSubstring("path: /feature_views/*"))
-		// Deep paths for multi-segment routes
+		Expect(authContent).To(ContainSubstring("path: /api/v1/entities/*"))
 		Expect(authContent).To(ContainSubstring("path: /features/*/*"))
 		Expect(authContent).To(ContainSubstring("path: /saved_datasets/data/*"))
 
-		// byQueryParameter rewrite extracts project from ?project=<ns>
 		Expect(authContent).To(ContainSubstring("byQueryParameter:"))
 		Expect(authContent).To(ContainSubstring("name: project"))
 		Expect(authContent).To(ContainSubstring(`namespace: "{{ .Value }}"`))
 
-		// /search is handled by --ignore-paths (server-side SSAR), not auth.yaml
+		Expect(authContent).To(ContainSubstring("path: /v1/config"))
+		Expect(authContent).To(ContainSubstring("name: warehouse"))
+
 		Expect(authContent).NotTo(ContainSubstring("path: /search"))
 
-		// Owner reference
 		Expect(cm.OwnerReferences).To(HaveLen(1))
 		Expect(cm.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
@@ -699,7 +700,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Get(ctx, drKey, svc)).To(Succeed())
 		Expect(svc.Spec.Ports[0].TargetPort).To(Equal(intstr.FromInt32(DataRegistryProxyPort)))
 
-		// Auth ConfigMap exists with Format2 endpoints + Format1 fallback
+		// Auth ConfigMap exists with per-tenant Format2 endpoints
 		cm := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, cmKey, cm)).To(Succeed())
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
