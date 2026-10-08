@@ -148,11 +148,13 @@ FEAST_AUTH_REST_SERVICE = "feast-feast-auth-registry-rest"
 
 
 # ---------------------------------------------------------------------------
-# Existing fixture: feast_rest_client (unchanged behavior)
+# Base fixture: feast_rest_client
+# Deploys ONLY credit-scoring + driver-ranking (the original behavior).
+# Existing test_registry_rest_api.py depends only on this.
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def feast_rest_client():
-    """Deploy all CRs and yield a FeastRestClient pointing at credit-scoring (noAuth)."""
+    """Deploy credit-scoring + driver-ranking CRs and yield a FeastRestClient."""
     config.load_kube_config()
     api_instance = client.CoreV1Api()
 
@@ -164,29 +166,19 @@ def feast_rest_client():
     create_namespace(api_instance, NAMESPACE)
 
     try:
-        # Label namespace for Data Registry CR
+        # Label namespace for Data Registry CR (harmless even when DR isn't deployed here)
         label_namespace(NAMESPACE, "opendatahub.io/data-registry", "true")
 
         # Deploy shared infrastructure
         deploy_and_validate_pod(NAMESPACE, str(resource_dir / "redis.yaml"), "app=redis")
         deploy_and_validate_pod(NAMESPACE, str(resource_dir / "postgres.yaml"), "app=postgres")
 
-        # Apply RBAC for auth testing
-        run_kubectl_command(["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE])
-
-        # Deploy all FeatureStore CRs
+        # Deploy the two noAuth FeatureStore CRs
         create_feast_project(str(resource_dir / "feast_config_credit_scoring.yaml"), NAMESPACE, CREDIT_SCORING)
         validate_feature_store_cr_status(NAMESPACE, CREDIT_SCORING)
 
         create_feast_project(str(resource_dir / "feast_config_driver_ranking.yaml"), NAMESPACE, DRIVER_RANKING)
         validate_feature_store_cr_status(NAMESPACE, DRIVER_RANKING)
-
-        create_feast_project(str(resource_dir / "feast_config_feast_auth.yaml"), NAMESPACE, FEAST_AUTH)
-        validate_feature_store_cr_status(NAMESPACE, FEAST_AUTH)
-
-        # Deploy Data Registry CR (longer timeout due to kube-rbac-proxy + TLS setup)
-        create_feast_project(str(resource_dir / "feast_config_data_registry.yaml"), NAMESPACE, DATA_REGISTRY)
-        wait_for_data_registry_ready(NAMESPACE, DATA_REGISTRY)
 
         if run_on_openshift:
             route_url = create_route(NAMESPACE, CREDIT_SCORING, CREDIT_SCORING_REST_SERVICE)
@@ -203,17 +195,11 @@ def feast_rest_client():
         # Apply feast projects
         applyFeastProject(NAMESPACE, CREDIT_SCORING)
         applyFeastProject(NAMESPACE, DRIVER_RANKING)
-        applyFeastProject(NAMESPACE, FEAST_AUTH)
 
         # Create saved datasets and permissions on credit-scoring
         pod_name = get_pod_name_by_prefix(NAMESPACE, CREDIT_SCORING)
         execPodCommand(NAMESPACE, pod_name, ["python", "create_ui_visible_datasets.py"])
         execPodCommand(NAMESPACE, pod_name, ["python", "permissions_apply.py"])
-
-        # Create saved datasets and permissions on feast-auth
-        auth_pod_name = get_pod_name_by_prefix(NAMESPACE, FEAST_AUTH)
-        execPodCommand(NAMESPACE, auth_pod_name, ["python", "create_ui_visible_datasets.py"])
-        execPodCommand(NAMESPACE, auth_pod_name, ["python", "permissions_apply.py"])
 
         if not route_url:
             raise RuntimeError("Route URL could not be fetched.")
@@ -229,32 +215,72 @@ def feast_rest_client():
 
 
 # ---------------------------------------------------------------------------
-# New fixtures for auth-enabled Feast and Data Registry
+# Extended fixture: feast_extended_setup
+# Deploys feast-auth + data-registry + RBAC on top of the base setup.
+# New test modules (auth, DR, isolation) depend on this.
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def admin_token():
+def feast_extended_setup(feast_rest_client):
+    """Deploy feast-auth CR, data-registry CR, and RBAC resources.
+
+    Depends on feast_rest_client so that the namespace, shared infra
+    (redis, postgres), and base CRs (credit-scoring, driver-ranking) are
+    already deployed.  Returns the base feast_rest_client for convenience.
+    """
+    resource_dir = Path(__file__).parent / "resource"
+
+    # Apply RBAC ServiceAccounts + RoleBindings
+    run_kubectl_command(["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE])
+
+    # Deploy feast-auth CR
+    create_feast_project(str(resource_dir / "feast_config_feast_auth.yaml"), NAMESPACE, FEAST_AUTH)
+    validate_feature_store_cr_status(NAMESPACE, FEAST_AUTH)
+
+    # Apply feast project inside feast-auth pod
+    applyFeastProject(NAMESPACE, FEAST_AUTH)
+
+    # Create saved datasets and permissions on feast-auth
+    auth_pod_name = get_pod_name_by_prefix(NAMESPACE, FEAST_AUTH)
+    execPodCommand(NAMESPACE, auth_pod_name, ["python", "create_ui_visible_datasets.py"])
+    execPodCommand(NAMESPACE, auth_pod_name, ["python", "permissions_apply.py"])
+
+    # Deploy Data Registry CR — apply without the 300s validation inside
+    # create_feast_project; instead use wait_for_data_registry_ready with 900s.
+    run_kubectl_command([
+        "apply", "-f", str(resource_dir / "feast_config_data_registry.yaml"), "-n", NAMESPACE,
+    ])
+    wait_for_data_registry_ready(NAMESPACE, DATA_REGISTRY, timeout_seconds=900)
+
+    return feast_rest_client
+
+
+# ---------------------------------------------------------------------------
+# Token fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def admin_token(feast_extended_setup):
     """Bearer token for the feast-test-admin ServiceAccount."""
     return create_sa_token(NAMESPACE, "feast-test-admin")
 
 
 @pytest.fixture(scope="session")
-def viewer_token():
+def viewer_token(feast_extended_setup):
     """Bearer token for the feast-test-viewer ServiceAccount."""
     return create_sa_token(NAMESPACE, "feast-test-viewer")
 
 
 @pytest.fixture(scope="session")
-def unauthorized_token():
+def unauthorized_token(feast_extended_setup):
     """Bearer token for the feast-test-unauthorized ServiceAccount (no RBAC bindings)."""
     return create_sa_token(NAMESPACE, "feast-test-unauthorized")
 
 
+# ---------------------------------------------------------------------------
+# Auth-enabled Feast fixtures
+# ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def feast_auth_route_url(feast_rest_client):
-    """Route URL for the feast-auth CR's registry-rest service.
-
-    Depends on feast_rest_client to ensure the full setup has completed.
-    """
+def feast_auth_route_url(feast_extended_setup):
+    """Route URL for the feast-auth CR's registry-rest service."""
     run_on_openshift = os.getenv("RUN_ON_OPENSHIFT_CI", "false").lower() == "true"
     if not run_on_openshift:
         pytest.skip("feast-auth route requires OpenShift")
@@ -293,12 +319,12 @@ def feast_auth_no_token_client(feast_auth_route_url):
     return FeastRestClient(feast_auth_route_url, token=None)
 
 
+# ---------------------------------------------------------------------------
+# Data Registry fixtures
+# ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def data_registry_route_url(feast_rest_client):
-    """Route URL for the Data Registry CR's HTTPS service.
-
-    Depends on feast_rest_client to ensure the full setup has completed.
-    """
+def data_registry_route_url(feast_extended_setup):
+    """Route URL for the Data Registry CR's HTTPS service."""
     run_on_openshift = os.getenv("RUN_ON_OPENSHIFT_CI", "false").lower() == "true"
     if not run_on_openshift:
         pytest.skip("Data Registry route requires OpenShift")

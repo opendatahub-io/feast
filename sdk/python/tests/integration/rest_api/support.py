@@ -322,6 +322,19 @@ def wait_for_data_registry_ready(namespace, cr_name, timeout_seconds=600, interv
         print(f"  Phase={phase}, DataRegistryReady={conditions}")
         time.sleep(interval_seconds)
 
+    # Dump full CR status for debugging before raising
+    full_status = run_kubectl_command(
+        ["get", "feast", cr_name, "-n", namespace, "-o", "jsonpath={.status}"]
+    )
+    print(f"  Final CR status dump: {full_status}")
+
+    # Also dump pod status for the data-registry server
+    pods = run_kubectl_command(
+        ["get", "pods", "-n", namespace, "-l", f"app.kubernetes.io/name=feast-{cr_name}",
+         "-o", "wide", "--no-headers"]
+    )
+    print(f"  Related pods: {pods}")
+
     raise TimeoutError(
         f"Data Registry CR {namespace}/{cr_name} did not reach Ready within {timeout_seconds}s"
     )
