@@ -135,7 +135,7 @@ def ensure_catalog_project(registry: BaseRegistry) -> Project:
     except ProjectObjectNotFoundException:
         project = Project(
             name=CATALOG_PROJECT,
-            description="RHOAI Data Registry catalog",
+            description="RHOAI Data Registry",
         )
         registry.apply_project(project)
         return project
@@ -159,7 +159,7 @@ def _as_bad_request(exc: ValueError) -> BadRequestException:
 def _registry(request: Request) -> BaseRegistry:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
-        raise ServiceFailureException("catalog registry is not configured")
+        raise ServiceFailureException("Data Registry is not configured")
     return registry
 
 
@@ -338,7 +338,7 @@ def _mutate_catalog_project(
 
     def catalog_mutator(project: Project, conn: Any) -> None:
         if create_if_missing and not project.description:
-            project.description = "RHOAI Data Registry catalog"
+            project.description = "RHOAI Data Registry"
         mutator(project, conn)
 
     mutate = getattr(registry, "mutate_project", None)
@@ -360,7 +360,7 @@ def _mutate_catalog_project(
                 raise
             project = Project(
                 name=CATALOG_PROJECT,
-                description="RHOAI Data Registry catalog",
+                description="RHOAI Data Registry",
             )
             registry.apply_project(project)
             project = registry.get_project(CATALOG_PROJECT, allow_cache=False)

@@ -46,9 +46,9 @@ spec:
     resolver: git
     params:
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/aniketpalu/odh-konflux-central.git
     - name: revision
-      value: main
+      value: feat/rhai-4412-data-registry-tests
     - name: pathInRepo
       value: integration-tests/feast/pr-group-testing-pipeline.yaml
   taskRunTemplate:

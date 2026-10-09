@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import tempfile
 import threading
 
@@ -111,7 +112,6 @@ def test_create_get_head_delete(sqlite_registry):
     assert body["storage_location"] == "s3://bucket/claims/"
     assert body["columns"] is None
     for key in (
-        "catalog-name",
         "schema-name",
         "volume-type",
         "config",
@@ -635,20 +635,29 @@ def test_connection_ref_round_trips(sqlite_registry):
             "format": "documents",
             "storage_location": "s3://bucket/claims/",
             "connection_ref": {
-                "type": "rhai",
+                "type": "secret",
                 "secret_name": "aws-creds",  # pragma: allowlist secret
+                "name": "Production S3",
+                "connectionType": "s3",
             },
         },
         headers=AUTH,
     )
     assert created.status_code == 200, created.text
     assert created.json()["connection_ref"] == {
-        "type": "rhai",
+        "type": "secret",
+        "secret_name": "aws-creds",  # pragma: allowlist secret
+    }
+    stored = sqlite_registry.get_saved_dataset(
+        scoped_name(NS, COL, VOL), CATALOG_PROJECT, allow_cache=False
+    )
+    assert json.loads(stored.tags["_connection_ref"]) == {
+        "type": "secret",
         "secret_name": "aws-creds",  # pragma: allowlist secret
     }
     got = client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}")
     assert got.json()["connection_ref"] == {
-        "type": "rhai",
+        "type": "secret",
         "secret_name": "aws-creds",  # pragma: allowlist secret
     }
     bad = client.post(
@@ -663,6 +672,21 @@ def test_connection_ref_round_trips(sqlite_registry):
     )
     assert bad.status_code == 400, bad.text
     assert bad.json()["error"]["type"] == "BadRequestException"
+
+    legacy = client.post(
+        f"/v1/{NS}/namespaces/{COL}/volumes",
+        json={
+            "name": "legacy",
+            "format": "documents",
+            "connection_ref": {
+                "type": "rhai",
+                "secret_name": "aws-creds",  # pragma: allowlist secret
+            },
+        },
+        headers=AUTH,
+    )
+    assert legacy.status_code == 400, legacy.text
+    assert legacy.json()["error"]["type"] == "BadRequestException"
 
 
 def test_remove_custom_property(sqlite_registry):

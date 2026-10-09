@@ -117,12 +117,12 @@ Do not hand-write `ALTER TABLE` / `CREATE INDEX` for this migration — use one 
 | `schema_mode=auto` | Feast adds missing hierarchy columns/index and backfills empty `namespace`/`collection` values from proto. |
 | `schema_mode=verify` | Feast does **not** ALTER. Startup **requires** hierarchy columns/index (write and read engines). Migrate first with `feast registry create-schema` or `schema_mode=auto`. |
 | `schema_mode=skip` | Feast does **not** ALTER or verify tables. |
-| `DATACATALOG_ENABLED=true` and hierarchy schema missing (`auto`/`skip`) | Startup raises — catalog requires hierarchy SQL filters. |
-| Catalog disabled, hierarchy missing, `schema_mode=auto`/`skip` | Startup logs a warning and continues. `list_saved_datasets(namespace=…)` falls back to proto-side filtering. |
+| `DATA_REGISTRY_ENABLED=true` and hierarchy schema missing (`auto`/`skip`) | Startup raises — Data Registry requires hierarchy SQL filters. |
+| Data Registry disabled, hierarchy missing, `schema_mode=auto`/`skip` | Startup logs a warning and continues. `list_saved_datasets(namespace=…)` falls back to proto-side filtering. |
 
-Proto / SDK fields (`namespace`, `collection`, `columns`) are always available regardless of `DATACATALOG_ENABLED`.
+Proto / SDK fields (`namespace`, `collection`, `columns`) are always available regardless of `DATA_REGISTRY_ENABLED`.
 
-Catalog fail-fast is controlled by the process environment variable `DATACATALOG_ENABLED` (set by the catalog deployment). It is intentionally **not** a `feature_store.yaml` field — catalog mode is a deployment concern, not a per-repo registry setting.
+Data Registry fail-fast is controlled by the process environment variable `DATA_REGISTRY_ENABLED` (set by the Data Registry deployment). It is intentionally **not** a `feature_store.yaml` field — Data Registry mode is a deployment concern, not a per-repo registry setting.
 
 ### Pre-creating the schema
 

@@ -148,7 +148,7 @@ def labels_to_tag(labels: list[str] | None) -> dict[str, str]:
     return {"_labels": encoded}
 
 
-def connection_ref_from_tags(tags: dict[str, str]):
+def connection_ref_from_tags(tags: dict[str, str]) -> ConnectionRef | None:
     raw = tags.get("_connection_ref")
     if not raw or len(raw) > _MAX_CONNECTION_REF_JSON:
         return None
@@ -158,10 +158,11 @@ def connection_ref_from_tags(tags: dict[str, str]):
         return None
 
 
-def connection_ref_to_tag(ref) -> dict[str, str]:
+def connection_ref_to_tag(ref: ConnectionRef | None) -> dict[str, str]:
     if ref is None:
         return {}
-    encoded = ref.model_dump_json()
+    stable_fields = {"type", "id"} if ref.type == "dch" else {"type", "secret_name"}
+    encoded = ref.model_dump_json(include=stable_fields)
     if len(encoded) > _MAX_CONNECTION_REF_JSON:
         raise ValueError("connection_ref is too large")
     return {"_connection_ref": encoded}

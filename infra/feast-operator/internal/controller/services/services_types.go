@@ -60,17 +60,17 @@ const (
 	ProtectedProjectAnnotation = "feast.dev/protected-project"
 
 	// DataRegistryAnnotation is the annotation key on a FeatureStore CR that
-	// enables Data Registry (catalog-mode) reconciliation. When set to "true",
+	// enables Data Registry reconciliation. When set to "true",
 	// the operator switches to an exclusive data-registry mode: standard
 	// online/offline store resources are removed and a single registry-only
 	// Deployment with a kube-rbac-proxy sidecar is deployed instead.
 	DataRegistryAnnotation = "dataregistry.opendatahub.io/enabled"
 
 	// Data Registry env var names injected into the data-registry-server container.
-	DataCatalogEnabledEnvVar   = "DATACATALOG_ENABLED"
-	CatalogSSARApiGroupEnvVar  = "CATALOG_SSAR_API_GROUP"
-	CatalogSSARResourcesEnvVar = "CATALOG_SSAR_RESOURCES"
-	FeastProjectEnvVar         = "FEAST_PROJECT"
+	DataRegistryEnabledEnvVar      = "DATA_REGISTRY_ENABLED"
+	DataRegistrySARApiGroupEnvVar  = "DATA_REGISTRY_SAR_API_GROUP"
+	DataRegistrySARResourcesEnvVar = "DATA_REGISTRY_SAR_RESOURCES"
+	FeastProjectEnvVar             = "FEAST_PROJECT"
 
 	DataRegistryContainerName       = "data-registry-server"
 	DataRegistryPort          int32 = 6572
@@ -266,9 +266,9 @@ var (
 	NameLabelKey          = feastdevv1.GroupVersion.Group + "/name"
 	ServiceTypeLabelKey   = feastdevv1.GroupVersion.Group + "/service-type"
 
-	// dataRegistryPseudoResources are catalog pseudo-resources granted on the
+	// dataRegistryPseudoResources are Data Registry pseudo-resources granted on the
 	// aggregated ClusterRoles. kube-rbac-proxy's coarse gate uses `registries`;
-	// the rest are consumed by server-side SSAR (namespaces/tables/volumes).
+	// the rest are consumed by server-side SAR (namespaces/tables/volumes).
 	dataRegistryPseudoResources = []string{"registries", "namespaces", "tables", "volumes", "generic-tables"}
 
 	FeastServiceConstants = map[FeastServiceType]deploymentSettings{

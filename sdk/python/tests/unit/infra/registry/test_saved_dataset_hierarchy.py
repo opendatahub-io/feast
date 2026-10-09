@@ -394,8 +394,8 @@ def test_schema_mode_skip_does_not_run_ensure(tmp_path):
 
 
 def test_schema_mode_verify_raises_when_hierarchy_missing(tmp_path, monkeypatch):
-    """verify must not ALTER; missing hierarchy fails startup (any catalog mode)."""
-    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
+    """verify must not ALTER; missing hierarchy fails in Data Registry mode."""
+    monkeypatch.delenv("DATA_REGISTRY_ENABLED", raising=False)
     db_file = tmp_path / "verify_legacy.db"
     db_url = f"sqlite:///{db_file}"
     engine = create_engine(db_url)
@@ -417,7 +417,7 @@ def test_schema_mode_verify_raises_when_hierarchy_missing(tmp_path, monkeypatch)
 
 def test_schema_mode_verify_legacy_raises_with_catalog(tmp_path, monkeypatch):
     """Catalog + verify: same hard fail when hierarchy columns are missing."""
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     db_file = tmp_path / "verify_legacy_catalog.db"
     db_url = f"sqlite:///{db_file}"
     engine = create_engine(db_url)
@@ -438,7 +438,7 @@ def test_schema_mode_verify_legacy_raises_with_catalog(tmp_path, monkeypatch):
 
 def test_read_replica_missing_hierarchy_fails_startup(tmp_path, monkeypatch):
     """verify: lagging read schema must fail init (catalog or not)."""
-    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
+    monkeypatch.delenv("DATA_REGISTRY_ENABLED", raising=False)
     write_file = tmp_path / "write.db"
     read_file = tmp_path / "read.db"
     write_url = f"sqlite:///{write_file}"
@@ -467,7 +467,7 @@ def test_read_replica_missing_hierarchy_fails_startup(tmp_path, monkeypatch):
 
 def test_read_replica_missing_hierarchy_fails_with_catalog(tmp_path, monkeypatch):
     """Catalog + verify: lagging read schema fails with read-engine message."""
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     write_file = tmp_path / "write_c.db"
     read_file = tmp_path / "read_c.db"
     write_url = f"sqlite:///{write_file}"

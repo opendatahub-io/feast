@@ -221,9 +221,9 @@ var _ = Describe("Data Registry", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(fsYaml)).To(ContainSubstring("type: no_auth"))
 		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
-		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
-		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
-		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
+		Expect(envMap).To(HaveKeyWithValue(DataRegistryEnabledEnvVar, "true"))
+		Expect(envMap).To(HaveKeyWithValue(DataRegistrySARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
+		Expect(envMap).To(HaveKeyWithValue(DataRegistrySARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
 		// FEAST_PROJECT must be "data_registry" (Phase-1 storage model)
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
 
@@ -414,7 +414,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
 
-	It("produces an auth-delegator ClusterRoleBinding for server-side SSAR", func() {
+	It("produces an auth-delegator ClusterRoleBinding for server-side SAR", func() {
 		setAnnotation("true")
 
 		Expect(feast.deployDataRegistryAuthDelegatorBinding()).To(Succeed())
