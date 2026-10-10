@@ -99,10 +99,13 @@ kube-rbac-proxy :8443 (HTTPS)  ──HTTP 127.0.0.1:6572──►  feast-server
      └─── :8000 /metrics (Prometheus, direct scrape) ──────────┘
 ```
 
-- **kube-rbac-proxy** handles TLS termination and coarse-grained authorization via
-  SubjectAccessReview on `dataregistry.opendatahub.io/registries`.
+- **kube-rbac-proxy** terminates TLS and enforces per-tenant authorization via
+  SubjectAccessReview on `dataregistry.opendatahub.io/registries`. The SAR **namespace**
+  is the Feast project (Kubernetes namespace) from `/v1/{project}/...` path capture or from
+  `?project=` on legacy registry REST — not the data-registry install namespace.
 - **feast-server** runs `feast serve_registry --rest-api` with `DATACATALOG_ENABLED=true`.
-  It performs server-side SubjectAccessReview (SSAR) for cross-namespace `/projects` listing.
+  It performs server-side SubjectAccessReview (SSAR) for `/projects`, `/v1/projects`, and
+  `/search` (listed in `--ignore-paths` because they span multiple tenants).
 
 ### Resource limits
 
