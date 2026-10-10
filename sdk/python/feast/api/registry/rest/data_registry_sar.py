@@ -1,14 +1,15 @@
-"""
-Server-side SubjectAccessReview (SSAR) filtering for data-registry catalog endpoints.
+"""SubjectAccessReview (SAR) filtering for Data Registry endpoints.
 
-When CATALOG_SSAR_API_GROUP is set, Feast feature-registry ``GET /projects``
-filters the project list with per-namespace SubjectAccessReview. Catalog Data
-Registry routes use path ``{project}`` (Kubernetes namespace) and are not
-listed here — OpenAPI 0.8 removed catalog ``GET /v1/projects``.
+When ``DATA_REGISTRY_SAR_API_GROUP`` is set, Feast feature-registry
+``GET /projects`` filters the project list with per-namespace
+SubjectAccessReview. Data Registry routes use path ``{project}`` (Kubernetes
+namespace) and are not listed here; OpenAPI 0.8 removed Data Registry
+``GET /v1/projects``.
 
 Environment variables (set by the Feast operator):
-    CATALOG_SSAR_API_GROUP: API group for SAR checks (e.g. "dataregistry.opendatahub.io")
-    CATALOG_SSAR_RESOURCES: Comma-separated resources (e.g. "namespaces,tables,volumes")
+    DATA_REGISTRY_SAR_API_GROUP: API group for SAR checks.
+    DATA_REGISTRY_SAR_RESOURCES: Comma-separated resources to check.
+    DATA_REGISTRY_SAR_CACHE_TTL_SECONDS: Authorization cache lifetime.
 """
 
 import logging
@@ -20,15 +21,15 @@ from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
-_SSAR_API_GROUP = os.getenv("CATALOG_SSAR_API_GROUP", "")
-_SSAR_RESOURCES = os.getenv("CATALOG_SSAR_RESOURCES", "namespaces").split(",")
-_SSAR_CACHE_TTL = int(os.getenv("CATALOG_SSAR_CACHE_TTL_SECONDS", "30"))
+_SAR_API_GROUP = os.getenv("DATA_REGISTRY_SAR_API_GROUP", "")
+_SAR_RESOURCES = os.getenv("DATA_REGISTRY_SAR_RESOURCES", "namespaces").split(",")
+_SAR_CACHE_TTL = int(os.getenv("DATA_REGISTRY_SAR_CACHE_TTL_SECONDS", "30"))
 
 _access_cache: Dict[Tuple[str, str], Tuple[bool, float]] = {}
 
 
-def is_catalog_ssar_enabled() -> bool:
-    return bool(_SSAR_API_GROUP)
+def is_data_registry_sar_enabled() -> bool:
+    return bool(_SAR_API_GROUP)
 
 
 def extract_bearer_token(request: Request) -> Optional[str]:
@@ -38,7 +39,7 @@ def extract_bearer_token(request: Request) -> Optional[str]:
     return None
 
 
-def filter_projects_by_ssar(
+def filter_projects_by_sar(
     projects: List[Dict],
     bearer_token: str,
     resource: str = "namespaces",
@@ -48,7 +49,7 @@ def filter_projects_by_ssar(
     Filter a list of projects (namespaces) by performing SubjectAccessReview
     for each one. Returns only projects where the user is authorized.
     """
-    if not is_catalog_ssar_enabled():
+    if not is_data_registry_sar_enabled():
         return projects
 
     try:
@@ -57,7 +58,7 @@ def filter_projects_by_ssar(
         config.load_incluster_config()
         authz_api = client.AuthorizationV1Api()
     except Exception as e:
-        logger.error(f"Failed to initialize K8s client for SSAR: {e}")
+        logger.error(f"Failed to initialize K8s client for SAR: {e}")
         return []
 
     permitted = []
@@ -69,7 +70,7 @@ def filter_projects_by_ssar(
         if _check_access_cached(authz_api, bearer_token, project_name, resource, verb):
             permitted.append(project)
 
-    logger.debug(f"SSAR filter: {len(permitted)}/{len(projects)} projects permitted")
+    logger.debug(f"SAR filter: {len(permitted)}/{len(projects)} projects permitted")
     return permitted
 
 
@@ -84,10 +85,10 @@ def _check_access_cached(
     now = time.time()
 
     cached = _access_cache.get(cache_key)
-    if cached and (now - cached[1]) < _SSAR_CACHE_TTL:
+    if cached and (now - cached[1]) < _SAR_CACHE_TTL:
         return cached[0]
 
-    result = _do_ssar_check(authz_api, bearer_token, namespace, resource, verb)
+    result = _do_sar_check(authz_api, bearer_token, namespace, resource, verb)
     _access_cache[cache_key] = (result, now)
 
     if len(_access_cache) > 10000:
@@ -96,7 +97,7 @@ def _check_access_cached(
     return result
 
 
-def _do_ssar_check(
+def _do_sar_check(
     authz_api,
     bearer_token: str,
     namespace: str,
@@ -126,7 +127,7 @@ def _do_ssar_check(
                 resource_attributes=client.V1ResourceAttributes(
                     namespace=namespace,
                     verb=verb,
-                    group=_SSAR_API_GROUP,
+                    group=_SAR_API_GROUP,
                     resource=resource,
                 ),
             )
@@ -136,7 +137,7 @@ def _do_ssar_check(
         return response.status.allowed
 
     except Exception as e:
-        logger.error(f"SSAR check failed for {namespace}/{resource}/{verb}: {e}")
+        logger.error(f"SAR check failed for {namespace}/{resource}/{verb}: {e}")
         return False
 
 
@@ -155,7 +156,7 @@ def _evict_cache(now: float) -> None:
     """Remove expired entries first; if the cache is still above _CACHE_TARGET,
     evict the oldest entries by insertion/refresh timestamp to enforce the cap."""
     expired = [
-        k for k, (_, ts) in _access_cache.items() if (now - ts) >= _SSAR_CACHE_TTL
+        k for k, (_, ts) in _access_cache.items() if (now - ts) >= _SAR_CACHE_TTL
     ]
     for k in expired:
         del _access_cache[k]

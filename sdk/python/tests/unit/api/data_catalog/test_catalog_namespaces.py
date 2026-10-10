@@ -108,7 +108,7 @@ def test_n2_create_round_trip_and_scoped_tag(sqlite_registry):
     assert key in project.tags
     assert NS in key
     assert f"_ns_meta_{COL}" not in project.tags
-    assert project.description == "RHOAI Data Registry catalog"
+    assert project.description == "RHOAI Data Registry"
 
 
 def test_n3_duplicate_create_is_409_already_exists(sqlite_registry):

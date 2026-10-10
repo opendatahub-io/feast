@@ -565,7 +565,7 @@ def test_config_lists_search(sqlite_registry):
 
 
 def test_search_via_rest_registry_server(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     registry_path = tmp_path / "registry.db"
     config = RepoConfig.model_validate(
         {

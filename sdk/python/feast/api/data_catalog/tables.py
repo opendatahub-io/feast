@@ -58,7 +58,7 @@ from feast.saved_dataset import SavedDataset
 
 _TABLE_UNIMPLEMENTED = (
     "This Iceberg table operation is not implemented. "
-    "This catalog supports list and exists only; engines must use "
+    "This Data Registry deployment supports list and exists only; engines must use "
     "their own object-store credentials"
 )
 

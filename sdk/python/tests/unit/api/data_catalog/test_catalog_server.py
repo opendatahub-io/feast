@@ -38,7 +38,7 @@ def sql_repo_config(tmp_path):
 
 
 def test_s1_flag_off_config_is_404(sql_repo_config, monkeypatch):
-    monkeypatch.delenv("DATACATALOG_ENABLED", raising=False)
+    monkeypatch.delenv("DATA_REGISTRY_ENABLED", raising=False)
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     response = client.get("/v1/config")
@@ -48,7 +48,7 @@ def test_s1_flag_off_config_is_404(sql_repo_config, monkeypatch):
 
 
 def test_s2_flag_on_config_200(sql_repo_config, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     response = client.get("/v1/config")
@@ -60,7 +60,7 @@ def test_s2_flag_on_config_200(sql_repo_config, monkeypatch):
 
 
 def test_s3_flag_on_table_create(sql_repo_config, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     created = client.post("/v1/demo-user-1/namespaces/default/tables")
@@ -69,7 +69,7 @@ def test_s3_flag_on_table_create(sql_repo_config, monkeypatch):
 
 
 def test_s5_flag_on_feast_validation_body_unchanged(sql_repo_config, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     response = client.post("/entities", json={})
@@ -80,7 +80,7 @@ def test_s5_flag_on_feast_validation_body_unchanged(sql_repo_config, monkeypatch
 
 
 def test_s6_flag_on_catalog_missing_body_is_iceberg_400(sql_repo_config, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     response = client.post("/v1/demo-user-1/namespaces", json={})
@@ -91,7 +91,7 @@ def test_s6_flag_on_catalog_missing_body_is_iceberg_400(sql_repo_config, monkeyp
 
 
 def test_s7_flag_on_volume_and_search(sql_repo_config, monkeypatch):
-    monkeypatch.setenv("DATACATALOG_ENABLED", "true")
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
     assert client.get("/v1/projects").status_code == 404
@@ -118,3 +118,19 @@ def test_s7_flag_on_volume_and_search(sql_repo_config, monkeypatch):
     assert search.status_code == 200, search.text
     assert search.json()["query"] == ""
     assert "pagination" in search.json()
+
+
+def test_connection_ref_openapi_schema(sql_repo_config, monkeypatch):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    store = FeatureStore(config=sql_repo_config)
+    client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
+
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    dch = schemas["DchConnectionRef"]["properties"]
+    secret = schemas["RhaiConnectionRef"]["properties"]
+
+    assert dch["type"]["const"] == "dch"
+    assert secret["type"]["const"] == "secret"
+    for properties in (dch, secret):
+        assert properties["name"]["readOnly"] is True
+        assert properties["connectionType"]["readOnly"] is True
