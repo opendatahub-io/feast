@@ -1,5 +1,6 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
+#
 metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/feast?rev={{revision}}
@@ -12,9 +13,9 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-feast-operator-ci
+    appstudio.openshift.io/component: odh-feast-mcp-ci
     pipelines.appstudio.openshift.io/type: build
-  name: odh-feast-operator-on-push
+  name: odh-feast-mcp-on-push
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,16 +24,11 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/feast-operator:odh-stable
+    value: quay.io/opendatahub/odh-feast-mcp:odh-stable
   - name: dockerfile
-    value: Dockerfile
+    value: sdk/python/feast/mcp/docker/Dockerfile
   - name: path-context
-    value: infra/feast-operator
-  - name: build-platforms
-    value:
-    - linux/x86_64
-    - linux/arm64
-    - linux/ppc64le
+    value: .
   pipelineRef:
     resolver: git
     params:
@@ -43,7 +39,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-odh-feast-operator
+    serviceAccountName: build-pipeline-odh-feast-mcp-ci
   workspaces:
   - name: git-auth
     secret:
