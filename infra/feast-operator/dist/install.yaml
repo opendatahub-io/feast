@@ -24264,14 +24264,6 @@ rules:
   - watch
 - apiGroups:
   - ""
-  resourceNames:
-  - feast-capabilities-config
-  resources:
-  - configmaps
-  verbs:
-  - get
-- apiGroups:
-  - ""
   resources:
   - namespaces
   verbs:

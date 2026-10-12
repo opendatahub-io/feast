@@ -82,7 +82,6 @@ type FeatureStoreReconciler struct {
 // namespaces update is required by access.EnsureNamespaceLabel and
 // RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
 // discovery label. Not present upstream; do not drop when syncing.
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get,resourceNames=feast-capabilities-config
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
