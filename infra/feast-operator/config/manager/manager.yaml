@@ -82,7 +82,7 @@ spec:
         - name: RELATED_IMAGE_FEATURE_SERVER
           value: feast:latest
         - name: RELATED_IMAGE_CRON_JOB
-          value: origin-cli:latest
+          value: registry.k8s.io/kubectl:v1.35.9
         - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
           value: quay.io/brancz/kube-rbac-proxy:v0.18.1
         # Injected from params.env via kustomize replacements (ODH/RHOAI overlays).
