@@ -184,6 +184,9 @@ func (feast *FeastServices) Deploy() error {
 	if err := feast.createOrDeleteServiceMonitor(); err != nil {
 		return err
 	}
+	if err := feast.reconcileNetworkPolicies(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -252,6 +255,12 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	if err := feast.deployClient(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.deployNamespaceRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+	if err := feast.reconcileDataRegistryNetworkPolicies(); err != nil {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	return feast.setFeastServiceCondition(nil, DataRegistryFeastType)
