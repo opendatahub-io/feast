@@ -153,16 +153,7 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 // When the annotation is removed or absent, all resources are cleaned up.
 func (feast *FeastServices) deployDataRegistry() error {
 	if !feast.isDataRegistryEnabled() {
-		if err := feast.CleanupDataRegistryResources(); err != nil {
-			return err
-		}
-		// Remove the finalizer once all cluster-scoped resources have been cleaned up.
-		cr := feast.Handler.FeatureStore
-		if controllerutil.ContainsFinalizer(cr, DataRegistryFinalizer) {
-			controllerutil.RemoveFinalizer(cr, DataRegistryFinalizer)
-			return feast.Handler.Client.Update(feast.Handler.Context, cr)
-		}
-		return nil
+		return feast.CleanupDataRegistry()
 	}
 
 	// Ensure the finalizer is present so that cluster-scoped resources are
@@ -201,6 +192,20 @@ func (feast *FeastServices) deployDataRegistry() error {
 		return err
 	}
 	return nil
+}
+
+// CleanupDataRegistry removes resources before releasing the FeatureStore
+// finalizer. It is used by normal mode changes and capability rejection.
+func (feast *FeastServices) CleanupDataRegistry() error {
+	if err := feast.CleanupDataRegistryResources(); err != nil {
+		return err
+	}
+	cr := feast.Handler.FeatureStore
+	if !controllerutil.ContainsFinalizer(cr, DataRegistryFinalizer) {
+		return nil
+	}
+	controllerutil.RemoveFinalizer(cr, DataRegistryFinalizer)
+	return feast.Handler.Client.Update(feast.Handler.Context, cr)
 }
 
 // CleanupDataRegistryResources removes all data-registry owned resources.
@@ -625,13 +630,14 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		feast.Handler.Client,
 		viewerCR,
 		func() error {
-			viewerCR.Labels = map[string]string{
-				NameLabelKey:      feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey: ManagedByLabelValue,
+			viewerCR.Labels = feast.dataRegistryRBACLabels()
+			for key, value := range map[string]string{
 				"rbac.authorization.k8s.io/aggregate-to-view":           "true",
 				"rbac.authorization.k8s.io/aggregate-to-edit":           "true",
 				"rbac.authorization.k8s.io/aggregate-to-admin":          "true",
 				"rbac.authorization.k8s.io/aggregate-to-cluster-reader": "true",
+			} {
+				viewerCR.Labels[key] = value
 			}
 			viewerCR.Rules = []rbacv1.PolicyRule{
 				{
@@ -654,11 +660,12 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		feast.Handler.Client,
 		editorCR,
 		func() error {
-			editorCR.Labels = map[string]string{
-				NameLabelKey:      feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey: ManagedByLabelValue,
+			editorCR.Labels = feast.dataRegistryRBACLabels()
+			for key, value := range map[string]string{
 				"rbac.authorization.k8s.io/aggregate-to-edit":  "true",
 				"rbac.authorization.k8s.io/aggregate-to-admin": "true",
+			} {
+				editorCR.Labels[key] = value
 			}
 			editorCR.Rules = []rbacv1.PolicyRule{
 				{
@@ -681,10 +688,11 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		feast.Handler.Client,
 		adminCR,
 		func() error {
-			adminCR.Labels = map[string]string{
-				NameLabelKey:      feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey: ManagedByLabelValue,
+			adminCR.Labels = feast.dataRegistryRBACLabels()
+			for key, value := range map[string]string{
 				"rbac.authorization.k8s.io/aggregate-to-admin": "true",
+			} {
+				adminCR.Labels[key] = value
 			}
 			adminCR.Rules = []rbacv1.PolicyRule{
 				{
@@ -727,7 +735,6 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 // to avoid a standard CR's reconcile deleting roles created by the
 // data-registry CR.
 func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
-	self := feast.Handler.FeatureStore
 	for _, suffix := range []string{"viewer", "editor", "admin"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
@@ -741,7 +748,7 @@ func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 			}
 			return err
 		}
-		if cr.Labels[ManagedByLabelKey] == ManagedByLabelValue && cr.Labels[NameLabelKey] == self.Name {
+		if feast.ownsDataRegistryRBAC(cr.Labels) {
 			if err := feast.Handler.Client.Delete(feast.Handler.Context, cr); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
@@ -896,10 +903,7 @@ func (feast *FeastServices) deployDataRegistryAuthDelegatorBinding() error {
 		feast.Handler.Client,
 		crb,
 		func() error {
-			crb.Labels = map[string]string{
-				NameLabelKey:      feast.Handler.FeatureStore.Name,
-				ManagedByLabelKey: ManagedByLabelValue,
-			}
+			crb.Labels = feast.dataRegistryRBACLabels()
 			crb.Subjects = []rbacv1.Subject{
 				{
 					Kind:      "ServiceAccount",
@@ -919,6 +923,9 @@ func (feast *FeastServices) deployDataRegistryAuthDelegatorBinding() error {
 	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
 		logger.Info("Successfully reconciled", "ClusterRoleBinding", crb.Name, "operation", op)
 	}
+	if feast.Handler.FeatureStore.UID != "" {
+		return feast.deleteDataRegistryAuthDelegatorBinding(feast.legacyDataRegistryAuthDelegatorCRBName())
+	}
 	return nil
 }
 
@@ -936,8 +943,21 @@ func (feast *FeastServices) initDataRegistryAuthDelegatorCRB() *rbacv1.ClusterRo
 // ClusterRoleBindings are cluster-scoped and cannot carry namespace-scoped
 // owner references, so we delete by name + managed-by label check.
 func (feast *FeastServices) CleanupDataRegistryAuthDelegatorBinding() error {
+	currentName := feast.dataRegistryAuthDelegatorCRBName()
+	legacyName := feast.legacyDataRegistryAuthDelegatorCRBName()
+	if err := feast.deleteDataRegistryAuthDelegatorBinding(currentName); err != nil {
+		return err
+	}
+	if currentName != legacyName {
+		if err := feast.deleteDataRegistryAuthDelegatorBinding(legacyName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (feast *FeastServices) deleteDataRegistryAuthDelegatorBinding(name string) error {
 	crb := &rbacv1.ClusterRoleBinding{}
-	name := feast.dataRegistryAuthDelegatorCRBName()
 	if err := feast.Handler.Client.Get(
 		feast.Handler.Context,
 		types.NamespacedName{Name: name},
@@ -948,8 +968,7 @@ func (feast *FeastServices) CleanupDataRegistryAuthDelegatorBinding() error {
 		}
 		return err
 	}
-	if crb.Labels[ManagedByLabelKey] == ManagedByLabelValue &&
-		crb.Labels[NameLabelKey] == feast.Handler.FeatureStore.Name {
+	if feast.ownsDataRegistryRBAC(crb.Labels) {
 		if err := feast.Handler.Client.Delete(feast.Handler.Context, crb); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -983,7 +1002,35 @@ func (feast *FeastServices) dataRegistryClusterRoleName(suffix string) string {
 }
 
 func (feast *FeastServices) dataRegistryAuthDelegatorCRBName() string {
+	name := feast.legacyDataRegistryAuthDelegatorCRBName()
+	if uid := feast.Handler.FeatureStore.UID; uid != "" {
+		return name + "-" + string(uid)
+	}
+	return name
+}
+
+func (feast *FeastServices) legacyDataRegistryAuthDelegatorCRBName() string {
 	return GetFeastName(feast.Handler.FeatureStore) + dataRegistryAuthDelegatorSuffix
+}
+
+func (feast *FeastServices) dataRegistryRBACLabels() map[string]string {
+	labels := map[string]string{
+		NameLabelKey:      feast.Handler.FeatureStore.Name,
+		ManagedByLabelKey: ManagedByLabelValue,
+	}
+	if uid := feast.Handler.FeatureStore.UID; uid != "" {
+		labels[dataRegistryOwnerUIDLabelKey] = string(uid)
+	}
+	return labels
+}
+
+func (feast *FeastServices) ownsDataRegistryRBAC(labels map[string]string) bool {
+	if labels[ManagedByLabelKey] != ManagedByLabelValue ||
+		labels[NameLabelKey] != feast.Handler.FeatureStore.Name {
+		return false
+	}
+	ownerUID := labels[dataRegistryOwnerUIDLabelKey]
+	return ownerUID == "" || (feast.Handler.FeatureStore.UID != "" && ownerUID == string(feast.Handler.FeatureStore.UID))
 }
 
 func (feast *FeastServices) dataRegistryCaBundleCMName() string {
