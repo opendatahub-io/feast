@@ -63,10 +63,11 @@ func (feast *FeastServices) validateDataRegistryAnnotation() {
 	}
 }
 
-// validateDataRegistryNamespace ensures the namespace hosting the data-registry
-// CR carries the label opendatahub.io/data-registry=true.  A label-based
-// check is more flexible than a hardcoded name: ODH, RHOAI, and custom
-// installs each label their chosen namespace without operator changes.
+// validateDataRegistryNamespace is a secondary guard that ensures the namespace
+// hosting the data-registry CR carries the required platform label. The primary
+// enforcement is the exact namespace name match performed by the controller
+// (comparing against dataRegistryNamespace from the capabilities ConfigMap,
+// which defaults to rhoai-data-registry). Custom namespace selection is deferred.
 func (feast *FeastServices) validateDataRegistryNamespace() error {
 	ns := &corev1.Namespace{}
 	nsName := feast.Handler.FeatureStore.Namespace
@@ -77,16 +78,34 @@ func (feast *FeastServices) validateDataRegistryNamespace() error {
 	); err != nil {
 		return fmt.Errorf("failed to read namespace %q for data-registry label check: %w", nsName, err)
 	}
-	if ns.Labels[DataRegistryNamespaceLabel] != "true" {
+	if !namespaceDesignatedForDataRegistry(ns) {
 		return fmt.Errorf(
 			"namespace %q is not designated for the data registry "+
-				"(missing required label %s=true); "+
+				"(missing required label %s=true or %s=true); "+
 				"the data-registry FeatureStore CR must be created in the namespace "+
 				"labeled by the platform operator (e.g. rhoai-data-registry)",
-			nsName, DataRegistryNamespaceLabel,
+			nsName, DataRegistryNamespaceLabel, DataRegistryPlatformNamespaceLabel,
 		)
 	}
 	return nil
+}
+
+func namespaceDesignatedForDataRegistry(ns *corev1.Namespace) bool {
+	if ns == nil || ns.Labels == nil {
+		return false
+	}
+	if ns.Labels[DataRegistryNamespaceLabel] == "true" {
+		return true
+	}
+	return ns.Labels[DataRegistryPlatformNamespaceLabel] == "true"
+}
+
+// IsDataRegistryCREnabled reports whether the CR carries the canonical data-registry annotation.
+func IsDataRegistryCREnabled(cr *feastdevv1.FeatureStore) bool {
+	if cr == nil {
+		return false
+	}
+	return cr.GetAnnotations()[DataRegistryAnnotation] == "true"
 }
 
 // validateDataRegistrySingleton ensures only one FeatureStore CR across the
@@ -134,7 +153,7 @@ func (feast *FeastServices) validateDataRegistrySingleton() error {
 // When the annotation is removed or absent, all resources are cleaned up.
 func (feast *FeastServices) deployDataRegistry() error {
 	if !feast.isDataRegistryEnabled() {
-		if err := feast.cleanupDataRegistryResources(); err != nil {
+		if err := feast.CleanupDataRegistryResources(); err != nil {
 			return err
 		}
 		// Remove the finalizer once all cluster-scoped resources have been cleaned up.
@@ -184,8 +203,9 @@ func (feast *FeastServices) deployDataRegistry() error {
 	return nil
 }
 
-// cleanupDataRegistryResources removes all data-registry owned resources.
-func (feast *FeastServices) cleanupDataRegistryResources() error {
+// CleanupDataRegistryResources removes all data-registry owned resources.
+// Exported so the controller can call it when the platform capability is disabled.
+func (feast *FeastServices) CleanupDataRegistryResources() error {
 	if isOpenShift {
 		if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryRoute()); err != nil {
 			return err
@@ -273,7 +293,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 				Annotations: map[string]string{
 					// kube-rbac-proxy reads auth.yaml only at process start.
 					// Bump this when SAR config semantics change so pods roll.
-					"dataregistry.opendatahub.io/auth-config-revision": "static-sar-v1",
+					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v1",
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -327,16 +347,13 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		return corev1.Container{}, err
 	}
 
-	// HTTP probe against GET /projects: data-registry mode always forces no_auth
-	// in feature_store.yaml (repo_config.go:getServiceRepoConfig), so the Feast
-	// server never challenges the kubelet with a 401. A TCP probe only confirms
-	// uvicorn is listening; the HTTP probe confirms the REST API is actually
-	// serving responses, which is the meaningful readiness signal.
-	// /projects is a stable GET endpoint that returns HTTP 200 with an empty
-	// list even before any projects are explicitly registered.
+	// HTTP probe against GET /healthz: a lightweight endpoint registered before
+	// any auth middleware, so it always returns 200 regardless of SSAR config.
+	// /projects cannot be used because catalog_ssar.py requires a bearer token
+	// when CATALOG_SSAR_API_GROUP is set, and kubelet probes carry no token.
 	probeHandler := corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{
-			Path:   "/projects",
+			Path:   "/healthz",
 			Port:   intstr.FromInt32(DataRegistryPort),
 			Scheme: corev1.URISchemeHTTP,
 		},
@@ -405,11 +422,9 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 // The proxy listens on 0.0.0.0:8443 (HTTPS) and forwards authenticated
 // requests to the feast-server at 127.0.0.1:6572.
 //
-// TODO: Once the ODH kube-rbac-proxy fork with byPathSegment support
-// merges, replace --ignore-paths with per-path SAR rewrites that extract
-// {project} from the URL and set SAR namespace accordingly for per-tenant
-// namespace authorization. The ODH fork image should also replace the brancz
-// fallback in DefaultKubeRBACProxyImage.
+// Auth.yaml uses Format2 endpoint rules: path capture on /v1/{project}/... and
+// byQueryParameter on legacy registry REST. Requires ODH kube-rbac-proxy
+// v3.6.0-ea.2+ (named path captures, opendatahub-io/kube-rbac-proxy#28).
 func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 	return corev1.Container{
 		Name:  DataRegistryProxyContainerName,
@@ -420,14 +435,9 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects bypasses proxy auth because it requires server-side
-			// per-namespace SSAR filtering that cannot be expressed as a single
-			// resource SAR. The Feast server reads the bearer token from the
-			// request, performs TokenReview + per-namespace SubjectAccessReview,
-			// and returns only authorized results.
-			// /search is NOT in ignore-paths: it goes through the proxy SAR gate
-			// so unauthenticated callers get 401 (S1 fix).
-			"--ignore-paths=/projects,/api/v1/projects",
+			// Multi-tenant list/search endpoints bypass proxy SAR: the server
+			// performs TokenReview + per-namespace SSAR (catalog_ssar.py).
+			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
 			"--auth-header-fields-enabled",
@@ -591,31 +601,9 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cr := feast.Handler.FeatureStore
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
-	// Static SAR attributes are the coarse auth gate for Feast REST
-	// (/entities, /feature_views, …). kube-rbac-proxy maps GET→get and
-	// POST→create on this resource. /projects bypasses this gate via
-	// --ignore-paths and uses server-side SSAR instead. /search goes through
-	// the proxy gate (no ignore-paths entry) to prevent unauthenticated access.
-	//
-	// Do not set `rewrites`. kube-rbac-proxy v0.18.1 only supports
-	// byQueryParameter and byHttpHeader. An empty rewrite (including the
-	// unsupported byHTTPPath key) produces no SAR attributes and the proxy
-	// returns HTTP 400 for every authenticated request:
-	// "Bad Request. The request or configuration is malformed."
-	//
-	// TODO: Once the ODH fork with byPathSegment support merges,
-	// switch to Format2 auth.yaml that extracts {project} from the URL path
-	// and uses it as the SAR namespace for per-tenant namespace authorization.
-	//
-	// Namespace must be set: RoleBindings grant namespaced access. An empty
-	// namespace makes SAR cluster-scoped, which would not match the
-	// RoleBinding.
-	authYaml := `authorization:
-  resourceAttributes:
-    namespace: ` + cr.Namespace + `
-    apiGroup: ` + dataRegistryAPIGroup + `
-    resource: registries
-`
+	// Per-tenant SAR via Format2 endpoints only (path capture + ?project=).
+	// List/search paths are in --ignore-paths for server-side SSAR.
+	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{
 		"auth.yaml": authYaml,

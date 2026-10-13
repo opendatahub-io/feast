@@ -24267,6 +24267,7 @@ rules:
   resources:
   - namespaces
   verbs:
+  - create
   - get
   - list
   - update
@@ -24443,12 +24444,15 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
+  - rolebindings
+  - roles
   verbs:
   - create
   - delete
   - get
   - list
   - update
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -24471,18 +24475,6 @@ rules:
   verbs:
   - delete
   - update
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  - roles
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
 - apiGroups:
   - route.openshift.io
   resources:
@@ -24641,6 +24633,7 @@ spec:
         - name: RELATED_IMAGE_CRON_JOB
           value: registry.k8s.io/kubectl:v1.35.9
         - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+          value: quay.io/opendatahub/odh-kube-rbac-proxy@sha256:acd9de62b8339dbacd39635317e5e596e09a70ae26ac9eccdde4a4124388740f
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:

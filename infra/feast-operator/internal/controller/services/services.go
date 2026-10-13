@@ -473,6 +473,24 @@ func (feast *FeastServices) removeFeastServiceByType(feastType FeastServiceType)
 	return nil
 }
 
+// CleanupStandardResources removes standard-mode Feast resources (Deployment,
+// Services, PVCs) so they don't remain active when the platform capability is
+// disabled. Exported for the controller's capability-disabled cleanup path.
+func (feast *FeastServices) CleanupStandardResources() error {
+	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
+		return err
+	}
+	for _, feastType := range []FeastServiceType{OfflineFeastType, OnlineFeastType, RegistryFeastType, UIFeastType} {
+		if err := feast.removeFeastServiceByType(feastType); err != nil {
+			return err
+		}
+		if err := feast.removeRoute(feastType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (feast *FeastServices) removeRoute(feastType FeastServiceType) error {
 	if !isOpenShift {
 		return nil
