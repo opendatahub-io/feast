@@ -775,7 +775,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(apierrors.IsNotFound(err) || err == nil).To(BeTrue())
 	})
 
-	It("cleanupOnDeletion path removes cluster-scoped resources", func() {
+	It("finalizer cleanup removes cluster-scoped resources for the matching CR UID", func() {
 		setAnnotation("true")
 
 		// Create cluster-scoped resources
@@ -790,8 +790,7 @@ var _ = Describe("Data Registry", func() {
 		crb := &rbacv1.ClusterRoleBinding{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryAuthDelegatorCRBName()}, crb)).To(Succeed())
 
-		// Simulate the cleanupOnDeletion path: build a stub FeastServices
-		// with only name/namespace (like the controller does when the CR is gone)
+		// Simulate finalizer cleanup with the UID of the CR that owns the RBAC.
 		stubFeast := &FeastServices{
 			Handler: handler.FeastHandler{
 				Client:  k8sClient,
@@ -801,6 +800,7 @@ var _ = Describe("Data Registry", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      featureStore.Name,
 						Namespace: featureStore.Namespace,
+						UID:       featureStore.UID,
 					},
 				},
 			},

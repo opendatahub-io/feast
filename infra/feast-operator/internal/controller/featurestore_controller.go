@@ -79,6 +79,10 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;create
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-editor;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;watch;update;delete
+// bind on ClusterRole system:auth-delegator is listed in config/rbac/role.yaml (controller-gen
+// markers cannot express resourceNames containing ':').
+// +kubebuilder:rbac:groups=dataregistry.opendatahub.io,resources=registries;namespaces;tables;volumes;generic-tables,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=dataregistry.opendatahub.io,resources=connections,verbs=use
 // namespaces update is required by access.EnsureNamespaceLabel and
 // RemoveNamespaceLabelIfLast, which write the opendatahub.io/feast
 // discovery label. Not present upstream; do not drop when syncing.
@@ -293,9 +297,9 @@ func (r *FeatureStoreReconciler) cleanupOnDeletion(ctx context.Context, namespac
 		logger.Error(err, "Failed to clean up OpenLineage discovery entry")
 	}
 
-	// Data-registry ClusterRoles are cluster-scoped and don't have owner
-	// references, so they survive CR garbage collection. Clean them up
-	// unconditionally—the helper is a no-op when the roles don't exist.
+	// The finalizer cleans UID-labeled cluster-scoped RBAC before the CR is
+	// removed. This fallback only removes legacy RBAC without a UID label;
+	// it must not delete resources belonging to a same-name replacement CR.
 	feast := services.FeastServices{
 		Handler: feasthandler.FeastHandler{
 			Client:       r.Client,
@@ -386,6 +390,31 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		return ctrl.Result{Requeue: true, RequeueAfter: RequeueDelayError}, capErr
 	}
 
+	if cr.Namespace == caps.DataRegistryNamespace && !services.IsDataRegistryCREnabled(cr) {
+		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+		drCond.Reason = feastdevv1.DataRegistryAnnotationRequiredReason
+		drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryAnnotationRequiredMessage
+		apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+		condition = metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.DataRegistryAnnotationRequiredReason,
+			Message: feastdevv1.DataRegistryAnnotationRequiredMessage,
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		feast := services.FeastServices{Handler: feasthandler.FeastHandler{
+			Client: r.Client, Context: ctx, FeatureStore: cr, Scheme: r.Scheme,
+		}}
+		if cleanupErr := feast.CleanupDataRegistry(); cleanupErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+		}
+		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+		}
+		return ctrl.Result{}, nil
+	}
+
 	if services.IsDataRegistryCREnabled(cr) {
 		if !caps.DataRegistryEnabled {
 			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
@@ -412,12 +441,9 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 					Scheme:       r.Scheme,
 				},
 			}
-			if cleanupErr := feast.CleanupDataRegistryResources(); cleanupErr != nil {
+			if cleanupErr := feast.CleanupDataRegistry(); cleanupErr != nil {
 				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
 				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
-			}
-			if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
-				controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
 			}
 
 			return ctrl.Result{}, nil

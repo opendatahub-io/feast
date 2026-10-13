@@ -176,7 +176,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-10-08T15:32:33Z"
+    createdAt: "2026-10-12T12:55:01Z"
     operators.operatorframework.io/builder: operator-sdk-v1.41.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: feast-operator.v0.66.0
@@ -324,6 +324,28 @@ spec:
           - update
           - watch
         - apiGroups:
+          - dataregistry.opendatahub.io
+          resources:
+          - connections
+          verbs:
+          - use
+        - apiGroups:
+          - dataregistry.opendatahub.io
+          resources:
+          - generic-tables
+          - namespaces
+          - registries
+          - tables
+          - volumes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - feast.dev
           resources:
           - featurestores
@@ -442,6 +464,14 @@ spec:
           - create
           - delete
           - get
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resourceNames:
+          - system:auth-delegator
+          resources:
+          - clusterroles
+          verbs:
+          - bind
         - apiGroups:
           - authentication.k8s.io
           resources:
