@@ -15,19 +15,79 @@ def run_command(cmd, cwd=None, check=True):
     return result.stdout.strip()
 
 
-def create_namespace(api_instance, namespace_name):
-    try:
-        namespace_body = client.V1Namespace(
-            metadata=client.V1ObjectMeta(name=namespace_name)
+def wait_for_namespace_gone(namespace_name, timeout_seconds=180, interval_seconds=5):
+    """Block until kubectl no longer sees the namespace (Terminating finished)."""
+    print(f"Waiting for namespace {namespace_name} to be fully deleted...")
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        result = subprocess.run(
+            ["kubectl", "get", "ns", namespace_name],
+            capture_output=True,
+            text=True,
         )
+        if result.returncode != 0:
+            print(f"Namespace {namespace_name} is gone")
+            return True
+        time.sleep(interval_seconds)
+    raise TimeoutError(
+        f"Namespace {namespace_name} still exists after {timeout_seconds} seconds"
+    )
+
+
+def create_namespace(api_instance, namespace_name, timeout_seconds=180):
+    namespace_body = client.V1Namespace(
+        metadata=client.V1ObjectMeta(name=namespace_name)
+    )
+    try:
         api_instance.create_namespace(namespace_body)
+        print(f"Created namespace {namespace_name}")
+        return True
     except Exception as e:
+        status = getattr(e, "status", None)
         print(f"Kubernetes API error during namespace creation: {e}")
-        return None
+        if status != 409:
+            raise
+        phase = run_kubectl_command(
+            ["get", "ns", namespace_name, "-o", "jsonpath={.status.phase}"]
+        )
+        if phase == "Terminating":
+            wait_for_namespace_gone(namespace_name, timeout_seconds=timeout_seconds)
+            api_instance.create_namespace(namespace_body)
+            print(f"Created namespace {namespace_name} after previous delete finished")
+            return True
+        print(f"Reusing existing namespace {namespace_name} (phase={phase})")
+        return True
 
 
-def delete_namespace(api_instance, namespace_name):
-    api_instance.delete_namespace(namespace_name)
+def delete_namespace(api_instance, namespace_name, timeout_seconds=180):
+    try:
+        api_instance.delete_namespace(namespace_name)
+    except Exception as e:
+        status = getattr(e, "status", None)
+        print(f"Kubernetes API error during namespace deletion: {e}")
+        if status == 404:
+            return True
+        raise
+    wait_for_namespace_gone(namespace_name, timeout_seconds=timeout_seconds)
+    return True
+
+
+def dump_namespace_diagnostics(namespace, cr_name=None):
+    """Print FeatureStore status, pods, and events so a timeout is diagnosable."""
+    print(f"=== diagnostics for namespace {namespace} ===")
+    feast_list = run_kubectl_command(["get", "feast", "-n", namespace, "-o", "wide"])
+    print(f"  FeatureStores:\n{feast_list}")
+    if cr_name:
+        feast_yaml = run_kubectl_command(
+            ["get", "feast", cr_name, "-n", namespace, "-o", "yaml"]
+        )
+        print(f"  FeatureStore {cr_name}:\n{feast_yaml}")
+    pods = run_kubectl_command(["get", "pods", "-n", namespace, "-o", "wide"])
+    print(f"  Pods:\n{pods}")
+    events = run_kubectl_command(
+        ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp"]
+    )
+    print(f"  Events:\n{events}")
 
 
 def run_kubectl_command(args):
@@ -71,8 +131,10 @@ def validate_feature_store_cr_status(
         if status == "Ready":
             print(f"Feature Store CR {namespace}/{cr_name} is in Ready state")
             return True
+        print(f"  Phase={status}")
         time.sleep(interval_seconds)
 
+    dump_namespace_diagnostics(namespace, cr_name)
     raise TimeoutError(
         f" Feature Store CR {namespace}/{cr_name} did not reach 'Ready' state within {timeout_seconds} seconds."
     )
@@ -122,6 +184,7 @@ def wait_for_pods_ready(
                 print(f"Current pod statuses: {statuses}")
 
         time.sleep(interval_seconds)
+    dump_namespace_diagnostics(namespace)
     raise TimeoutError(
         f" Pods did not reach Running state in {timeout_seconds} seconds."
     )
@@ -359,28 +422,7 @@ def wait_for_data_registry_ready(
         print(f"  Phase={phase}, DataRegistryReady={conditions}")
         time.sleep(interval_seconds)
 
-    # Dump full CR status for debugging before raising
-    full_status = run_kubectl_command(
-        ["get", "feast", cr_name, "-n", namespace, "-o", "jsonpath={.status}"]
-    )
-    print(f"  Final CR status dump: {full_status}")
-
-    # Also dump pod status for the data-registry server
-    pods = run_kubectl_command(
-        [
-            "get",
-            "pods",
-            "-n",
-            namespace,
-            "-l",
-            f"app.kubernetes.io/name=feast-{cr_name}",
-            "-o",
-            "wide",
-            "--no-headers",
-        ]
-    )
-    print(f"  Related pods: {pods}")
-
+    dump_namespace_diagnostics(namespace, cr_name)
     raise TimeoutError(
         f"Data Registry CR {namespace}/{cr_name} did not reach Ready within {timeout_seconds}s"
     )
