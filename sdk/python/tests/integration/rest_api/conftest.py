@@ -8,6 +8,7 @@ from kubernetes import client, config
 
 from tests.integration.rest_api.support import (
     applyFeastProject,
+    copy_secret,
     create_data_registry_route,
     create_feast_project,
     create_namespace,
@@ -156,6 +157,7 @@ def _wait_for_http_ready(
 # Constants
 # ---------------------------------------------------------------------------
 NAMESPACE = "test-ns-feast-rest"
+DATA_REGISTRY_NAMESPACE = "rhoai-data-registry"
 CREDIT_SCORING = "credit-scoring"
 DRIVER_RANKING = "driver-ranking"
 FEAST_AUTH = "feast-auth"
@@ -184,9 +186,6 @@ def feast_rest_client():
     create_namespace(api_instance, NAMESPACE)
 
     try:
-        # Label namespace for Data Registry CR (harmless even when DR isn't deployed here)
-        label_namespace(NAMESPACE, "opendatahub.io/data-registry", "true")
-
         # Deploy shared infrastructure
         deploy_and_validate_pod(
             NAMESPACE, str(resource_dir / "redis.yaml"), "app=redis"
@@ -273,6 +272,7 @@ def feast_extended_setup(feast_rest_client):
     already deployed.  Returns the base feast_rest_client for convenience.
     """
     resource_dir = Path(__file__).parent / "resource"
+    api_instance = client.CoreV1Api()
 
     # Apply RBAC ServiceAccounts + RoleBindings
     run_kubectl_command(
@@ -295,20 +295,43 @@ def feast_extended_setup(feast_rest_client):
     )
     execPodCommand(NAMESPACE, auth_pod_name, ["python", "permissions_apply.py"])
 
-    # Deploy Data Registry CR — apply without the 300s validation inside
-    # create_feast_project; instead use wait_for_data_registry_ready with 900s.
+    # Data Registry CRs are gated to rhoai-data-registry. Create that
+    # namespace, copy the shared Postgres secrets, then apply the CR there.
+    # Catalog URL paths still use NAMESPACE (test-ns-feast-rest) because
+    # kube-rbac-proxy SAR treats {project} as the tenant Kubernetes namespace.
+    create_namespace(api_instance, DATA_REGISTRY_NAMESPACE)
+    label_namespace(DATA_REGISTRY_NAMESPACE, "opendatahub.io/data-registry", "true")
+    copy_secret(NAMESPACE, DATA_REGISTRY_NAMESPACE, "postgres-secret")
+    copy_secret(NAMESPACE, DATA_REGISTRY_NAMESPACE, "feast-data-stores")
+
     run_kubectl_command(
         [
             "apply",
             "-f",
             str(resource_dir / "feast_config_data_registry.yaml"),
             "-n",
-            NAMESPACE,
+            DATA_REGISTRY_NAMESPACE,
         ]
     )
-    wait_for_data_registry_ready(NAMESPACE, DATA_REGISTRY, timeout_seconds=900)
-
-    return feast_rest_client
+    try:
+        wait_for_data_registry_ready(
+            DATA_REGISTRY_NAMESPACE, DATA_REGISTRY, timeout_seconds=900
+        )
+        yield feast_rest_client
+    finally:
+        print(
+            f"\n Deleting Data Registry CR {DATA_REGISTRY} from {DATA_REGISTRY_NAMESPACE}"
+        )
+        run_kubectl_command(
+            [
+                "delete",
+                "feast",
+                DATA_REGISTRY,
+                "-n",
+                DATA_REGISTRY_NAMESPACE,
+                "--ignore-not-found",
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +409,7 @@ def data_registry_route_url(feast_extended_setup):
     if not run_on_openshift:
         pytest.skip("Data Registry route requires OpenShift")
 
-    url = create_data_registry_route(NAMESPACE, DATA_REGISTRY)
+    url = create_data_registry_route(DATA_REGISTRY_NAMESPACE, DATA_REGISTRY)
     return url
 
 

@@ -124,7 +124,8 @@ func writeDataRegistryAuthPathProjectEndpoint(b *strings.Builder, path, apiGroup
 	b.WriteString("        - methods: " + methods + "\n")
 	b.WriteString("          resources:\n")
 	b.WriteString("            - resourceAttributes:\n")
-	b.WriteString("                namespace: \"" + dataRegistryAuthProjectFromPath + "\"\n")
+	// Single-quoted so the Go-template inner "project" does not break YAML.
+	b.WriteString("                namespace: '" + dataRegistryAuthProjectFromPath + "'\n")
 	b.WriteString("                apiGroup: " + apiGroup + "\n")
 	b.WriteString("                resource: registries\n")
 }

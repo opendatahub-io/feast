@@ -51,8 +51,10 @@ roleRef:
 # Data Registry RBAC — grant feast-test-admin access via aggregated ClusterRoles.
 # The operator creates ClusterRoles feast-data-registry-viewer/editor/admin
 # with rules for API group dataregistry.opendatahub.io.
-# A namespaced RoleBinding grants the SA access scoped to test-ns-feast-rest,
-# which is what the kube-rbac-proxy auth.yaml SAR check expects.
+# A namespaced RoleBinding grants the SA access scoped to test-ns-feast-rest.
+# kube-rbac-proxy SAR uses the URL path {project} as the Kubernetes namespace,
+# and the tests call /v1/test-ns-feast-rest/... so the binding stays in the
+# tenant namespace even though the Data Registry CR lives in rhoai-data-registry.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

@@ -94,11 +94,17 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=create;get;delete
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;create;update;watch;delete
+// destinationCACertificate on reencrypt routes requires routes/custom-host.
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes/custom-host,verbs=create;update
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch
+// Operator must hold these to grant them on feast-data-registry-{viewer,editor,admin}
+// ClusterRoles (RBAC escalation prevention).
+// +kubebuilder:rbac:groups=dataregistry.opendatahub.io,resources=registries;namespaces;tables;volumes;generic-tables,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=dataregistry.opendatahub.io,resources=connections,verbs=use
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

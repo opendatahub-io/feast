@@ -189,7 +189,8 @@ func (feast *FeastServices) deployDataRegistry() error {
 		return err
 	}
 	if err := feast.createOrDeleteDataRegistryServiceMonitor(); err != nil {
-		return err
+		logger := log.FromContext(feast.Handler.Context)
+		logger.Error(err, "Failed to apply Data Registry ServiceMonitor; continuing without metrics scrape")
 	}
 	return nil
 }
@@ -368,7 +369,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 	// The proxy uses auth.yaml for its initial authentication gate, but the server
 	// performs its own SubjectAccessReview calls during cross-namespace search to
 	// determine which namespaces a given user is authorized to browse.
-	return corev1.Container{
+	ctr := corev1.Container{
 		Name:  DataRegistryContainerName,
 		Image: image,
 		Command: []string{
@@ -420,7 +421,20 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			PeriodSeconds:    3,
 			FailureThreshold: 40,
 		},
-	}, nil
+	}
+
+	// Inherit env/envFrom from spec.services.registry.local.server so
+	// ${POSTGRES_USER} (and similar) in the SQL registry path expand.
+	if serverConfigs := feast.getServerConfigs(RegistryFeastType); serverConfigs != nil {
+		if serverConfigs.OptionalCtrConfigs.EnvFrom != nil {
+			ctr.EnvFrom = *serverConfigs.OptionalCtrConfigs.EnvFrom
+		}
+		if serverConfigs.OptionalCtrConfigs.Env != nil {
+			ctr.Env = envOverride(ctr.Env, *serverConfigs.OptionalCtrConfigs.Env)
+		}
+	}
+
+	return ctr, nil
 }
 
 // buildKubeRBACProxyContainer returns the kube-rbac-proxy sidecar spec.

@@ -62,7 +62,7 @@ Required before running `/group-test` or `/pr-e2etest` on a PR.
 |---|---|
 | **Trigger** | Pull request opened or updated targeting `master` |
 | **Source** | PR head branch at `{{revision}}` |
-| **Build context** | `sdk/python/feast/infra/feature_servers/multicloud` |
+| **Build context** | repository root (so the image overlays this checkout's Python) |
 | **Dockerfile** | `sdk/python/feast/infra/feature_servers/multicloud/Dockerfile` |
 | **Output image** | `quay.io/opendatahub/feature-server:odh-pr-<sha>` and `odh-pr-<pr-number>` |
 | **Service account** | `build-pipeline-odh-feature-server` |
@@ -95,7 +95,7 @@ the image the nightly test pipeline resolves via the `odh-master` tag.
 |---|---|
 | **Trigger** | Push to `master` |
 | **Source** | `master` branch |
-| **Build context** | `sdk/python/feast/infra/feature_servers/multicloud` |
+| **Build context** | repository root (so the image overlays this checkout's Python) |
 | **Dockerfile** | `sdk/python/feast/infra/feature_servers/multicloud/Dockerfile` |
 | **Output image** | `quay.io/opendatahub/feature-server:odh-master` |
 | **Service account** | `build-pipeline-odh-feature-server` |

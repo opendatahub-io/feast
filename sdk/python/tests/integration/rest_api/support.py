@@ -1,5 +1,7 @@
+import json
 import shlex
 import subprocess
+import tempfile
 import time
 
 from kubernetes import client
@@ -304,6 +306,33 @@ def execPodCommand(namespace, podName, command_args):
     apply_output = run_kubectl_command(apply_args)
     print("Output of args apply:\n", apply_output)
     return apply_output
+
+
+def copy_secret(src_namespace, dest_namespace, secret_name):
+    """Copy a Secret from src_namespace into dest_namespace, stripping cluster metadata."""
+    raw = run_kubectl_command(
+        ["get", "secret", secret_name, "-n", src_namespace, "-o", "json"]
+    )
+    if not raw:
+        raise RuntimeError(
+            f"Failed to get secret {secret_name} from namespace {src_namespace}"
+        )
+    data = json.loads(raw)
+    data["metadata"] = {
+        "name": secret_name,
+        "namespace": dest_namespace,
+    }
+    data.pop("status", None)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(data, handle)
+        path = handle.name
+    result = run_kubectl_command(["apply", "-f", path])
+    if result is None:
+        raise RuntimeError(
+            f"Failed to apply secret {secret_name} into namespace {dest_namespace}"
+        )
+    print(f"Copied secret {secret_name} from {src_namespace} to {dest_namespace}")
+    return result
 
 
 def label_namespace(namespace, label_key, label_value):

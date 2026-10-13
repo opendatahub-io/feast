@@ -2,7 +2,7 @@ apiVersion: feast.dev/v1
 kind: FeatureStore
 metadata:
   name: data-registry
-  namespace: test-ns-feast-rest
+  namespace: rhoai-data-registry
   annotations:
     dataregistry.opendatahub.io/enabled: "true"
     feast.dev/protected-project: "true"
