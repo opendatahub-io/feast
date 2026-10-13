@@ -24376,6 +24376,28 @@ rules:
   - update
   - watch
 - apiGroups:
+  - dataregistry.opendatahub.io
+  resources:
+  - connections
+  verbs:
+  - use
+- apiGroups:
+  - dataregistry.opendatahub.io
+  resources:
+  - generic-tables
+  - namespaces
+  - registries
+  - tables
+  - volumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - feast.dev
   resources:
   - featurestores
@@ -24494,6 +24516,14 @@ rules:
   - create
   - delete
   - get
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - system:auth-delegator
+  resources:
+  - clusterroles
+  verbs:
+  - bind
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

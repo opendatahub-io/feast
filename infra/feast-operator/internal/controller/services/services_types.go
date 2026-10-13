@@ -88,6 +88,7 @@ const (
 	dataRegistryTlsSecretSuffix          = "-data-registry-tls"
 
 	dataRegistryAuthDelegatorSuffix = "-data-registry-auth-delegator"
+	dataRegistryOwnerUIDLabelKey    = "feast.dev/featurestore-uid"
 	dataRegistryCaBundleSuffix      = "-data-registry-ca-bundle"
 
 	dataRegistryAPIGroup = "dataregistry.opendatahub.io"
