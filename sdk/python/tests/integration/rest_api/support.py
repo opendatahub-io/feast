@@ -245,10 +245,24 @@ def execPodCommand(namespace, podName, command_args):
 
 def label_namespace(namespace, label_key, label_value):
     """Add a label to a Kubernetes namespace."""
-    args = ["label", "namespace", namespace, f"{label_key}={label_value}", "--overwrite"]
+    args = [
+        "label",
+        "namespace",
+        namespace,
+        f"{label_key}={label_value}",
+        "--overwrite",
+    ]
     result = run_kubectl_command(args)
     if result is None:
-        result = run_oc_command(["label", "namespace", namespace, f"{label_key}={label_value}", "--overwrite"])
+        result = run_oc_command(
+            [
+                "label",
+                "namespace",
+                namespace,
+                f"{label_key}={label_value}",
+                "--overwrite",
+            ]
+        )
     print(f"Labeled namespace {namespace}: {label_key}={label_value}")
     return result
 
@@ -258,7 +272,9 @@ def create_sa_token(namespace, sa_name, duration="1h"):
     args = ["create", "token", sa_name, "-n", namespace, f"--duration={duration}"]
     token = run_kubectl_command(args)
     if not token:
-        token = run_oc_command(["create", "token", sa_name, "-n", namespace, f"--duration={duration}"])
+        token = run_oc_command(
+            ["create", "token", sa_name, "-n", namespace, f"--duration={duration}"]
+        )
     if not token:
         raise RuntimeError(f"Failed to create token for SA {sa_name} in {namespace}")
     print(f"Created token for SA {sa_name} in {namespace} (length={len(token)})")
@@ -275,36 +291,50 @@ def create_data_registry_route(namespace, cr_name):
     route_name = f"{cr_name}-data-registry"
 
     create_args = [
-        "create", "route", "passthrough", route_name,
+        "create",
+        "route",
+        "passthrough",
+        route_name,
         f"--service={service_name}",
         "--port=https",
-        "-n", namespace,
+        "-n",
+        namespace,
     ]
     create_output = run_oc_command(create_args)
     if create_output is None:
         print(f"Warning: Could not create route {route_name}. It may already exist.")
 
     get_args = [
-        "get", "route", "-n", namespace, "-o",
+        "get",
+        "route",
+        "-n",
+        namespace,
+        "-o",
         f"jsonpath={{.items[?(@.spec.to.name=='{service_name}')].spec.host}}",
     ]
     host = run_oc_command(get_args)
     if not host:
-        raise RuntimeError(f"Failed to get route host for Data Registry service {service_name}")
+        raise RuntimeError(
+            f"Failed to get route host for Data Registry service {service_name}"
+        )
 
     route_url = f"https://{host}"
     print(f"Data Registry Route URL: {route_url}")
     return route_url
 
 
-def wait_for_data_registry_ready(namespace, cr_name, timeout_seconds=600, interval_seconds=10):
+def wait_for_data_registry_ready(
+    namespace, cr_name, timeout_seconds=600, interval_seconds=10
+):
     """Wait for a Data Registry FeatureStore CR to reach Ready state.
 
     Data Registry CRs take longer because the operator must create additional
     resources (kube-rbac-proxy sidecar, auth ConfigMap, ClusterRoles, etc.)
     and wait for TLS cert provisioning by service-ca.
     """
-    print(f"Waiting for Data Registry CR {namespace}/{cr_name} to reach Ready (timeout={timeout_seconds}s)...")
+    print(
+        f"Waiting for Data Registry CR {namespace}/{cr_name} to reach Ready (timeout={timeout_seconds}s)..."
+    )
     start_time = time.time()
 
     while time.time() - start_time < timeout_seconds:
@@ -316,8 +346,15 @@ def wait_for_data_registry_ready(namespace, cr_name, timeout_seconds=600, interv
             return True
 
         conditions = run_kubectl_command(
-            ["get", "feast", cr_name, "-n", namespace, "-o",
-             "jsonpath={.status.conditions[?(@.type=='DataRegistryReady')].status}"]
+            [
+                "get",
+                "feast",
+                cr_name,
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.status.conditions[?(@.type=='DataRegistryReady')].status}",
+            ]
         )
         print(f"  Phase={phase}, DataRegistryReady={conditions}")
         time.sleep(interval_seconds)
@@ -330,8 +367,17 @@ def wait_for_data_registry_ready(namespace, cr_name, timeout_seconds=600, interv
 
     # Also dump pod status for the data-registry server
     pods = run_kubectl_command(
-        ["get", "pods", "-n", namespace, "-l", f"app.kubernetes.io/name=feast-{cr_name}",
-         "-o", "wide", "--no-headers"]
+        [
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "-l",
+            f"app.kubernetes.io/name=feast-{cr_name}",
+            "-o",
+            "wide",
+            "--no-headers",
+        ]
     )
     print(f"  Related pods: {pods}")
 

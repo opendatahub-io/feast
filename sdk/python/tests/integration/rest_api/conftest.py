@@ -8,10 +8,10 @@ from kubernetes import client, config
 
 from tests.integration.rest_api.support import (
     applyFeastProject,
+    create_data_registry_route,
     create_feast_project,
     create_namespace,
     create_route,
-    create_data_registry_route,
     create_sa_token,
     delete_namespace,
     deploy_and_validate_pod,
@@ -50,11 +50,15 @@ class FeastRestClient:
 
     def post(self, endpoint, json=None, params=None):
         url = self._build_url(endpoint)
-        return requests.post(url, json=json, params=params, headers=self._headers(), verify=False)
+        return requests.post(
+            url, json=json, params=params, headers=self._headers(), verify=False
+        )
 
     def delete(self, endpoint, params=None):
         url = self._build_url(endpoint)
-        return requests.delete(url, params=params, headers=self._headers(), verify=False)
+        return requests.delete(
+            url, params=params, headers=self._headers(), verify=False
+        )
 
 
 class DataRegistryClient:
@@ -75,19 +79,27 @@ class DataRegistryClient:
 
     def post(self, endpoint, json=None, params=None):
         url = f"{self.base_url}{endpoint}"
-        return requests.post(url, json=json, params=params, headers=self._headers(), verify=False)
+        return requests.post(
+            url, json=json, params=params, headers=self._headers(), verify=False
+        )
 
     def put(self, endpoint, json=None, params=None):
         url = f"{self.base_url}{endpoint}"
-        return requests.put(url, json=json, params=params, headers=self._headers(), verify=False)
+        return requests.put(
+            url, json=json, params=params, headers=self._headers(), verify=False
+        )
 
     def patch(self, endpoint, json=None, params=None):
         url = f"{self.base_url}{endpoint}"
-        return requests.patch(url, json=json, params=params, headers=self._headers(), verify=False)
+        return requests.patch(
+            url, json=json, params=params, headers=self._headers(), verify=False
+        )
 
     def delete(self, endpoint, params=None):
         url = f"{self.base_url}{endpoint}"
-        return requests.delete(url, params=params, headers=self._headers(), verify=False)
+        return requests.delete(
+            url, params=params, headers=self._headers(), verify=False
+        )
 
     def head(self, endpoint, params=None):
         url = f"{self.base_url}{endpoint}"
@@ -112,16 +124,22 @@ def _wait_for_http_ready(
         time.sleep(initial_delay)
 
     deadline = time.time() + timeout
-    print(f"\n Waiting for HTTP endpoint to become ready (timeout={timeout}s): {health_url}")
+    print(
+        f"\n Waiting for HTTP endpoint to become ready (timeout={timeout}s): {health_url}"
+    )
 
     while time.time() < deadline:
         try:
-            resp = requests.get(health_url, timeout=10, verify=verify_ssl, headers=headers or {})
+            resp = requests.get(
+                health_url, timeout=10, verify=verify_ssl, headers=headers or {}
+            )
             last_status = resp.status_code
             if resp.status_code != 502:
                 print(f" HTTP endpoint is ready (status={resp.status_code})")
                 return
-            print(f" HTTP endpoint returned {resp.status_code}, retrying in {interval}s...")
+            print(
+                f" HTTP endpoint returned {resp.status_code}, retrying in {interval}s..."
+            )
         except requests.exceptions.RequestException as exc:
             last_status = str(exc)
             print(f" HTTP request failed ({exc}), retrying in {interval}s...")
@@ -170,26 +188,53 @@ def feast_rest_client():
         label_namespace(NAMESPACE, "opendatahub.io/data-registry", "true")
 
         # Deploy shared infrastructure
-        deploy_and_validate_pod(NAMESPACE, str(resource_dir / "redis.yaml"), "app=redis")
-        deploy_and_validate_pod(NAMESPACE, str(resource_dir / "postgres.yaml"), "app=postgres")
+        deploy_and_validate_pod(
+            NAMESPACE, str(resource_dir / "redis.yaml"), "app=redis"
+        )
+        deploy_and_validate_pod(
+            NAMESPACE, str(resource_dir / "postgres.yaml"), "app=postgres"
+        )
 
         # Deploy the two noAuth FeatureStore CRs
-        create_feast_project(str(resource_dir / "feast_config_credit_scoring.yaml"), NAMESPACE, CREDIT_SCORING)
+        create_feast_project(
+            str(resource_dir / "feast_config_credit_scoring.yaml"),
+            NAMESPACE,
+            CREDIT_SCORING,
+        )
         validate_feature_store_cr_status(NAMESPACE, CREDIT_SCORING)
 
-        create_feast_project(str(resource_dir / "feast_config_driver_ranking.yaml"), NAMESPACE, DRIVER_RANKING)
+        create_feast_project(
+            str(resource_dir / "feast_config_driver_ranking.yaml"),
+            NAMESPACE,
+            DRIVER_RANKING,
+        )
         validate_feature_store_cr_status(NAMESPACE, DRIVER_RANKING)
 
         if run_on_openshift:
-            route_url = create_route(NAMESPACE, CREDIT_SCORING, CREDIT_SCORING_REST_SERVICE)
+            route_url = create_route(
+                NAMESPACE, CREDIT_SCORING, CREDIT_SCORING_REST_SERVICE
+            )
         else:
-            run_kubectl_command([
-                "apply", "-f", str(resource_dir / "feast-registry-nginx.yaml"), "-n", NAMESPACE,
-            ])
-            ingress_host = run_kubectl_command([
-                "get", "ingress", "feast-registry-ingress", "-n", NAMESPACE,
-                "-o", "jsonpath={.spec.rules[0].host}",
-            ])
+            run_kubectl_command(
+                [
+                    "apply",
+                    "-f",
+                    str(resource_dir / "feast-registry-nginx.yaml"),
+                    "-n",
+                    NAMESPACE,
+                ]
+            )
+            ingress_host = run_kubectl_command(
+                [
+                    "get",
+                    "ingress",
+                    "feast-registry-ingress",
+                    "-n",
+                    NAMESPACE,
+                    "-o",
+                    "jsonpath={.spec.rules[0].host}",
+                ]
+            )
             route_url = f"http://{ingress_host}"
 
         # Apply feast projects
@@ -230,10 +275,14 @@ def feast_extended_setup(feast_rest_client):
     resource_dir = Path(__file__).parent / "resource"
 
     # Apply RBAC ServiceAccounts + RoleBindings
-    run_kubectl_command(["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE])
+    run_kubectl_command(
+        ["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE]
+    )
 
     # Deploy feast-auth CR
-    create_feast_project(str(resource_dir / "feast_config_feast_auth.yaml"), NAMESPACE, FEAST_AUTH)
+    create_feast_project(
+        str(resource_dir / "feast_config_feast_auth.yaml"), NAMESPACE, FEAST_AUTH
+    )
     validate_feature_store_cr_status(NAMESPACE, FEAST_AUTH)
 
     # Apply feast project inside feast-auth pod
@@ -241,14 +290,22 @@ def feast_extended_setup(feast_rest_client):
 
     # Create saved datasets and permissions on feast-auth
     auth_pod_name = get_pod_name_by_prefix(NAMESPACE, FEAST_AUTH)
-    execPodCommand(NAMESPACE, auth_pod_name, ["python", "create_ui_visible_datasets.py"])
+    execPodCommand(
+        NAMESPACE, auth_pod_name, ["python", "create_ui_visible_datasets.py"]
+    )
     execPodCommand(NAMESPACE, auth_pod_name, ["python", "permissions_apply.py"])
 
     # Deploy Data Registry CR — apply without the 300s validation inside
     # create_feast_project; instead use wait_for_data_registry_ready with 900s.
-    run_kubectl_command([
-        "apply", "-f", str(resource_dir / "feast_config_data_registry.yaml"), "-n", NAMESPACE,
-    ])
+    run_kubectl_command(
+        [
+            "apply",
+            "-f",
+            str(resource_dir / "feast_config_data_registry.yaml"),
+            "-n",
+            NAMESPACE,
+        ]
+    )
     wait_for_data_registry_ready(NAMESPACE, DATA_REGISTRY, timeout_seconds=900)
 
     return feast_rest_client

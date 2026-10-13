@@ -13,7 +13,6 @@ import os
 
 import pytest
 
-
 FEAST_AUTH_PROJECT = "feast_auth_project"
 
 
@@ -29,9 +28,7 @@ class TestFeastAuthAPI:
 
     def test_auth_list_entities(self, feast_auth_client):
         """Admin token can list entities for the auth project."""
-        response = feast_auth_client.get(
-            f"/entities/?project={FEAST_AUTH_PROJECT}"
-        )
+        response = feast_auth_client.get(f"/entities/?project={FEAST_AUTH_PROJECT}")
         assert response.status_code == 200
         data = response.json()
 
@@ -78,9 +75,7 @@ class TestFeastAuthAPI:
 
     def test_auth_list_data_sources(self, feast_auth_client):
         """Admin token can list data sources for the auth project."""
-        response = feast_auth_client.get(
-            f"/data_sources/?project={FEAST_AUTH_PROJECT}"
-        )
+        response = feast_auth_client.get(f"/data_sources/?project={FEAST_AUTH_PROJECT}")
         assert response.status_code == 200
         data = response.json()
 
@@ -204,7 +199,5 @@ class TestFeastAuthAPI:
                 },
             },
         }
-        response = feast_auth_viewer_client.post(
-            "/permissions", json=permission_body
-        )
+        response = feast_auth_viewer_client.post("/permissions", json=permission_body)
         assert response.status_code == 403

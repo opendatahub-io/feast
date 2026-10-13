@@ -252,16 +252,12 @@ class TestDataRegistryAPI:
 
     def test_dr_19_auth_no_token(self, data_registry_no_token_client):
         """GET /v1/{ns}/namespaces without a token is rejected with 401 by kube-rbac-proxy."""
-        response = data_registry_no_token_client.get(
-            f"/v1/{NAMESPACE}/namespaces"
-        )
+        response = data_registry_no_token_client.get(f"/v1/{NAMESPACE}/namespaces")
         assert response.status_code == 401
 
     def test_dr_20_auth_unauthorized(self, data_registry_unauthorized_client):
         """GET /v1/{ns}/namespaces with a token lacking SAR bindings returns 403."""
-        response = data_registry_unauthorized_client.get(
-            f"/v1/{NAMESPACE}/namespaces"
-        )
+        response = data_registry_unauthorized_client.get(f"/v1/{NAMESPACE}/namespaces")
         assert response.status_code == 403
 
     # ------------------------------------------------------------------
