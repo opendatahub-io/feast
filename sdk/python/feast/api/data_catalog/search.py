@@ -208,7 +208,11 @@ def _reject_invalid_page(page: int, pagination: dict) -> None:
 def get_search_router() -> APIRouter:
     router = APIRouter(tags=["search"])
 
-    @router.get("/v1/{project}/search", response_model=SearchResponse)
+    @router.get(
+        "/v1/{project}/search",
+        response_model=SearchResponse,
+        operation_id="searchDataRegistry",
+    )
     def search_catalog(
         project: str,
         request: Request,
