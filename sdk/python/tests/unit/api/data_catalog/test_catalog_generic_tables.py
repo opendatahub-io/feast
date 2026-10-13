@@ -498,22 +498,31 @@ def test_connection_ref_round_trips_on_generic_table(sqlite_registry):
         json={
             "name": PARQUET,
             "format": "parquet",
-            "connection_ref": {
-                "type": "rhai",
-                "secret_name": "aws-creds",  # pragma: allowlist secret
-            },
         },
         headers=AUTH,
     )
     assert created.status_code == 201, created.text
-    assert created.json()["connection_ref"] == {
-        "type": "rhai",
-        "secret_name": "aws-creds",  # pragma: allowlist secret
+
+    updated = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={
+            "connection_ref": {
+                "type": "dch",
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "name": "Production data",
+                "connectionType": "s3",
+            },
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["connection_ref"] == {
+        "type": "dch",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
     }
     got = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}")
     assert got.json()["connection_ref"] == {
-        "type": "rhai",
-        "secret_name": "aws-creds",  # pragma: allowlist secret
+        "type": "dch",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
     }
 
 

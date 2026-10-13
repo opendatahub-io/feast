@@ -83,7 +83,11 @@ def data_catalog_config(*, prefix: str | None = None) -> DataRegistryConfig:
 def get_config_router() -> APIRouter:
     router = APIRouter(tags=["discovery"])
 
-    @router.get("/v1/config", response_model=DataRegistryConfig)
+    @router.get(
+        "/v1/config",
+        response_model=DataRegistryConfig,
+        operation_id="getBootstrapConfig",
+    )
     def get_data_catalog_config(
         warehouse: str | None = Query(default=None),
     ) -> DataRegistryConfig:
@@ -93,7 +97,11 @@ def get_config_router() -> APIRouter:
         """
         return data_catalog_config(prefix=_config_prefix(warehouse))
 
-    @router.get("/v1/{project}/config", response_model=DataRegistryConfig)
+    @router.get(
+        "/v1/{project}/config",
+        response_model=DataRegistryConfig,
+        operation_id="getProjectConfig",
+    )
     def get_data_catalog_prefixed_config(project: str) -> DataRegistryConfig:
         """Return project-scoped configuration.
 

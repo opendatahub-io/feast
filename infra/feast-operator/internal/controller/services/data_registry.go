@@ -348,9 +348,9 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 	}
 
 	// HTTP probe against GET /healthz: a lightweight endpoint registered before
-	// any auth middleware, so it always returns 200 regardless of SSAR config.
-	// /projects cannot be used because catalog_ssar.py requires a bearer token
-	// when CATALOG_SSAR_API_GROUP is set, and kubelet probes carry no token.
+	// any auth middleware, so it always returns 200 regardless of SAR config.
+	// /projects cannot be used because data_registry_sar.py requires a bearer token
+	// when DATA_REGISTRY_SAR_API_GROUP is set, and kubelet probes carry no token.
 	probeHandler := corev1.ProbeHandler{
 		HTTPGet: &corev1.HTTPGetAction{
 			Path:   "/healthz",
@@ -359,7 +359,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 		},
 	}
 
-	// SSAR env vars are consumed by the Feast Python server (not by kube-rbac-proxy).
+	// SAR env vars are consumed by the Feast Python server (not by kube-rbac-proxy).
 	// The proxy uses auth.yaml for its initial authentication gate, but the server
 	// performs its own SubjectAccessReview calls during cross-namespace search to
 	// determine which namespaces a given user is authorized to browse.
@@ -386,9 +386,9 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			// the standard feast-init container, which this pod does not run.
 			{Name: FeatureStoreYamlEnvVar, Value: fsYamlB64},
 			{Name: "FEAST_USAGE", Value: "False"},
-			{Name: DataCatalogEnabledEnvVar, Value: "true"},
-			{Name: CatalogSSARApiGroupEnvVar, Value: dataRegistryAPIGroup},
-			{Name: CatalogSSARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
+			{Name: DataRegistryEnabledEnvVar, Value: "true"},
+			{Name: DataRegistrySARApiGroupEnvVar, Value: dataRegistryAPIGroup},
+			{Name: DataRegistrySARResourcesEnvVar, Value: "namespaces,tables,volumes,generic-tables"},
 			{Name: FeastProjectEnvVar, Value: DataRegistryProject},
 		},
 		Resources: corev1.ResourceRequirements{
@@ -436,7 +436,7 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
 			// Multi-tenant list/search endpoints bypass proxy SAR: the server
-			// performs TokenReview + per-namespace SSAR (catalog_ssar.py).
+			// performs TokenReview + per-namespace SAR (data_registry_sar.py).
 			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
@@ -602,7 +602,7 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
 	// Per-tenant SAR via Format2 endpoints only (path capture + ?project=).
-	// List/search paths are in --ignore-paths for server-side SSAR.
+	// List/search paths are in --ignore-paths for server-side SAR.
 	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{

@@ -74,7 +74,7 @@ var dataRegistryAuthLegacyQueryPaths = []string{
 //   - ?warehouse= on GET /v1/config bootstrap
 //
 // /projects, /v1/projects, /api/v1/projects, /search, and /api/v1/search are
-// listed in --ignore-paths; the feast-server performs server-side SSAR there.
+// listed in --ignore-paths; the feast-server performs server-side SAR there.
 func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 	apiGroup := dataRegistryAPIGroup
 
