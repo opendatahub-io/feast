@@ -106,6 +106,7 @@ def get_volume_router() -> APIRouter:
     @router.get(
         "/v1/{project}/namespaces/{collection}/volumes",
         response_model=ListVolumesResponse,
+        response_model_exclude_unset=True,
     )
     def list_volumes(
         project: str, collection: str, request: Request
@@ -125,6 +126,7 @@ def get_volume_router() -> APIRouter:
     @router.post(
         "/v1/{project}/namespaces/{collection}/volumes",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
     )
     def create_volume(
         project: str,
@@ -171,6 +173,7 @@ def get_volume_router() -> APIRouter:
     @router.get(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
     )
     def get_volume(
         project: str, collection: str, volume: str, request: Request
@@ -199,6 +202,7 @@ def get_volume_router() -> APIRouter:
     @router.patch(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
     )
     def update_volume(
         project: str,

@@ -121,7 +121,11 @@ def test_missing_required_fields_helper():
 
 def test_data_catalog_package_does_not_mount_feast_server():
     catalog_dir = Path(data_catalog_pkg.__file__).resolve().parent
-    forbidden = {"RestRegistryServer", "DATACATALOG_ENABLED", "add_data_catalog_routes"}
+    forbidden = {
+        "RestRegistryServer",
+        "DATA_REGISTRY_ENABLED",
+        "add_data_catalog_routes",
+    }
     for path in catalog_dir.glob("*.py"):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):

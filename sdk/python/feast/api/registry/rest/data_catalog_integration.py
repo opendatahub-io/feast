@@ -15,7 +15,7 @@
 """Mount Data Registry Iceberg ``/v1`` routes on RestRegistryServer.
 
 Kept out of ``feast.api.data_catalog`` so that package stays free of
-RestRegistryServer / DATACATALOG_ENABLED identifiers.
+RestRegistryServer / DATA_REGISTRY_ENABLED identifiers.
 """
 
 from __future__ import annotations
@@ -40,17 +40,21 @@ from feast.api.data_catalog.tables import get_table_router
 from feast.api.data_catalog.volumes import get_volume_router
 
 
-def is_datacatalog_enabled() -> bool:
-    return os.environ.get("DATACATALOG_ENABLED", "").lower() in ("1", "true", "yes")
+def is_data_registry_enabled() -> bool:
+    return os.environ.get("DATA_REGISTRY_ENABLED", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def add_data_catalog_routes(app: FastAPI, registry) -> None:
-    """Include Iceberg routers when ``DATACATALOG_ENABLED`` is truthy.
+    """Include Iceberg routers when ``DATA_REGISTRY_ENABLED`` is truthy.
 
     Iceberg JSON for ``IcebergRESTException`` and for ``/v1`` validation
     errors only. Feast ``/entities`` validation stays 422 ``detail``.
     """
-    if not is_datacatalog_enabled():
+    if not is_data_registry_enabled():
         return
     app.state.registry = registry
     app.include_router(get_config_router())
