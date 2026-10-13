@@ -32,6 +32,11 @@ def get_ol_processor() -> Optional[Any]:
 
 
 def register_all_routes(app: FastAPI, grpc_handler, server=None, store=None):
+    @app.get("/healthz", tags=["Health"])
+    def healthz():
+        """Kubernetes health probe endpoint. Bypasses all auth middleware."""
+        return {"status": "ok"}
+
     app.include_router(get_system_router())
     app.include_router(get_entity_router(grpc_handler))
     app.include_router(get_data_source_router(grpc_handler))

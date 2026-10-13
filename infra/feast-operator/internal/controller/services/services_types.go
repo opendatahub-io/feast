@@ -108,9 +108,11 @@ const (
 
 	// DataRegistryNamespaceLabel is the label that must be present on a
 	// namespace for the operator to allow a data-registry CR in it.
-	// This is more flexible than a hardcoded namespace name because ODH,
-	// RHOAI, and custom installs can each label their chosen namespace.
+	// This is a secondary guard; the primary enforcement is the exact namespace
+	// name match (always rhoai-data-registry). Custom namespace selection is deferred.
 	DataRegistryNamespaceLabel = "opendatahub.io/data-registry"
+	// DataRegistryPlatformNamespaceLabel is applied by feast-module-operator on rhoai-data-registry.
+	DataRegistryPlatformNamespaceLabel = "dataregistry.opendatahub.io/enabled"
 
 	// DataRegistryFinalizer is added to the FeatureStore CR when the data-registry
 	// annotation is enabled. It prevents the CR from being garbage-collected before
@@ -118,7 +120,10 @@ const (
 	// that do not carry owner references and would otherwise be orphaned.
 	DataRegistryFinalizer = "dataregistry.opendatahub.io/cleanup"
 
-	DefaultKubeRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.18.1"
+	// DefaultKubeRBACProxyImage is the fallback when RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+	// is unset (standalone make deploy). ODH/RHOAI installs inject the related image via OLM.
+	// Requires opendatahub-io/kube-rbac-proxy with Format2 endpoint rules (PR #28, v3.6.0-ea.2+).
+	DefaultKubeRBACProxyImage = "quay.io/opendatahub/odh-kube-rbac-proxy@sha256:acd9de62b8339dbacd39635317e5e596e09a70ae26ac9eccdde4a4124388740f"
 
 	DefaultKubeRBACProxyCPURequest    = "50m"
 	DefaultKubeRBACProxyCPULimit      = "100m"
