@@ -177,7 +177,7 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
         sqlite_registry,
         extra_tags={
             "uuid": "aaaa-bbbb-cccc",
-            "_connection_ref": '{"type":"rhai","secret_name":"my-s3"}',  # pragma: allowlist secret
+            "_connection_ref": '{"type":"secret","secret_name":"my-s3"}',  # pragma: allowlist secret
         },
     )
     stored = sqlite_registry.get_saved_dataset(
@@ -208,7 +208,7 @@ def test_load_table_returns_metadata_and_empty_config(sqlite_registry):
 
     assert (
         meta["properties"]["connection_ref"]
-        == '{"type":"rhai","secret_name":"my-s3"}'  # pragma: allowlist secret
+        == '{"type":"secret","secret_name":"my-s3"}'  # pragma: allowlist secret
     )
     assert meta["properties"]["owner"] == "uw"
     assert "_connection_ref" not in meta["properties"]

@@ -108,6 +108,7 @@ def get_generic_table_router() -> APIRouter:
     @router.get(
         "/v1/{project}/namespaces/{collection}/generic-tables",
         response_model=AssetListResponse,
+        response_model_exclude_unset=True,
     )
     def list_generic_tables(
         project: str,
@@ -134,6 +135,7 @@ def get_generic_table_router() -> APIRouter:
     @router.post(
         "/v1/{project}/namespaces/{collection}/generic-tables",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
         status_code=201,
     )
     def create_generic_table(
@@ -183,6 +185,7 @@ def get_generic_table_router() -> APIRouter:
     @router.get(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
     )
     def get_generic_table(
         project: str, collection: str, table: str, request: Request
@@ -197,6 +200,7 @@ def get_generic_table_router() -> APIRouter:
     @router.patch(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
         response_model=AssetResponse,
+        response_model_exclude_unset=True,
     )
     def update_generic_table(
         project: str,

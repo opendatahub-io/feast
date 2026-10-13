@@ -223,15 +223,15 @@ var _ = Describe("Data Registry", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(fsYaml)).To(ContainSubstring("type: no_auth"))
 		Expect(envMap).To(HaveKeyWithValue("FEAST_USAGE", "False"))
-		Expect(envMap).To(HaveKeyWithValue(DataCatalogEnabledEnvVar, "true"))
-		Expect(envMap).To(HaveKeyWithValue(CatalogSSARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
-		Expect(envMap).To(HaveKeyWithValue(CatalogSSARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
+		Expect(envMap).To(HaveKeyWithValue(DataRegistryEnabledEnvVar, "true"))
+		Expect(envMap).To(HaveKeyWithValue(DataRegistrySARApiGroupEnvVar, "dataregistry.opendatahub.io")) // matches dataRegistryAPIGroup constant
+		Expect(envMap).To(HaveKeyWithValue(DataRegistrySARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
 		// FEAST_PROJECT must be "data_registry" (Phase-1 storage model)
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
 
-		// HTTP GET /healthz probe: bypasses SSAR middleware so kubelet can probe
-		// without a bearer token. /projects cannot be used because catalog_ssar.py
-		// returns 401 when CATALOG_SSAR_API_GROUP is set.
+		// HTTP GET /healthz probe: bypasses SAR middleware so kubelet can probe
+		// without a bearer token. /projects cannot be used because data_registry_sar.py
+		// returns 401 when DATA_REGISTRY_SAR_API_GROUP is set.
 		for _, p := range []*corev1.Probe{feastCtr.ReadinessProbe, feastCtr.LivenessProbe, feastCtr.StartupProbe} {
 			Expect(p).NotTo(BeNil())
 			Expect(p.HTTPGet).NotTo(BeNil(), "data-registry probe should use HTTPGet, not TCPSocket")
@@ -251,7 +251,7 @@ var _ = Describe("Data Registry", func() {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /projects and /search bypass proxy for server-side SSAR (bearer token passthrough)
+			// /projects and /search bypass proxy for server-side SAR (bearer token passthrough)
 			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			"--auth-header-fields-enabled",
 			"--auth-header-user-field-name=X-Remote-User",
@@ -260,7 +260,7 @@ var _ = Describe("Data Registry", func() {
 		// because /search is already included; verify it's present.
 		for _, arg := range proxyCtr.Args {
 			if strings.Contains(arg, "ignore-paths") {
-				Expect(arg).To(ContainSubstring("/search"), "--ignore-paths must contain /search for server-side SSAR")
+				Expect(arg).To(ContainSubstring("/search"), "--ignore-paths must contain /search for server-side SAR")
 			}
 		}
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
@@ -442,7 +442,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
 
-	It("produces an auth-delegator ClusterRoleBinding for server-side SSAR", func() {
+	It("produces an auth-delegator ClusterRoleBinding for server-side SAR", func() {
 		setAnnotation("true")
 
 		Expect(feast.deployDataRegistryAuthDelegatorBinding()).To(Succeed())
