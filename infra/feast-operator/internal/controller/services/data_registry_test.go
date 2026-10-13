@@ -76,8 +76,10 @@ var _ = Describe("Data Registry", func() {
 		}
 		if add {
 			nsObj.Labels[DataRegistryNamespaceLabel] = "true"
+			delete(nsObj.Labels, DataRegistryPlatformNamespaceLabel)
 		} else {
 			delete(nsObj.Labels, DataRegistryNamespaceLabel)
+			delete(nsObj.Labels, DataRegistryPlatformNamespaceLabel)
 		}
 		Expect(k8sClient.Update(ctx, nsObj)).To(Succeed())
 	}
@@ -181,7 +183,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
 		Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(
-			"dataregistry.opendatahub.io/auth-config-revision", "static-sar-v1"))
+			"dataregistry.opendatahub.io/auth-config-revision", "format2-path-capture-v1"))
 
 		// Owner reference
 		Expect(deploy.OwnerReferences).To(HaveLen(1))
@@ -227,12 +229,13 @@ var _ = Describe("Data Registry", func() {
 		// FEAST_PROJECT must be "data_registry" (Phase-1 storage model)
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
 
-		// HTTP GET /projects probe: no_auth is forced in data-registry mode so the
-		// kubelet can probe without a token; the server returns 200 when ready.
+		// HTTP GET /healthz probe: bypasses SSAR middleware so kubelet can probe
+		// without a bearer token. /projects cannot be used because catalog_ssar.py
+		// returns 401 when CATALOG_SSAR_API_GROUP is set.
 		for _, p := range []*corev1.Probe{feastCtr.ReadinessProbe, feastCtr.LivenessProbe, feastCtr.StartupProbe} {
 			Expect(p).NotTo(BeNil())
 			Expect(p.HTTPGet).NotTo(BeNil(), "data-registry probe should use HTTPGet, not TCPSocket")
-			Expect(p.HTTPGet.Path).To(Equal("/projects"))
+			Expect(p.HTTPGet.Path).To(Equal("/healthz"))
 			Expect(p.HTTPGet.Port).To(Equal(intstr.FromInt32(DataRegistryPort)))
 			Expect(p.HTTPGet.Scheme).To(Equal(corev1.URISchemeHTTP))
 			Expect(p.TCPSocket).To(BeNil(), "TCPSocket probe should not be set (HTTP probe is preferred)")
@@ -248,15 +251,16 @@ var _ = Describe("Data Registry", func() {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// /search is NOT in ignore-paths: proxy gates it so unauthenticated callers get 401 (S1 fix).
-			"--ignore-paths=/projects,/api/v1/projects",
+			// /projects and /search bypass proxy for server-side SSAR (bearer token passthrough)
+			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			"--auth-header-fields-enabled",
 			"--auth-header-user-field-name=X-Remote-User",
 		))
-		// /search and /api/v1/search must NOT appear in ignore-paths.
+		// /search and /api/v1/search must NOT appear in ignore-paths separately
+		// because /search is already included; verify it's present.
 		for _, arg := range proxyCtr.Args {
 			if strings.Contains(arg, "ignore-paths") {
-				Expect(arg).NotTo(ContainSubstring("/search"), "--ignore-paths must not contain /search")
+				Expect(arg).To(ContainSubstring("/search"), "--ignore-paths must contain /search for server-side SSAR")
 			}
 		}
 		Expect(proxyCtr.Ports).To(ConsistOf(corev1.ContainerPort{
@@ -331,7 +335,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(svc.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
 
-	It("creates an auth.yaml ConfigMap with static SAR resourceAttributes", func() {
+	It("creates an auth.yaml ConfigMap with per-tenant Format2 endpoint rules", func() {
 		setAnnotation("true")
 
 		cm := feast.initDataRegistryAuthCM()
@@ -341,15 +345,39 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
 
 		authContent := cm.Data["auth.yaml"]
-		Expect(authContent).To(ContainSubstring("namespace: " + featureStore.Namespace))
+
 		Expect(authContent).To(ContainSubstring("dataregistry.opendatahub.io"))
 		Expect(authContent).To(ContainSubstring("resource: registries"))
-		// kube-rbac-proxy v0.18.1 returns 400 if rewrites is set without
-		// byQueryParameter / byHttpHeader. byHTTPPath is not a supported key.
-		Expect(authContent).NotTo(ContainSubstring("rewrites"))
-		Expect(authContent).NotTo(ContainSubstring("byHTTPPath"))
+		Expect(authContent).To(ContainSubstring("endpoints:"))
 
-		// Owner reference
+		// No Format1 fallback on the data-registry install namespace.
+		Expect(authContent).NotTo(ContainSubstring("namespace: " + featureStore.Namespace))
+
+		// Catalog: path capture for Feast project (= K8s namespace).
+		Expect(authContent).To(ContainSubstring("path: /v1/{project}/namespaces"))
+		Expect(authContent).To(ContainSubstring(`namespace: "{{ index .PathParams "project" }}"`))
+
+		// Legacy registry REST: ?project= and /api/v1 prefix.
+		for _, path := range []string{"/entities", "/feature_views", "/data_sources",
+			"/feature_services", "/saved_datasets", "/permissions", "/features",
+			"/labels", "/label_views"} {
+			Expect(authContent).To(ContainSubstring("path: " + path))
+			Expect(authContent).To(ContainSubstring("path: /api/v1" + path))
+		}
+		Expect(authContent).To(ContainSubstring("path: /entities/*"))
+		Expect(authContent).To(ContainSubstring("path: /api/v1/entities/*"))
+		Expect(authContent).To(ContainSubstring("path: /features/*/*"))
+		Expect(authContent).To(ContainSubstring("path: /saved_datasets/data/*"))
+
+		Expect(authContent).To(ContainSubstring("byQueryParameter:"))
+		Expect(authContent).To(ContainSubstring("name: project"))
+		Expect(authContent).To(ContainSubstring(`namespace: "{{ .Value }}"`))
+
+		Expect(authContent).To(ContainSubstring("path: /v1/config"))
+		Expect(authContent).To(ContainSubstring("name: warehouse"))
+
+		Expect(authContent).NotTo(ContainSubstring("path: /search"))
+
 		Expect(cm.OwnerReferences).To(HaveLen(1))
 		Expect(cm.OwnerReferences[0].Name).To(Equal(featureStore.Name))
 	})
@@ -672,12 +700,13 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Get(ctx, drKey, svc)).To(Succeed())
 		Expect(svc.Spec.Ports[0].TargetPort).To(Equal(intstr.FromInt32(DataRegistryProxyPort)))
 
-		// Auth ConfigMap exists with static SAR attributes (no rewrites)
+		// Auth ConfigMap exists with per-tenant Format2 endpoints
 		cm := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, cmKey, cm)).To(Succeed())
 		Expect(cm.Data).To(HaveKey("auth.yaml"))
 		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("resource: registries"))
-		Expect(cm.Data["auth.yaml"]).NotTo(ContainSubstring("rewrites"))
+		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("endpoints:"))
+		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("byQueryParameter:"))
 
 		// ClusterRoles: all three (viewer, editor, admin) exist with all pseudo-resources
 		expectedResources := ConsistOf("registries", "namespaces", "tables", "volumes", "generic-tables")
@@ -901,6 +930,19 @@ var _ = Describe("Data Registry", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("not designated for the data registry"))
 		Expect(err.Error()).To(ContainSubstring(DataRegistryNamespaceLabel))
+	})
+
+	It("allows data-registry CR when namespace has the platform module label only", func() {
+		setAnnotation("true")
+		labelNamespace(ctx, false)
+		nsObj := &corev1.Namespace{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: DefaultNs}, nsObj)).To(Succeed())
+		if nsObj.Labels == nil {
+			nsObj.Labels = map[string]string{}
+		}
+		nsObj.Labels[DataRegistryPlatformNamespaceLabel] = "true"
+		Expect(k8sClient.Update(ctx, nsObj)).To(Succeed())
+		Expect(feast.validateDataRegistryNamespace()).To(Succeed())
 	})
 
 	It("allows data-registry CR when namespace has the label", func() {

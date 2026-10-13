@@ -113,11 +113,16 @@ def _do_ssar_check(
         auth_api = client.AuthenticationV1Api()
         tr_response = auth_api.create_token_review(token_review)
 
-        if not tr_response.status.authenticated:
+        status = tr_response.status
+        if status is None or not status.authenticated:
             return False
 
-        username = tr_response.status.user.username
-        groups = tr_response.status.user.groups or []
+        user = status.user
+        if user is None:
+            return False
+
+        username = user.username
+        groups = user.groups or []
 
         sar = client.V1SubjectAccessReview(
             spec=client.V1SubjectAccessReviewSpec(
