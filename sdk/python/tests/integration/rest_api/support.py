@@ -99,7 +99,7 @@ def run_kubectl_command(args):
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        print(f"Error executing 'kubectl {' '.join(args)}': {e}")
+        print(f"Error executing kubectl (exit {e.returncode})")
         return None
 
 
@@ -331,7 +331,7 @@ def copy_secret(src_namespace, dest_namespace, secret_name):
         raise RuntimeError(
             f"Failed to apply secret {secret_name} into namespace {dest_namespace}"
         )
-    print(f"Copied secret {secret_name} from {src_namespace} to {dest_namespace}")
+    print(f"Copied object from {src_namespace} to {dest_namespace}")
     return result
 
 
