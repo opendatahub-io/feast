@@ -7,7 +7,6 @@ namespace: redhat-ods-applications
 resources:
   - ../../default
 
-
 patches:
   # patch to remove default `system` namespace in ../../manager/manager.yaml
   - path: delete-namespace.yaml
