@@ -373,46 +373,55 @@ def create_sa_token(namespace, sa_name, duration="1h"):
     return token
 
 
-def create_data_registry_route(namespace, cr_name):
-    """Create an OpenShift Route for the Data Registry service (HTTPS passthrough).
+def create_data_registry_route(
+    namespace, cr_name, timeout_seconds=120, interval_seconds=5
+):
+    """Return the URL of the operator-created Data Registry Route.
 
-    The Data Registry service is exposed via kube-rbac-proxy on HTTPS port 443.
-    The route uses passthrough TLS termination so the proxy handles TLS end-to-end.
+    The operator creates a ReEncrypt Route named feast-{cr}-data-registry
+    (GetFeastServiceName(DataRegistryFeastType)) targeting kube-rbac-proxy.
+    Tests must use that Route so they exercise the product ingress. Do not
+    create a second passthrough Route: listing all Routes for the Service
+    concatenates hosts and breaks HTTP clients.
     """
-    service_name = f"feast-{cr_name}-data-registry"
-    route_name = f"{cr_name}-data-registry"
-
-    create_args = [
-        "create",
-        "route",
-        "passthrough",
-        route_name,
-        f"--service={service_name}",
-        "--port=https",
-        "-n",
-        namespace,
-    ]
-    create_output = run_oc_command(create_args)
-    if create_output is None:
-        print(f"Warning: Could not create route {route_name}. It may already exist.")
-
+    route_name = f"feast-{cr_name}-data-registry"
     get_args = [
         "get",
         "route",
+        route_name,
         "-n",
         namespace,
         "-o",
-        f"jsonpath={{.items[?(@.spec.to.name=='{service_name}')].spec.host}}",
+        "jsonpath={.spec.host}",
     ]
-    host = run_oc_command(get_args)
-    if not host:
-        raise RuntimeError(
-            f"Failed to get route host for Data Registry service {service_name}"
-        )
+    print(
+        f"Waiting for operator Data Registry Route {namespace}/{route_name} "
+        f"(timeout={timeout_seconds}s)..."
+    )
+    start_time = time.time()
+    host = None
+    while time.time() - start_time < timeout_seconds:
+        host = run_oc_command(get_args)
+        if not host:
+            host = run_kubectl_command(get_args)
+        if host and " " not in host.strip():
+            route_url = f"https://{host.strip()}"
+            print(f"Data Registry Route URL: {route_url}")
+            return route_url
+        if host and " " in host.strip():
+            raise RuntimeError(
+                f"Operator Route {namespace}/{route_name} host contains a space "
+                f"({host!r}). Refusing to use a concatenated multi-Route host."
+            )
+        print(f"  Route host not ready yet (got {host!r})")
+        time.sleep(interval_seconds)
 
-    route_url = f"https://{host}"
-    print(f"Data Registry Route URL: {route_url}")
-    return route_url
+    dump_namespace_diagnostics(namespace, cr_name)
+    raise RuntimeError(
+        f"Operator Data Registry Route {namespace}/{route_name} did not get a "
+        f"host within {timeout_seconds}s. The operator should create this "
+        f"ReEncrypt Route; tests must not create a replacement."
+    )
 
 
 def wait_for_data_registry_ready(

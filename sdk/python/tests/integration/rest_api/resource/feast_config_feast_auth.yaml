@@ -8,8 +8,8 @@ spec:
   authz:
     kubernetes:
       roles:
-        - feast-admin
-        - feast-viewer
+        - feast-writer
+        - feast-reader
   feastProjectDir:
     git:
       url: https://github.com/feast-dev/feast-credit-score-local-tutorial.git

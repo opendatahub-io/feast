@@ -17,13 +17,15 @@ metadata:
   name: feast-test-unauthorized
   namespace: test-ns-feast-rest
 ---
-# RoleBindings for Feast Kubernetes auth (feast-auth CR)
-# The operator creates empty Roles named feast-admin and feast-viewer
-# per the CR spec.authz.kubernetes.roles list.
+# RoleBindings for Feast Kubernetes auth (feast-auth CR).
+# Role names must match both spec.authz.kubernetes.roles and the
+# Permission objects the credit-scoring tutorial applies (feast-writer /
+# feast-reader). feast-admin / feast-viewer are not granted by those
+# Permission objects, so Feast correctly 403s tokens bound to them.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: feast-admin-binding
+  name: feast-writer-binding
   namespace: test-ns-feast-rest
 subjects:
   - kind: ServiceAccount
@@ -31,13 +33,13 @@ subjects:
     namespace: test-ns-feast-rest
 roleRef:
   kind: Role
-  name: feast-admin
+  name: feast-writer
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: feast-viewer-binding
+  name: feast-reader-binding
   namespace: test-ns-feast-rest
 subjects:
   - kind: ServiceAccount
@@ -45,7 +47,7 @@ subjects:
     namespace: test-ns-feast-rest
 roleRef:
   kind: Role
-  name: feast-viewer
+  name: feast-reader
   apiGroup: rbac.authorization.k8s.io
 ---
 # Data Registry RBAC — grant feast-test-admin access via aggregated ClusterRoles.
