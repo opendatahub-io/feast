@@ -22,6 +22,27 @@ import pytest
 
 FEAST_PROJECTS = {"credit_scoring_local", "driver_ranking", "feast_auth_project"}
 SAVED_DATASETS_COUNT = 9
+CREDIT_SCORING_SAVED_DATASET_NAMES = {
+    "credit_score_training_v1",
+    "credit_history_analysis_v1",
+    "demographics_profile_v1",
+    "comprehensive_credit_dataset_v1",
+    "credit_history_service_v1",
+    "demographics_service_v1",
+    "location_intelligence_service_v1",
+    "customer_profile_service_v1",
+    "basic_underwriting_service_v1",
+}
+
+
+def _saved_dataset_name(ds):
+    """Feast REST serializes SavedDataset as {spec, meta}; name lives in spec."""
+    return (ds.get("spec") or {}).get("name") or ds.get("name") or ""
+
+
+def _saved_dataset_project(ds):
+    """Project is top-level on /saved_datasets/all, not on list-by-project proto JSON."""
+    return ds.get("project") or (ds.get("spec") or {}).get("project") or ""
 
 
 @pytest.mark.integration
@@ -70,7 +91,7 @@ class TestCrossInstanceIsolation:
         data = response.json()
         saved_datasets = data.get("savedDatasets", [])
         dr_datasets = [
-            ds for ds in saved_datasets if ds.get("project") == "data_registry"
+            ds for ds in saved_datasets if _saved_dataset_project(ds) == "data_registry"
         ]
 
         assert len(dr_datasets) == 0, (
@@ -119,10 +140,18 @@ class TestCrossInstanceIsolation:
         saved_datasets = data.get("savedDatasets", [])
 
         for ds in saved_datasets:
-            assert ds.get("project") == "feast_auth_project", (
-                f"Expected project 'feast_auth_project' but got '{ds.get('project')}' "
-                f"for saved dataset '{ds.get('spec', {}).get('name', '<unknown>')}'"
+            name = _saved_dataset_name(ds)
+            project = _saved_dataset_project(ds)
+            assert name, f"saved dataset missing spec.name: {ds}"
+            assert project != "data_registry", (
+                f"data_registry saved dataset {name!r} leaked into "
+                "auth Feast /saved_datasets"
             )
+            if project:
+                assert project == "feast_auth_project", (
+                    f"Expected project 'feast_auth_project' but got {project!r} "
+                    f"for saved dataset {name!r}"
+                )
 
     # ------------------------------------------------------------------
     # Data Registry -> Feast isolation
@@ -183,8 +212,9 @@ class TestCrossInstanceIsolation:
         belonging to the requested project.
 
         Querying credit_scoring_local should return exactly 9 datasets, all
-        with project == 'credit_scoring_local'.  No cross-project leakage
-        from driver_ranking, feast_auth_project, or data_registry is allowed.
+        named as credit-scoring training sets. List-by-project proto JSON
+        has no top-level project field; isolation is the name set plus any
+        project the API does send. No data_registry leakage is allowed.
         """
         response = feast_rest_client.get(
             "/saved_datasets?project=credit_scoring_local&include_relationships=false"
@@ -199,9 +229,20 @@ class TestCrossInstanceIsolation:
             f"credit_scoring_local but got {len(saved_datasets)}"
         )
 
+        actual_names = {_saved_dataset_name(ds) for ds in saved_datasets}
+        assert actual_names == CREDIT_SCORING_SAVED_DATASET_NAMES, (
+            f"credit_scoring_local saved datasets mismatch: {actual_names}"
+        )
+
         for ds in saved_datasets:
-            assert ds.get("project") == "credit_scoring_local", (
-                f"Expected project 'credit_scoring_local' but got "
-                f"'{ds.get('project')}' for saved dataset "
-                f"'{ds.get('spec', {}).get('name', '<unknown>')}'"
+            name = _saved_dataset_name(ds)
+            project = _saved_dataset_project(ds)
+            assert project != "data_registry", (
+                f"data_registry saved dataset {name!r} leaked into "
+                "credit_scoring_local /saved_datasets"
             )
+            if project:
+                assert project == "credit_scoring_local", (
+                    f"Expected project 'credit_scoring_local' but got "
+                    f"{project!r} for saved dataset {name!r}"
+                )

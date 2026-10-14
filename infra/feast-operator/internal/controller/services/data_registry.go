@@ -299,7 +299,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 				Annotations: map[string]string{
 					// kube-rbac-proxy reads auth.yaml only at process start.
 					// Bump this when SAR config semantics change so pods roll.
-					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v1",
+					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v2",
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -454,8 +454,9 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// Multi-tenant list/search endpoints bypass proxy SAR: the server
+			// Multi-tenant list endpoints bypass proxy SAR: the server
 			// performs TokenReview + per-namespace SAR (data_registry_sar.py).
+			// Catalog /v1/{project}/search is Format2, not listed here.
 			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
@@ -621,7 +622,8 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
 	// Per-tenant SAR via Format2 endpoints only (path capture + ?project=).
-	// List/search paths are in --ignore-paths for server-side SAR.
+	// Multi-tenant list paths are in --ignore-paths for server-side SAR.
+	// Catalog /v1/{project}/search is a Format2 path, not ignore-paths.
 	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{

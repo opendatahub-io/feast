@@ -49,12 +49,19 @@ class TestDataRegistryAPI:
         assert response.status_code == 200
 
     def test_dr_02_config(self, data_registry_client):
-        """GET /v1/config returns 200 with overrides and defaults keys."""
-        response = data_registry_client.get("/v1/config")
+        """GET /v1/config?warehouse=<ns> is Iceberg bootstrap and returns 200.
+
+        kube-rbac-proxy SAR for /v1/config rewrites the tenant from
+        ?warehouse=. Omitting it is 400 from the proxy, not a catalog 200.
+        """
+        response = data_registry_client.get(
+            "/v1/config", params={"warehouse": NAMESPACE}
+        )
         assert response.status_code == 200
         data = response.json()
         assert "overrides" in data
         assert "defaults" in data
+        assert data.get("overrides", {}).get("prefix") == NAMESPACE
 
     # ------------------------------------------------------------------
     # 03-07: Namespace lifecycle

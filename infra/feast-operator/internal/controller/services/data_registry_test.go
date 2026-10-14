@@ -183,7 +183,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		Expect(deploy.Spec.Template.Spec.ServiceAccountName).To(Equal(feast.initFeastSA().Name))
 		Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(
-			"dataregistry.opendatahub.io/auth-config-revision", "format2-path-capture-v1"))
+			"dataregistry.opendatahub.io/auth-config-revision", "format2-path-capture-v2"))
 
 		// Owner reference
 		Expect(deploy.OwnerReferences).To(HaveLen(1))
@@ -375,6 +375,12 @@ var _ = Describe("Data Registry", func() {
 
 		Expect(authContent).To(ContainSubstring("path: /v1/config"))
 		Expect(authContent).To(ContainSubstring("name: warehouse"))
+
+		// Catalog search is tenant-scoped; proxy SAR uses {project}.
+		Expect(authContent).To(ContainSubstring("path: /v1/{project}/search"))
+		// Iceberg HEAD is existence check; Kubernetes has no HEAD verb.
+		Expect(authContent).To(ContainSubstring("methods: [head]"))
+		Expect(authContent).To(ContainSubstring("verb: get"))
 
 		Expect(authContent).NotTo(ContainSubstring("path: /search"))
 
