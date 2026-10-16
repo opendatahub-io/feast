@@ -16,6 +16,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from feast.api.registry.rest import data_registry_sar
 
 
@@ -84,3 +86,43 @@ def test_sar_check_uses_subject_access_review(monkeypatch):
     assert sar_spec.resource_attributes.resource == "namespaces"
     assert sar_spec.resource_attributes.verb == "list"
     authz_api.create_subject_access_review.assert_called_once_with(captured["sar"])
+
+
+@pytest.mark.parametrize(
+    "token_status",
+    [
+        None,
+        SimpleNamespace(authenticated=False, user=None),
+        SimpleNamespace(authenticated=True, user=None),
+        SimpleNamespace(
+            authenticated=True,
+            user=SimpleNamespace(username=None, groups=[]),
+        ),
+    ],
+)
+def test_sar_check_rejects_incomplete_token_review(monkeypatch, token_status):
+    class FakeTokenReviewSpec:
+        def __init__(self, *, token):
+            self.token = token
+
+    class FakeTokenReview:
+        def __init__(self, *, spec):
+            self.spec = spec
+
+    class FakeAuthenticationV1Api:
+        def create_token_review(self, token_review):
+            return SimpleNamespace(status=token_status)
+
+    fake_client = SimpleNamespace(
+        V1TokenReviewSpec=FakeTokenReviewSpec,
+        V1TokenReview=FakeTokenReview,
+        AuthenticationV1Api=FakeAuthenticationV1Api,
+    )
+    monkeypatch.setitem(sys.modules, "kubernetes", SimpleNamespace(client=fake_client))
+
+    authz_api = Mock()
+
+    assert not data_registry_sar._do_sar_check(
+        authz_api, "bearer-token", "demo-user-1", "namespaces", "list"
+    )
+    authz_api.create_subject_access_review.assert_not_called()

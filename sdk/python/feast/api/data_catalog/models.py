@@ -80,7 +80,10 @@ class SchemaField(BaseModel):
 
 
 class DchConnectionRef(BaseModel):
-    """OpenAPI DchConnectionRef. Catalog stores the JSON; does not call DCH."""
+    """OpenAPI DchConnectionRef.
+
+    Data Registry stores only the stable reference; it does not call DCH.
+    """
 
     type: Literal["dch"]
     id: UUID
@@ -98,7 +101,10 @@ class DchConnectionRef(BaseModel):
 
 
 class RhaiConnectionRef(BaseModel):
-    """OpenAPI RhaiConnectionRef. Catalog stores secret_name; does not read the Secret."""
+    """OpenAPI RhaiConnectionRef.
+
+    Data Registry stores only secret_name; it does not read the Secret.
+    """
 
     type: Literal["secret"]
     secret_name: str

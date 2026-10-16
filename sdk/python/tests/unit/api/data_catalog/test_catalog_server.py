@@ -125,10 +125,22 @@ def test_connection_ref_openapi_schema(sql_repo_config, monkeypatch):
     store = FeatureStore(config=sql_repo_config)
     client = TestClient(RestRegistryServer(store).app, raise_server_exceptions=False)
 
-    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    openapi = client.get("/openapi.json").json()
+    schemas = openapi["components"]["schemas"]
     dch = schemas["DchConnectionRef"]["properties"]
     secret = schemas["RhaiConnectionRef"]["properties"]
 
+    assert openapi["paths"]["/v1/config"]["get"]["operationId"] == "getBootstrapConfig"
+    assert (
+        openapi["paths"]["/v1/{project}/config"]["get"]["operationId"]
+        == "getProjectConfig"
+    )
+    assert (
+        openapi["paths"]["/v1/{project}/search"]["get"]["operationId"]
+        == "searchDataRegistry"
+    )
+    assert "Catalog stores" not in schemas["DchConnectionRef"]["description"]
+    assert "Catalog stores" not in schemas["RhaiConnectionRef"]["description"]
     assert dch["type"]["const"] == "dch"
     assert secret["type"]["const"] == "secret"
     for properties in (dch, secret):

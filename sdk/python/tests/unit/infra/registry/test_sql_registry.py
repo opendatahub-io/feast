@@ -402,6 +402,8 @@ def test_delete_data_source_refreshes_cache(sqlite_registry):
     assert sqlite_registry.list_data_sources("test_project", allow_cache=True) == []
     with pytest.raises(DataSourceObjectNotFoundException):
         sqlite_registry.delete_data_source("driver_stats", "test_project")
+
+
 def test_cas_touch_project_only_for_data_registry(sqlite_registry):
     from unittest.mock import patch
 

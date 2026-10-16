@@ -88,7 +88,7 @@ type FeatureStoreReconciler struct {
 // discovery label. Not present upstream; do not drop when syncing.
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get,resourceNames=feast-capabilities-config
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
