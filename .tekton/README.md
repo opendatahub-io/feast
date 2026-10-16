@@ -33,7 +33,7 @@ The group test uses container images built from **your PR’s source**. That hap
 1. **Per-component PR pipelines build the images**  
    When you open or update a PR to the Feast repo (target branch `stable`), these pipelines run and build images from the PR’s commit:
    - **odh-feast-operator-pull-request** — clones the repo at `{{source_url}}` / `{{revision}}`, builds from `infra/feast-operator`, and pushes e.g. `quay.io/opendatahub/feast-operator:odh-pr-<revision>`.
-   - **odh-feature-server-pull-request** — same repo/revision, builds from `sdk/python/feast/infra/feature_servers/multicloud`, and pushes e.g. `quay.io/opendatahub/feature-server:odh-pr-<revision>`.
+   - **odh-feature-server-pull-request** — same repo/revision, builds with repository-root context (so the image overlays this checkout’s Python) from `sdk/python/feast/infra/feature_servers/multicloud/Dockerfile`, and pushes e.g. `quay.io/opendatahub/feature-server:odh-pr-<revision>`.
 
 2. **Group test uses a snapshot of those images**  
    When you trigger the group test (e.g. by commenting `/group-test`), the pipeline runs the **generate-snapshot** task. That task finds the image refs (and git commit/URL) for each group component for the current PR and outputs a **snapshot** JSON. The **deploy-and-test** step then deploys the Feast operator and feature server using those snapshot images and runs tests after cloning the repo at the snapshot’s git commit.
