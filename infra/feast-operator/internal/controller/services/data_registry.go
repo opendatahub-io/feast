@@ -189,7 +189,8 @@ func (feast *FeastServices) deployDataRegistry() error {
 		return err
 	}
 	if err := feast.createOrDeleteDataRegistryServiceMonitor(); err != nil {
-		return err
+		logger := log.FromContext(feast.Handler.Context)
+		logger.Error(err, "Failed to apply Data Registry ServiceMonitor; continuing without metrics scrape")
 	}
 	return nil
 }
@@ -298,7 +299,7 @@ func (feast *FeastServices) setDataRegistryDeployment(deploy *appsv1.Deployment)
 				Annotations: map[string]string{
 					// kube-rbac-proxy reads auth.yaml only at process start.
 					// Bump this when SAR config semantics change so pods roll.
-					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v1",
+					"dataregistry.opendatahub.io/auth-config-revision": "format2-path-capture-v2",
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -368,7 +369,7 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 	// The proxy uses auth.yaml for its initial authentication gate, but the server
 	// performs its own SubjectAccessReview calls during cross-namespace search to
 	// determine which namespaces a given user is authorized to browse.
-	return corev1.Container{
+	ctr := corev1.Container{
 		Name:  DataRegistryContainerName,
 		Image: image,
 		Command: []string{
@@ -420,7 +421,20 @@ func (feast *FeastServices) buildDataRegistryContainer() (corev1.Container, erro
 			PeriodSeconds:    3,
 			FailureThreshold: 40,
 		},
-	}, nil
+	}
+
+	// Inherit env/envFrom from spec.services.registry.local.server so
+	// ${POSTGRES_USER} (and similar) in the SQL registry path expand.
+	if serverConfigs := feast.getServerConfigs(RegistryFeastType); serverConfigs != nil {
+		if serverConfigs.OptionalCtrConfigs.EnvFrom != nil {
+			ctr.EnvFrom = *serverConfigs.OptionalCtrConfigs.EnvFrom
+		}
+		if serverConfigs.OptionalCtrConfigs.Env != nil {
+			ctr.Env = envOverride(ctr.Env, *serverConfigs.OptionalCtrConfigs.Env)
+		}
+	}
+
+	return ctr, nil
 }
 
 // buildKubeRBACProxyContainer returns the kube-rbac-proxy sidecar spec.
@@ -440,8 +454,9 @@ func (feast *FeastServices) buildKubeRBACProxyContainer() corev1.Container {
 			"--config-file=/etc/kube-rbac-proxy/auth.yaml",
 			"--tls-cert-file=/etc/tls/tls.crt",
 			"--tls-private-key-file=/etc/tls/tls.key",
-			// Multi-tenant list/search endpoints bypass proxy SAR: the server
+			// Multi-tenant list endpoints bypass proxy SAR: the server
 			// performs TokenReview + per-namespace SAR (data_registry_sar.py).
+			// Catalog /v1/{project}/search is Format2, not listed here.
 			"--ignore-paths=/projects,/api/v1/projects,/v1/projects,/search,/api/v1/search",
 			// Forward the authenticated username to the upstream server as
 			// X-Remote-User so Python can populate registered_by.
@@ -607,7 +622,8 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 	cm.Labels = feast.getFeastTypeLabels(DataRegistryFeastType)
 
 	// Per-tenant SAR via Format2 endpoints only (path capture + ?project=).
-	// List/search paths are in --ignore-paths for server-side SAR.
+	// Multi-tenant list paths are in --ignore-paths for server-side SAR.
+	// Catalog /v1/{project}/search is a Format2 path, not ignore-paths.
 	authYaml := feast.buildDataRegistryAuthYaml()
 
 	cm.Data = map[string]string{
