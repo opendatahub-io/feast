@@ -105,7 +105,9 @@ kube-rbac-proxy :8443 (HTTPS)  ──HTTP 127.0.0.1:6572──►  feast-server
   `?project=` on legacy registry REST — not the data-registry install namespace.
 - **feast-server** runs `feast serve_registry --rest-api` with `DATA_REGISTRY_ENABLED=true`.
   It performs server-side SubjectAccessReview (SAR) for `/projects`, `/v1/projects`, and
-  `/search` (listed in `--ignore-paths` because they span multiple tenants).
+  `/search` (listed in `--ignore-paths` because they span multiple tenants). Catalog
+  `GET /v1/{project}/search` is tenant-scoped and goes through the proxy SAR, not
+  ignore-paths. Iceberg `HEAD` is authorized as Kubernetes `get`.
 
 ### Resource limits
 

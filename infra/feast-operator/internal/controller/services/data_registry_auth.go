@@ -25,6 +25,11 @@ const dataRegistryAuthProjectFromPath = `{{ index .PathParams "project" }}`
 // Template for SAR namespace from legacy ?project= or bootstrap ?warehouse= query params.
 const dataRegistryAuthProjectFromQuery = `{{ .Value }}`
 
+// Mutating catalog methods. HEAD is a separate mapping that SAR as get
+// (opendatahub-io/kube-rbac-proxy HTTPToKubeVerb maps HEAD → "head", which
+// is not a Kubernetes RBAC verb).
+const dataRegistryAuthMutatingMethods = "[get, post, put, patch, delete]"
+
 var dataRegistryAuthCatalogEndpointPaths = []string{
 	"/v1/{project}/config",
 	"/v1/{project}/namespaces",
@@ -39,6 +44,9 @@ var dataRegistryAuthCatalogEndpointPaths = []string{
 	"/v1/{project}/namespaces/{collection}/generic-tables/{table}",
 	"/v1/{project}/labels",
 	"/v1/{project}/labels/{label}",
+	// Iceberg catalog search is tenant-scoped; proxy SAR uses {project}.
+	// Distinct from Feast registry GET /search (ignore-paths, server-side SAR).
+	"/v1/{project}/search",
 }
 
 var dataRegistryAuthLegacyQueryPaths = []string{
@@ -75,6 +83,7 @@ var dataRegistryAuthLegacyQueryPaths = []string{
 //
 // /projects, /v1/projects, /api/v1/projects, /search, and /api/v1/search are
 // listed in --ignore-paths; the feast-server performs server-side SAR there.
+// Catalog GET /v1/{project}/search is NOT ignored: the proxy SARs that path.
 func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 	apiGroup := dataRegistryAPIGroup
 
@@ -90,55 +99,64 @@ func (feast *FeastServices) buildDataRegistryAuthYaml() string {
 }
 
 func writeDataRegistryAuthCatalogEndpoints(b *strings.Builder, apiGroup string) {
-	const methods = "[get, head, post, put, patch, delete]"
 	for _, path := range dataRegistryAuthCatalogEndpointPaths {
-		writeDataRegistryAuthPathProjectEndpoint(b, path, apiGroup, methods)
+		writeDataRegistryAuthPathProjectEndpoint(b, path, apiGroup)
 	}
 }
 
 func writeDataRegistryAuthV1ConfigBootstrap(b *strings.Builder, apiGroup string) {
+	// Iceberg bootstrap. warehouse is required by the proxy rewrite; omit it
+	// and kube-rbac-proxy returns 400. HEAD and GET both SAR as get.
 	b.WriteString("    - path: /v1/config\n")
 	b.WriteString("      mappings:\n")
-	b.WriteString("        - methods: [get, head]\n")
-	b.WriteString("          resources:\n")
-	b.WriteString("            - rewrites:\n")
-	b.WriteString("                byQueryParameter:\n")
-	b.WriteString("                  name: warehouse\n")
-	b.WriteString("              resourceAttributes:\n")
-	b.WriteString("                namespace: \"" + dataRegistryAuthProjectFromQuery + "\"\n")
-	b.WriteString("                apiGroup: " + apiGroup + "\n")
-	b.WriteString("                resource: registries\n")
+	writeDataRegistryAuthQueryRewriteMapping(b, apiGroup, "[get, head]", "warehouse", "get")
 }
 
 func writeDataRegistryAuthLegacyQueryEndpoints(b *strings.Builder, apiGroup string) {
-	const methods = "[get, head, post, put, patch, delete]"
 	for _, path := range dataRegistryAuthLegacyQueryPaths {
-		writeDataRegistryAuthQueryProjectEndpoint(b, path, apiGroup, methods)
-		writeDataRegistryAuthQueryProjectEndpoint(b, "/api/v1"+path, apiGroup, methods)
+		writeDataRegistryAuthQueryProjectEndpoint(b, path, apiGroup)
+		writeDataRegistryAuthQueryProjectEndpoint(b, "/api/v1"+path, apiGroup)
 	}
 }
 
-func writeDataRegistryAuthPathProjectEndpoint(b *strings.Builder, path, apiGroup, methods string) {
+func writeDataRegistryAuthPathProjectEndpoint(b *strings.Builder, path, apiGroup string) {
 	b.WriteString("    - path: " + path + "\n")
 	b.WriteString("      mappings:\n")
+	writeDataRegistryAuthPathMapping(b, apiGroup, "[head]", "get")
+	writeDataRegistryAuthPathMapping(b, apiGroup, dataRegistryAuthMutatingMethods, "")
+}
+
+func writeDataRegistryAuthQueryProjectEndpoint(b *strings.Builder, path, apiGroup string) {
+	b.WriteString("    - path: " + path + "\n")
+	b.WriteString("      mappings:\n")
+	writeDataRegistryAuthQueryRewriteMapping(b, apiGroup, "[head]", "project", "get")
+	writeDataRegistryAuthQueryRewriteMapping(b, apiGroup, dataRegistryAuthMutatingMethods, "project", "")
+}
+
+func writeDataRegistryAuthPathMapping(b *strings.Builder, apiGroup, methods, verb string) {
 	b.WriteString("        - methods: " + methods + "\n")
 	b.WriteString("          resources:\n")
 	b.WriteString("            - resourceAttributes:\n")
-	b.WriteString("                namespace: \"" + dataRegistryAuthProjectFromPath + "\"\n")
+	// Single-quoted so the Go-template inner "project" does not break YAML.
+	b.WriteString("                namespace: '" + dataRegistryAuthProjectFromPath + "'\n")
 	b.WriteString("                apiGroup: " + apiGroup + "\n")
 	b.WriteString("                resource: registries\n")
+	if verb != "" {
+		b.WriteString("                verb: " + verb + "\n")
+	}
 }
 
-func writeDataRegistryAuthQueryProjectEndpoint(b *strings.Builder, path, apiGroup, methods string) {
-	b.WriteString("    - path: " + path + "\n")
-	b.WriteString("      mappings:\n")
+func writeDataRegistryAuthQueryRewriteMapping(b *strings.Builder, apiGroup, methods, queryParam, verb string) {
 	b.WriteString("        - methods: " + methods + "\n")
 	b.WriteString("          resources:\n")
 	b.WriteString("            - rewrites:\n")
 	b.WriteString("                byQueryParameter:\n")
-	b.WriteString("                  name: project\n")
+	b.WriteString("                  name: " + queryParam + "\n")
 	b.WriteString("              resourceAttributes:\n")
 	b.WriteString("                namespace: \"" + dataRegistryAuthProjectFromQuery + "\"\n")
 	b.WriteString("                apiGroup: " + apiGroup + "\n")
 	b.WriteString("                resource: registries\n")
+	if verb != "" {
+		b.WriteString("                verb: " + verb + "\n")
+	}
 }
