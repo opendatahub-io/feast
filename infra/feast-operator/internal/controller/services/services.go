@@ -917,9 +917,7 @@ func (feast *FeastServices) getContainerCommand(feastType FeastServiceType) []st
 		if feast.isRegistryRestEnabled() {
 			deploySettings.Args = append(deploySettings.Args, "--rest-api")
 			deploySettings.Args = append(deploySettings.Args, "--rest-port", strconv.Itoa(int(getTargetRestPort(feastType, tls))))
-			// The Konflux feature-server image's serve_registry has no
-			// --host/-h. Click treats -h as --help and the registry
-			// container crash-loops. Data Registry already omits it.
+			deploySettings.Args = append(deploySettings.Args, "-h", hostAllIPv4)
 		}
 	}
 	deploySettings.Args = withBindHost(feastType, deploySettings.Args, feast.getServerConfigs(feastType))

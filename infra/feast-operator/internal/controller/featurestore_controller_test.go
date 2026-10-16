@@ -1500,10 +1500,6 @@ var _ = Describe("FeatureStore Controller", func() {
 						To(ContainElement(expectedArg),
 							"expected %s to be present in container command: %v", expectedArg, registryContainer.Command)
 				}
-				// feast[minimal]==0.66.0 has no --host/-h on serve_registry;
-				// Click treats -h as --help and the container crash-loops.
-				Expect(registryContainer.Command).NotTo(ContainElement("-h"))
-				Expect(registryContainer.Command).NotTo(ContainElement("--host"))
 				Expect(resource.Status.Conditions).NotTo(BeEmpty())
 				cond := apimeta.FindStatusCondition(resource.Status.Conditions, feastdevv1.RegistryReadyType)
 				Expect(cond).ToNot(BeNil())

@@ -47,12 +47,9 @@ func TestRegistryContainerCommandHostFlag(t *testing.T) {
 		dualStack   *bool
 		wantHost    string // empty: no -h expected
 	}{
-		// feast[minimal]==0.66.0 serve_registry has no --host/-h. Click treats
-		// -h as --help and the registry container crash-loops, so REST-enabled
-		// commands must omit it even when DualStack is set.
-		{"unset omits -h when rest enabled", true, nil, ""},
-		{"explicit false omits -h when rest enabled", true, ptr.To(false), ""},
-		{"explicit true still omits -h (0.66.0 serve_registry has none)", true, ptr.To(true), ""},
+		{"unset keeps ipv4", true, nil, hostAllIPv4},
+		{"explicit false keeps ipv4", true, ptr.To(false), hostAllIPv4},
+		{"explicit true binds bare ipv6 wildcard", true, ptr.To(true), hostAllIPv6},
 		{"rest disabled never renders -h", false, ptr.To(true), ""},
 	}
 	for _, tc := range cases {
