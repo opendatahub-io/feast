@@ -12,9 +12,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    if: >-
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'sync-to-stable')
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     env:
@@ -34,13 +32,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create cherry-pick branch
+      - name: Cherry-pick to stable
         id: cherry-pick
         run: |
-          BRANCH="auto-sync/stable/${PR_NUMBER}"
-          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
-
-          git checkout -b "$BRANCH" origin/stable
+          git checkout stable
 
           PARENT_COUNT=$(git cat-file -p "$MERGE_SHA" | grep -c "^parent")
           if [ "$PARENT_COUNT" -gt 1 ]; then
@@ -51,30 +46,29 @@ jobs:
           fi
 
           if eval "$CHERRY_PICK_CMD"; then
+            git push origin stable
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
             git cherry-pick --abort || true
-            git commit --allow-empty -m "cherry-pick of #${PR_NUMBER} failed — manual resolution needed"
             echo "conflict=true" >> "$GITHUB_OUTPUT"
           fi
 
-          git push origin "$BRANCH" --force
-
-      - name: Create Pull Request
-        id: create-pr
+      - name: Create conflict PR for manual resolution
+        if: steps.cherry-pick.outputs.conflict == 'true'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           SOURCE_PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          BRANCH="${{ steps.cherry-pick.outputs.branch }}"
-          CONFLICT="${{ steps.cherry-pick.outputs.conflict }}"
+          BRANCH="auto-sync/stable/${PR_NUMBER}"
+          git checkout -b "$BRANCH" origin/stable
+          git commit --allow-empty -m "cherry-pick of #${PR_NUMBER} failed — manual resolution needed"
+          git push origin "$BRANCH" --force
 
-          if [ "$CONFLICT" = "true" ]; then
-            PR_URL=$(gh pr create \
-              --base stable \
-              --head "$BRANCH" \
-              --title "sync(stable): ${PR_TITLE} (#${PR_NUMBER}) [CONFLICT]" \
-              --body "## Auto-sync from master (PR #${PR_NUMBER})
+          gh pr create \
+            --base stable \
+            --head "$BRANCH" \
+            --title "sync(stable): ${PR_TITLE} (#${PR_NUMBER}) [CONFLICT]" \
+            --body "## Auto-sync from master (PR #${PR_NUMBER})
 
           Cherry-pick of ${SOURCE_PR_URL} **failed due to merge conflicts**.
 
@@ -87,24 +81,4 @@ jobs:
           git add .
           git cherry-pick --continue
           git push origin auto-sync/stable/${PR_NUMBER} --force
-          \`\`\`")
-          else
-            PR_URL=$(gh pr create \
-              --base stable \
-              --head "$BRANCH" \
-              --title "sync(stable): ${PR_TITLE} (#${PR_NUMBER})" \
-              --body "## Auto-sync from master (PR #${PR_NUMBER})
-
-          Cherry-pick of ${SOURCE_PR_URL} to \`stable\` branch.
-
-          This PR was automatically created and will auto-merge after CI passes.")
-          fi
-
-          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
-          echo "Created PR: ${PR_URL}"
-
-      - name: Enable auto-merge
-        if: steps.cherry-pick.outputs.conflict == 'false'
-        run: |
-          PR_URL="${{ steps.create-pr.outputs.pr_url }}"
-          gh pr merge "$PR_URL" --auto --squash
+          \`\`\`"
