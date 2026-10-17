@@ -25,9 +25,9 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/feature-server:odh-stable
   - name: dockerfile
-    value: Dockerfile
+    value: sdk/python/feast/infra/feature_servers/multicloud/Dockerfile
   - name: path-context
-    value: sdk/python/feast/infra/feature_servers/multicloud 
+    value: .
   pipelineRef:
     resolver: git
     params:
