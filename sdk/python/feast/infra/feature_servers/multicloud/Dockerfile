@@ -28,6 +28,7 @@ RUN set -eux; \
 
 # On ppc64le: feast[minimal] extras minus milvus (no faiss-cpu wheel).
 # Keep the version pin from requirements.txt; only swap extras.
+# SQLAlchemy's pure-Python modules require cython.const when Cython is installed.
 # On other arches: standard requirements.txt install.
 RUN set -eux; \
     if [ "$(uname -m)" = "ppc64le" ]; then \
@@ -38,7 +39,8 @@ RUN set -eux; \
         uv pip install --index-strategy unsafe-best-match \
             --extra-index-url https://wheels.developerfirst.ibm.com/ppc64le/linux \
             -c /power-constraints.txt \
-            -r /tmp/requirements-ppc64le.txt; \
+            -r /tmp/requirements-ppc64le.txt \
+            "Cython>=3.1"; \
     else \
         uv pip install -r requirements.txt; \
     fi
