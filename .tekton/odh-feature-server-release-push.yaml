@@ -27,7 +27,7 @@ spec:
   - name: dockerfile
     value: sdk/python/feast/infra/feature_servers/multicloud/Dockerfile
   - name: path-context
-    value: . 
+    value: .
   pipelineRef:
     resolver: git
     params:
