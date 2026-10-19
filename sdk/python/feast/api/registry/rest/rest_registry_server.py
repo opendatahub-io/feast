@@ -2,13 +2,14 @@ import json
 import logging
 import re
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from feast import FeatureStore
 from feast.api.registry.rest import register_all_routes
+from feast.api.registry.rest.data_catalog_integration import add_data_catalog_routes
 from feast.errors import (
     FeastObjectNotFoundException,
     FeastPermissionError,
@@ -63,15 +64,10 @@ class RestRegistryServer:
             root_path="/api/v1",
             docs_url="/",
             redoc_url="/docs",
-            default_status_code=status.HTTP_200_OK,
-            default_headers={
-                "X-Content-Type-Options": "nosniff",
-                "X-XSS-Protection": "1; mode=block",
-                "X-Frame-Options": "DENY",
-            },
         )
         self._add_exception_handlers()
         self._add_logging_middleware()
+        self._add_data_registry_observability()
         self._add_openapi_security()
         self._init_auth()
         self._register_routes()
@@ -284,8 +280,41 @@ class RestRegistryServer:
             log_patterns=self.log_patterns,
         )
 
+    def _add_data_registry_observability(self) -> None:
+        """Start the Prometheus metrics HTTP server in Data Registry mode.
+
+        When ``DATA_REGISTRY_ENABLED=true``, starts ``/metrics`` on port 8000 so
+        the in-cluster ServiceMonitor can scrape directly (bypasses
+        kube-rbac-proxy). Exports standard ``feast_feature_server_*`` metrics.
+
+        No-op when ``DATA_REGISTRY_ENABLED`` is not ``"true"``.
+        """
+        import os
+
+        if os.environ.get("DATA_REGISTRY_ENABLED", "").lower() != "true":
+            return
+
+        from feast.metrics import start_metrics_server
+
+        try:
+            start_metrics_server(
+                store=self.store,
+                port=8000,
+                start_resource_monitoring=True,
+                start_freshness_monitoring=False,
+            )
+            logger.info(
+                "Data Registry mode: Prometheus metrics server started on :8000"
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "Data Registry mode: failed to start Prometheus metrics server: %s",
+                exc,
+            )
+
     def _register_routes(self):
         register_all_routes(self.app, self.grpc_handler, self)
+        add_data_catalog_routes(self.app, self.registry)
 
     def _add_openapi_security(self):
         if self.app.openapi_schema:

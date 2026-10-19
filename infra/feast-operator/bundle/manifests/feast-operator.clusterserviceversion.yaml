@@ -222,6 +222,7 @@ spec:
           resources:
           - namespaces
           verbs:
+          - create
           - get
           - list
           - update
@@ -330,6 +331,28 @@ spec:
           - update
           - watch
         - apiGroups:
+          - dataregistry.opendatahub.io
+          resources:
+          - connections
+          verbs:
+          - use
+        - apiGroups:
+          - dataregistry.opendatahub.io
+          resources:
+          - generic-tables
+          - namespaces
+          - registries
+          - tables
+          - volumes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - feast.dev
           resources:
           - featurestores
@@ -398,12 +421,15 @@ spec:
           - rbac.authorization.k8s.io
           resources:
           - clusterrolebindings
+          - rolebindings
+          - roles
           verbs:
           - create
           - delete
           - get
           - list
           - update
+          - watch
         - apiGroups:
           - rbac.authorization.k8s.io
           resources:
@@ -415,6 +441,9 @@ spec:
         - apiGroups:
           - rbac.authorization.k8s.io
           resourceNames:
+          - feast-data-registry-admin
+          - feast-data-registry-editor
+          - feast-data-registry-viewer
           - feast-discover-namespaces
           - feast-oidc-token-review
           - feast-token-review-cluster-role
@@ -423,18 +452,6 @@ spec:
           verbs:
           - delete
           - update
-        - apiGroups:
-          - rbac.authorization.k8s.io
-          resources:
-          - rolebindings
-          - roles
-          verbs:
-          - create
-          - delete
-          - get
-          - list
-          - update
-          - watch
         - apiGroups:
           - route.openshift.io
           resources:
@@ -447,6 +464,13 @@ spec:
           - update
           - watch
         - apiGroups:
+          - route.openshift.io
+          resources:
+          - routes/custom-host
+          verbs:
+          - create
+          - update
+        - apiGroups:
           - sparkoperator.k8s.io
           resources:
           - sparkapplications
@@ -454,6 +478,14 @@ spec:
           - create
           - delete
           - get
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resourceNames:
+          - system:auth-delegator
+          resources:
+          - clusterroles
+          verbs:
+          - bind
         - apiGroups:
           - authentication.k8s.io
           resources:
@@ -500,6 +532,12 @@ spec:
                   value: quay.io/feastdev/feature-server:0.67.0
                 - name: RELATED_IMAGE_CRON_JOB
                   value: registry.k8s.io/kubectl:v1.35.9
+                - name: RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE
+                  value: quay.io/opendatahub/odh-kube-rbac-proxy@sha256:acd9de62b8339dbacd39635317e5e596e09a70ae26ac9eccdde4a4124388740f
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
                 - name: GOMEMLIMIT
                   value: 230MiB
                 - name: OIDC_ISSUER_URL
@@ -597,4 +635,6 @@ spec:
     name: feature-server
   - image: registry.k8s.io/kubectl:v1.35.9
     name: cron-job
+  - image: quay.io/opendatahub/odh-kube-rbac-proxy@sha256:acd9de62b8339dbacd39635317e5e596e09a70ae26ac9eccdde4a4124388740f
+    name: odh-kube-rbac-proxy-image
   version: 0.67.0
