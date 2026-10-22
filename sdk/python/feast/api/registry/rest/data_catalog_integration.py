@@ -21,6 +21,7 @@ RestRegistryServer / DATA_REGISTRY_ENABLED identifiers.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -46,6 +47,25 @@ def is_data_registry_enabled() -> bool:
         "true",
         "yes",
     )
+
+
+def sync_registry_project_protection(store: Any) -> None:
+    """Protect the right project before the REST registry server listens.
+
+    Data Registry mode tags only the internal ``data-registry`` project, through
+    ``ensure_catalog_project``. It does not run the FEAST_PROTECTED_PROJECT sync:
+    that sync tags ``store.project``, which is ``spec.feastProject``, and the
+    Python server does not read ``FEAST_PROJECT``.
+    """
+    if is_data_registry_enabled():
+        from feast.api.data_catalog.catalog_utils import ensure_catalog_project
+
+        ensure_catalog_project(store.registry)
+        return
+
+    from feast.registry_server import _sync_protected_project_tag
+
+    _sync_protected_project_tag(store)
 
 
 def add_data_catalog_routes(app: FastAPI, registry) -> None:

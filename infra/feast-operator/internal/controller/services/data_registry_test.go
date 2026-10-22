@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -228,6 +229,9 @@ var _ = Describe("Data Registry", func() {
 		Expect(envMap).To(HaveKeyWithValue(DataRegistrySARResourcesEnvVar, "namespaces,tables,volumes,generic-tables"))
 		// FEAST_PROJECT must be "data_registry" (Phase-1 storage model)
 		Expect(envMap).To(HaveKeyWithValue(FeastProjectEnvVar, DataRegistryProject))
+		// spec.feastProject is not the catalog project. Protecting it here would
+		// hide that name from GET /projects. The catalog project is tagged in Python.
+		Expect(envMap).NotTo(HaveKey("FEAST_PROTECTED_PROJECT"))
 
 		// HTTP GET /healthz probe: bypasses SAR middleware so kubelet can probe
 		// without a bearer token. /projects cannot be used because data_registry_sar.py
@@ -924,6 +928,67 @@ var _ = Describe("Data Registry", func() {
 		drDeploy := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, drKey, drDeploy)).To(Succeed())
 		Expect(drDeploy.Spec.Template.Spec.Containers).To(HaveLen(2))
+	})
+
+	It("removes the namespace registry entry when entering data-registry mode", func() {
+		isOpenShift = false
+		opSystemNs := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: DefaultKubernetesNamespace},
+		}
+		err := k8sClient.Create(ctx, opSystemNs)
+		if err != nil && !apierrors.IsAlreadyExists(err) {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		clientConfigName := GetFeastName(featureStore) + "-" + string(ClientFeastType)
+		featureStore.Status.ClientConfigMap = clientConfigName
+		registryData := NamespaceRegistryData{
+			Namespaces: map[string][]string{
+				DefaultNs: {clientConfigName},
+			},
+		}
+		dataBytes, err := json.Marshal(registryData)
+		Expect(err).NotTo(HaveOccurred())
+		registryCmKey := types.NamespacedName{
+			Name:      NamespaceRegistryConfigMapName,
+			Namespace: DefaultKubernetesNamespace,
+		}
+		registryCm := &corev1.ConfigMap{}
+		err = k8sClient.Get(ctx, registryCmKey, registryCm)
+		if apierrors.IsNotFound(err) {
+			registryCm = &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      registryCmKey.Name,
+					Namespace: registryCmKey.Namespace,
+				},
+				Data: map[string]string{
+					NamespaceRegistryDataKey: string(dataBytes),
+				},
+			}
+			Expect(k8sClient.Create(ctx, registryCm)).To(Succeed())
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+			if registryCm.Data == nil {
+				registryCm.Data = map[string]string{}
+			}
+			registryCm.Data[NamespaceRegistryDataKey] = string(dataBytes)
+			Expect(k8sClient.Update(ctx, registryCm)).To(Succeed())
+		}
+
+		setAnnotation("true")
+		sa := feast.initFeastSA()
+		sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+		_ = k8sClient.Create(ctx, sa)
+
+		Expect(feast.deployDataRegistryMode()).To(Succeed())
+
+		updated := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name:      NamespaceRegistryConfigMapName,
+			Namespace: DefaultKubernetesNamespace,
+		}, updated)).To(Succeed())
+		var after NamespaceRegistryData
+		Expect(json.Unmarshal([]byte(updated.Data[NamespaceRegistryDataKey]), &after)).To(Succeed())
+		Expect(after.Namespaces).NotTo(HaveKey(DefaultNs))
 	})
 
 	It("rejects data-registry CR when namespace lacks the label", func() {
