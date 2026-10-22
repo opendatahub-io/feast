@@ -399,6 +399,21 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 	}
 
 	if cr.Namespace == caps.DataRegistryNamespace && !services.IsDataRegistryCREnabled(cr) {
+		feast := services.FeastServices{Handler: feasthandler.FeastHandler{
+			Client: r.Client, Context: ctx, FeatureStore: cr, Scheme: r.Scheme,
+		}}
+		// Cleanup may update the CR to drop its finalizer. That update
+		// response replaces .status, so the rejection is recorded after it.
+		drCleanupErr := feast.CleanupDataRegistry()
+		var stdCleanupErr error
+		var registryErr error
+		if drCleanupErr == nil {
+			stdCleanupErr = feast.CleanupStandardResources()
+		}
+		if drCleanupErr == nil && stdCleanupErr == nil {
+			registryErr = feast.RemoveFromNamespaceRegistry()
+		}
+
 		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
 		drCond.Reason = feastdevv1.DataRegistryAnnotationRequiredReason
 		drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryAnnotationRequiredMessage
@@ -411,23 +426,41 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		}
 		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 		cr.Status.Phase = feastdevv1.FailedPhase
-		feast := services.FeastServices{Handler: feasthandler.FeastHandler{
-			Client: r.Client, Context: ctx, FeatureStore: cr, Scheme: r.Scheme,
-		}}
-		if cleanupErr := feast.CleanupDataRegistry(); cleanupErr != nil {
-			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+
+		if drCleanupErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, drCleanupErr
 		}
-		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
-			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+		if stdCleanupErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, stdCleanupErr
 		}
-		if cleanupErr := feast.RemoveFromNamespaceRegistry(); cleanupErr != nil {
-			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+		if registryErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, registryErr
 		}
 		return ctrl.Result{}, nil
 	}
 
 	if services.IsDataRegistryCREnabled(cr) {
 		if !caps.DataRegistryEnabled {
+			feast := services.FeastServices{
+				Handler: feasthandler.FeastHandler{
+					Client:       r.Client,
+					Context:      ctx,
+					FeatureStore: cr,
+					Scheme:       r.Scheme,
+				},
+			}
+			// Delete the workload before writing status. Dropping the
+			// data-registry finalizer updates the CR, and that update
+			// response replaces .status with the persisted status.
+			cleanupErr := feast.CleanupDataRegistry()
+			var registryErr error
+			if cleanupErr == nil {
+				// Older operators registered this CR for feature-store
+				// discovery. The Service is gone; the discovery entry has to
+				// go with it or workbenches keep a dead endpoint.
+				registryErr = feast.RemoveFromNamespaceRegistry()
+			}
+
 			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
 			drCond.Reason = feastdevv1.DataRegistryDisabledReason
 			drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryDisabledMessage
@@ -442,19 +475,13 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			cr.Status.Phase = feastdevv1.FailedPhase
 			logger.Info(condition.Message)
 
-			// Clean up data-registry owned resources so they don't remain
-			// active while the CR reports the capability as disabled.
-			feast := services.FeastServices{
-				Handler: feasthandler.FeastHandler{
-					Client:       r.Client,
-					Context:      ctx,
-					FeatureStore: cr,
-					Scheme:       r.Scheme,
-				},
-			}
-			if cleanupErr := feast.CleanupDataRegistry(); cleanupErr != nil {
+			if cleanupErr != nil {
 				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
 				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+			}
+			if registryErr != nil {
+				logger.Error(registryErr, "Failed to remove data registry from namespace registry after capability disabled")
+				return ctrl.Result{RequeueAfter: RequeueDelayError}, registryErr
 			}
 
 			return ctrl.Result{}, nil
