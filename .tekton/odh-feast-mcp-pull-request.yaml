@@ -37,7 +37,12 @@ spec:
   - name: build-args
     value:
     - BASE_IMAGE=quay.io/opendatahub/feature-server
-    - BASE_TAG=odh-stable
+    - BASE_TAG=odh-master
+  - name: build-platforms
+    value:
+    - linux/x86_64
+    - linux/arm64
+    - linux/ppc64le
   pipelineRef:
     resolver: git
     params:
