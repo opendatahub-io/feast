@@ -29,15 +29,18 @@ spec:
     value: sdk/python/feast/infra/feature_servers/multicloud/Dockerfile
   - name: path-context
     value: .
-
   - name: additional-tags
     value: 
     - 'odh-pr-{{revision}}'
-    - 'odh-pr-{{pull_request_number}}'
   - name: pipeline-type
     value: pull-request
   - name: enable-group-testing
     value: "true"
+  - name: build-platforms
+    value:
+    - linux/x86_64
+    - linux/arm64
+    - linux/ppc64le
   pipelineRef:
     resolver: git
     params:
