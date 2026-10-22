@@ -168,6 +168,165 @@ def test_data_registry_startup_protects_catalog_project_only(
         sqlite_registry.get_project("catalog_mode", allow_cache=False)
 
 
+@pytest.mark.parametrize("protected_env", ["true", None])
+def test_data_registry_startup_clears_stale_feast_project_protection(
+    sqlite_registry, monkeypatch, protected_env
+):
+    """Upgrade and protected-FeatureStore transition.
+
+    GET /projects hides any project whose feast.dev/protected-project tag is
+    "true". Data Registry mode must drop that tag from spec.feastProject even
+    when FEAST_PROTECTED_PROJECT is still set, and must keep the catalog
+    project protected.
+    """
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    if protected_env is None:
+        monkeypatch.delenv("FEAST_PROTECTED_PROJECT", raising=False)
+    else:
+        monkeypatch.setenv("FEAST_PROTECTED_PROJECT", protected_env)
+    meta_key = ns_meta_key("team", "billing")
+    sqlite_registry.apply_project(
+        Project(
+            name=CATALOG_PROJECT,
+            description="RHOAI Data Registry",
+            tags={meta_key: "{}"},
+        )
+    )
+    sqlite_registry.apply_project(
+        Project(
+            name="credit_scoring",
+            description="user project",
+            owner="platform",
+            tags={PROTECTED_PROJECT_TAG: "true", "owner": "team"},
+        )
+    )
+
+    class _Store:
+        project = "credit_scoring"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    sync_registry_project_protection(_Store())
+
+    feast_project = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+    assert PROTECTED_PROJECT_TAG not in feast_project.tags
+    assert feast_project.tags == {"owner": "team"}
+    assert feast_project.description == "user project"
+    assert feast_project.owner == "platform"
+    catalog = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert catalog.tags[PROTECTED_PROJECT_TAG] == "true"
+    assert catalog.tags[meta_key] == "{}"
+    visible = [
+        project.name
+        for project in (
+            sqlite_registry.get_project("credit_scoring", allow_cache=False),
+            catalog,
+        )
+        if project.tags.get(PROTECTED_PROJECT_TAG) != "true"
+    ]
+    assert visible == ["credit_scoring"]
+
+
+def test_data_registry_startup_clears_protection_without_compare_and_swap(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
+    sqlite_registry.apply_project(
+        Project(
+            name="credit_scoring",
+            description="user project",
+            tags={PROTECTED_PROJECT_TAG: "true", "owner": "team"},
+        )
+    )
+
+    class _Registry:
+        def get_project(self, name, allow_cache=False):
+            return sqlite_registry.get_project(name, allow_cache=allow_cache)
+
+        def apply_project(self, project, commit=True):
+            return sqlite_registry.apply_project(project, commit=commit)
+
+    class _Store:
+        project = "credit_scoring"
+        registry = _Registry()
+
+    sync_registry_project_protection(_Store())
+    stored = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+    assert PROTECTED_PROJECT_TAG not in stored.tags
+    assert stored.tags == {"owner": "team"}
+    assert stored.description == "user project"
+    catalog = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert catalog.tags[PROTECTED_PROJECT_TAG] == "true"
+
+
+def test_data_registry_startup_does_not_unprotect_catalog_project(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
+    meta_key = ns_meta_key("team", "billing")
+    sqlite_registry.apply_project(
+        Project(
+            name=CATALOG_PROJECT,
+            description="RHOAI Data Registry",
+            tags={PROTECTED_PROJECT_TAG: "true", meta_key: "{}"},
+        )
+    )
+
+    class _Store:
+        project = CATALOG_PROJECT
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    stored = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert stored.tags[PROTECTED_PROJECT_TAG] == "true"
+    assert stored.tags[meta_key] == "{}"
+    assert stored.description == "RHOAI Data Registry"
+
+
+def test_data_registry_startup_leaves_unprotected_feast_project_unchanged(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
+    sqlite_registry.apply_project(
+        Project(
+            name="credit_scoring",
+            description="kept",
+            tags={"owner": "team"},
+        )
+    )
+    before = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+
+    class _Store:
+        project = "credit_scoring"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    after = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+    assert after.tags == {"owner": "team"}
+    assert after.description == "kept"
+    assert after.last_updated_timestamp == before.last_updated_timestamp
+
+
+def test_registry_startup_still_protects_feast_project_outside_data_registry(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.delenv("DATA_REGISTRY_ENABLED", raising=False)
+    monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
+
+    class _Store:
+        project = "credit_scoring"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    stored = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+    assert stored.tags[PROTECTED_PROJECT_TAG] == "true"
+    with pytest.raises(ProjectObjectNotFoundException):
+        sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+
+
 def test_registry_startup_skips_catalog_project_when_disabled(
     sqlite_registry, monkeypatch
 ):
