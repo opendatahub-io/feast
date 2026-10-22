@@ -36,7 +36,7 @@ RUN set -eux; \
 RUN set -eux; \
     if [ "$(uname -m)" = "ppc64le" ]; then \
         test -s /power-constraints.txt; \
-        sed -E 's/^feast\[minimal\]/feast[aws,gcp,snowflake,redis,go,mysql,postgres-c,opentelemetry,grpcio,k8s,duckdb,mcp]/' \
+        sed -E 's/^feast\[minimal\]/feast[aws,gcp,snowflake,redis,go,mysql,postgres-c,opentelemetry,grpcio,k8s,duckdb,mcp,mcp-server]/' \
             requirements.txt > /tmp/requirements-ppc64le.txt; \
         grep -q '^feast\[aws,' /tmp/requirements-ppc64le.txt; \
         uv pip install --index-strategy unsafe-best-match \
