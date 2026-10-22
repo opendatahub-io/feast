@@ -222,6 +222,12 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 		}
 	}
 
+	// Drop this CR from feature-store discovery before standard resources are
+	// removed. A later deploy error must not leave a torn-down store listed.
+	if err := feast.RemoveFromNamespaceRegistry(); err != nil {
+		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
+	}
+
 	// Clean up standard-mode resources that are not needed in data-registry mode
 	// to avoid orphaned Deployments, Services, PVCs, HPAs, etc.
 	if err := feast.Handler.DeleteOwnedFeastObj(feast.initFeastDeploy()); err != nil {
@@ -240,9 +246,6 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	if err := feast.deployClient(); err != nil {
-		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
-	}
-	if err := feast.deployNamespaceRegistry(); err != nil {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
 	return feast.setFeastServiceCondition(nil, DataRegistryFeastType)
