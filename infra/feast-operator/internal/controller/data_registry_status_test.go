@@ -273,3 +273,98 @@ func TestDataRegistryCapabilityDisableRemovesDiscoveryEntry(t *testing.T) {
 		t.Fatalf("unrelated discovery entry was removed: %#v", after.Namespaces)
 	}
 }
+
+func TestDataRegistryWrongNameRejected(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-ns")
+	t.Setenv("FEAST_PLATFORM_CAPABILITIES_REQUIRED", "true")
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := feastdevv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	const crName = "primary-catalog"
+	crNamespace := capabilities.DefaultDataRegistryNamespace
+	workloadName := "feast-" + crName + "-" + string(services.DataRegistryFeastType)
+	controller := true
+	cr := &feastdevv1.FeatureStore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      crName,
+			Namespace: crNamespace,
+			UID:       types.UID("wrong-name-uid"),
+			Annotations: map[string]string{
+				services.DataRegistryAnnotation: "true",
+			},
+			Finalizers: []string{services.DataRegistryFinalizer},
+		},
+		Spec: feastdevv1.FeatureStoreSpec{FeastProject: "customer_project"},
+	}
+	ownerRef := metav1.OwnerReference{
+		APIVersion: feastdevv1.GroupVersion.String(),
+		Kind:       "FeatureStore",
+		Name:       cr.Name,
+		UID:        cr.UID,
+		Controller: &controller,
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            workloadName,
+			Namespace:       crNamespace,
+			OwnerReferences: []metav1.OwnerReference{ownerRef},
+		},
+	}
+	capsCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      capabilities.ConfigMapName,
+			Namespace: "operator-ns",
+		},
+		Data: map[string]string{
+			capabilities.KeyFeatureStoreEnabled:   "true",
+			capabilities.KeyDataRegistryEnabled:   "true",
+			capabilities.KeyDataRegistryNamespace: crNamespace,
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(cr).
+		WithObjects(cr, deploy, capsCM).
+		Build()
+	r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := &feastdevv1.FeatureStore{}
+	if err := cl.Get(ctx, key, updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Spec.FeastProject != "customer_project" {
+		t.Fatalf("spec.feastProject was mutated: %q", updated.Spec.FeastProject)
+	}
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, feastdevv1.ReadyType)
+	if ready == nil || ready.Status != metav1.ConditionFalse ||
+		ready.Reason != feastdevv1.DataRegistryNameRejectedReason {
+		t.Fatalf("unexpected Ready condition: %#v", ready)
+	}
+	dr := apimeta.FindStatusCondition(updated.Status.Conditions, feastdevv1.DataRegistryReadyType)
+	if dr == nil || dr.Status != metav1.ConditionFalse ||
+		dr.Reason != feastdevv1.DataRegistryNameRejectedReason {
+		t.Fatalf("unexpected DataRegistry condition: %#v", dr)
+	}
+	if updated.Status.Phase != feastdevv1.FailedPhase {
+		t.Fatalf("unexpected phase: %s", updated.Status.Phase)
+	}
+	for _, finalizer := range updated.Finalizers {
+		if finalizer == services.DataRegistryFinalizer {
+			t.Fatal("data-registry finalizer still present after name rejection")
+		}
+	}
+	err := cl.Get(ctx, types.NamespacedName{Name: workloadName, Namespace: crNamespace}, &appsv1.Deployment{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("data-registry Deployment still present: %v", err)
+	}
+}

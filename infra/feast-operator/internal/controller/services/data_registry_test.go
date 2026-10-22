@@ -163,6 +163,35 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.isDataRegistryEnabled()).To(BeTrue())
 	})
 
+	It("ignores spec.feastProject and pins the catalog project to data_registry", func() {
+		setAnnotation("true")
+		latest := &feastdevv1.FeatureStore{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, latest)).To(Succeed())
+		latest.Spec.FeastProject = "customer_project"
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		feast.refreshFeatureStore(ctx, typeNamespacedName)
+
+		Expect(feast.ApplyDefaults()).To(Succeed())
+		Expect(feast.Handler.FeatureStore.Spec.FeastProject).To(Equal("customer_project"))
+		Expect(feast.Handler.FeatureStore.Status.Applied.FeastProject).To(Equal(DataRegistryProject))
+
+		deploy := feast.initDataRegistryDeploy()
+		Expect(feast.setDataRegistryDeployment(deploy)).To(Succeed())
+		var yamlB64 string
+		for _, env := range deploy.Spec.Template.Spec.Containers[0].Env {
+			if env.Name == FeatureStoreYamlEnvVar {
+				yamlB64 = env.Value
+			}
+			if env.Name == FeastProjectEnvVar {
+				Expect(env.Value).To(Equal(DataRegistryProject))
+			}
+		}
+		fsYaml, err := base64.StdEncoding.DecodeString(yamlB64)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(fsYaml)).To(ContainSubstring("project: " + DataRegistryProject))
+		Expect(string(fsYaml)).NotTo(ContainSubstring("customer_project"))
+	})
+
 	It("produces a two-container Deployment with --ignore-paths (no /search) and FEAST_PROJECT=data_registry", func() {
 		setAnnotation("true")
 
@@ -1039,7 +1068,8 @@ var _ = Describe("Data Registry", func() {
 		Expect(cond).NotTo(BeNil(), "DataRegistryReady condition should be set")
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		Expect(cond.Reason).To(Equal(feastdevv1.ReadyReason))
-		Expect(cond.Message).To(Equal(feastdevv1.DataRegistryReadyMessage))
+		Expect(cond.Message).To(Equal(feastdevv1.DataRegistryReadyStatusMessage))
+		Expect(cond.Message).To(ContainSubstring(feastdevv1.DataRegistryFeastProjectIgnoredMessage))
 	})
 
 	It("sets DataRegistryReady=False condition when namespace validation fails", func() {
