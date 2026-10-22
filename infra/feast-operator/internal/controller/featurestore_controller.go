@@ -486,6 +486,51 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 
 			return ctrl.Result{}, nil
 		}
+		// singleton name: data-registry mode is
+		// only the FeatureStore named data-registry. Reject any other name
+		// before the namespace check so a misnamed CR is not admitted.
+		if cr.Name != services.DataRegistryCRName {
+			feast := services.FeastServices{
+				Handler: feasthandler.FeastHandler{
+					Client:       r.Client,
+					Context:      ctx,
+					FeatureStore: cr,
+					Scheme:       r.Scheme,
+				},
+			}
+			cleanupErr := feast.CleanupDataRegistry()
+			var registryErr error
+			if cleanupErr == nil {
+				registryErr = feast.RemoveFromNamespaceRegistry()
+			}
+
+			rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNameRejectedMessage,
+				services.DataRegistryCRName, cr.Name)
+			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+			drCond.Reason = feastdevv1.DataRegistryNameRejectedReason
+			drCond.Message = services.ErrorMessagePrefix + rejMsg
+			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+			condition = metav1.Condition{
+				Type:    feastdevv1.ReadyType,
+				Status:  metav1.ConditionFalse,
+				Reason:  feastdevv1.DataRegistryNameRejectedReason,
+				Message: rejMsg,
+			}
+			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+			cr.Status.Phase = feastdevv1.FailedPhase
+			logger.Info("Data Registry name rejected",
+				"cr", cr.Name, "requiredName", services.DataRegistryCRName)
+
+			if cleanupErr != nil {
+				logger.Error(cleanupErr, "Failed to cleanup data registry resources after name rejection")
+				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+			}
+			if registryErr != nil {
+				logger.Error(registryErr, "Failed to remove data registry from namespace registry after name rejection")
+				return ctrl.Result{RequeueAfter: RequeueDelayError}, registryErr
+			}
+			return ctrl.Result{}, nil
+		}
 		// Enforce exact namespace match. The data-registry namespace is always
 		// rhoai-data-registry (custom namespace selection is deferred). The
 		// check runs regardless of whether the ConfigMap is present because
@@ -597,6 +642,11 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		}
 	}
 
+	if services.IsDataRegistryCREnabled(cr) &&
+		condition.Type == feastdevv1.ReadyType &&
+		condition.Status == metav1.ConditionTrue {
+		condition.Message = feastdevv1.DataRegistryReadyStatusMessage
+	}
 	logger.Info(condition.Message)
 	apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 	if apimeta.IsStatusConditionTrue(cr.Status.Conditions, feastdevv1.ReadyType) {

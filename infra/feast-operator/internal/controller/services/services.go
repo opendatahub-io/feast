@@ -45,6 +45,12 @@ import (
 // Apply defaults and set service hostnames in FeatureStore status
 func (feast *FeastServices) ApplyDefaults() error {
 	ApplyDefaultsToStatus(feast.Handler.FeatureStore)
+	// Data-registry mode has a single storage project. spec.feastProject is
+	// left unchanged so the user can see what they wrote; status and the
+	// generated feature_store.yaml use DataRegistryProject.
+	if feast.isDataRegistryEnabled() {
+		feast.Handler.FeatureStore.Status.Applied.FeastProject = DataRegistryProject
+	}
 	feast.applyMlflowDefaults()
 	if err := feast.setTlsDefaults(); err != nil {
 		return err
@@ -1661,7 +1667,11 @@ func (feast *FeastServices) setFeastServiceCondition(err error, feastType FeastS
 		logger.Error(err, "Error deploying the FeatureStore "+string(ClientFeastType)+" service")
 		return err
 	}
-	apimeta.SetStatusCondition(&feast.Handler.FeatureStore.Status.Conditions, conditionMap[metav1.ConditionTrue])
+	cond := conditionMap[metav1.ConditionTrue]
+	if feastType == DataRegistryFeastType {
+		cond.Message = feastdevv1.DataRegistryReadyStatusMessage
+	}
+	apimeta.SetStatusCondition(&feast.Handler.FeatureStore.Status.Conditions, cond)
 	return nil
 }
 
