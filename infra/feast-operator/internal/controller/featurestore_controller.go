@@ -368,6 +368,121 @@ func (r *FeatureStoreReconciler) countOtherFeatureStoresInCluster(ctx context.Co
 	return count
 }
 
+// guardDataRegistry applies data-registry admission. stop is true when
+// deployFeast must return without deploying.
+func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feastdevv1.FeatureStore, caps capabilities.Config) (ctrl.Result, bool, error) {
+	logger := log.FromContext(ctx)
+	feast := services.FeastServices{
+		Handler: feasthandler.FeastHandler{
+			Client:       r.Client,
+			Context:      ctx,
+			FeatureStore: cr,
+			Scheme:       r.Scheme,
+		},
+	}
+
+	if !caps.DataRegistryEnabled {
+		// Delete the workload before writing status. Dropping the
+		// data-registry finalizer updates the CR, and that update
+		// response replaces .status with the persisted status.
+		cleanupErr := feast.CleanupDataRegistry()
+		var registryErr error
+		if cleanupErr == nil {
+			// Older operators registered this CR for feature-store
+			// discovery. The Service is gone; the discovery entry has to
+			// go with it or workbenches keep a dead endpoint.
+			registryErr = feast.RemoveFromNamespaceRegistry()
+		}
+
+		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+		drCond.Reason = feastdevv1.DataRegistryDisabledReason
+		drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryDisabledMessage
+		apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+		condition := metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.DataRegistryDisabledReason,
+			Message: feastdevv1.DataRegistryDisabledMessage,
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		logger.Info(condition.Message)
+
+		if cleanupErr != nil {
+			logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, cleanupErr
+		}
+		if registryErr != nil {
+			logger.Error(registryErr, "Failed to remove data registry from namespace registry after capability disabled")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, registryErr
+		}
+		return ctrl.Result{}, true, nil
+	}
+
+	// Data-registry mode deploys only the FeatureStore named data-registry.
+	// Reject any other name before the namespace check.
+	if cr.Name != services.DataRegistryCRName {
+		cleanupErr := feast.CleanupDataRegistry()
+		var registryErr error
+		if cleanupErr == nil {
+			registryErr = feast.RemoveFromNamespaceRegistry()
+		}
+
+		rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNameRejectedMessage,
+			services.DataRegistryCRName, cr.Name)
+		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+		drCond.Reason = feastdevv1.DataRegistryNameRejectedReason
+		drCond.Message = services.ErrorMessagePrefix + rejMsg
+		apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+		condition := metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.DataRegistryNameRejectedReason,
+			Message: rejMsg,
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		logger.Info("Data Registry name rejected",
+			"cr", cr.Name, "requiredName", services.DataRegistryCRName)
+
+		if cleanupErr != nil {
+			logger.Error(cleanupErr, "Failed to cleanup data registry resources after name rejection")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, cleanupErr
+		}
+		if registryErr != nil {
+			logger.Error(registryErr, "Failed to remove data registry from namespace registry after name rejection")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, registryErr
+		}
+		return ctrl.Result{}, true, nil
+	}
+
+	// Enforce exact namespace match. The data-registry namespace is always
+	// rhoai-data-registry (custom namespace selection is deferred). The
+	// check runs regardless of whether the ConfigMap is present because
+	// caps.DataRegistryNamespace defaults to rhoai-data-registry.
+	if cr.Namespace != caps.DataRegistryNamespace {
+		rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNamespaceRejectedMessage,
+			caps.DataRegistryNamespace, cr.Namespace)
+		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
+		drCond.Reason = feastdevv1.DataRegistryNamespaceRejectedReason
+		drCond.Message = services.ErrorMessagePrefix + rejMsg
+		apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
+		condition := metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.DataRegistryNamespaceRejectedReason,
+			Message: rejMsg,
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		logger.Info("Data Registry namespace rejected",
+			"cr", cr.Name, "crNamespace", cr.Namespace,
+			"expectedNamespace", caps.DataRegistryNamespace)
+		return ctrl.Result{}, true, nil
+	}
+	return ctrl.Result{}, false, nil
+}
+
 func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1.FeatureStore) (result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
 	condition := metav1.Condition{
@@ -440,120 +555,8 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 	}
 
 	if services.IsDataRegistryCREnabled(cr) {
-		if !caps.DataRegistryEnabled {
-			feast := services.FeastServices{
-				Handler: feasthandler.FeastHandler{
-					Client:       r.Client,
-					Context:      ctx,
-					FeatureStore: cr,
-					Scheme:       r.Scheme,
-				},
-			}
-			// Delete the workload before writing status. Dropping the
-			// data-registry finalizer updates the CR, and that update
-			// response replaces .status with the persisted status.
-			cleanupErr := feast.CleanupDataRegistry()
-			var registryErr error
-			if cleanupErr == nil {
-				// Older operators registered this CR for feature-store
-				// discovery. The Service is gone; the discovery entry has to
-				// go with it or workbenches keep a dead endpoint.
-				registryErr = feast.RemoveFromNamespaceRegistry()
-			}
-
-			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
-			drCond.Reason = feastdevv1.DataRegistryDisabledReason
-			drCond.Message = services.ErrorMessagePrefix + feastdevv1.DataRegistryDisabledMessage
-			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
-			condition = metav1.Condition{
-				Type:    feastdevv1.ReadyType,
-				Status:  metav1.ConditionFalse,
-				Reason:  feastdevv1.DataRegistryDisabledReason,
-				Message: feastdevv1.DataRegistryDisabledMessage,
-			}
-			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
-			cr.Status.Phase = feastdevv1.FailedPhase
-			logger.Info(condition.Message)
-
-			if cleanupErr != nil {
-				logger.Error(cleanupErr, "Failed to cleanup data registry resources after capability disabled")
-				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
-			}
-			if registryErr != nil {
-				logger.Error(registryErr, "Failed to remove data registry from namespace registry after capability disabled")
-				return ctrl.Result{RequeueAfter: RequeueDelayError}, registryErr
-			}
-
-			return ctrl.Result{}, nil
-		}
-		// singleton name: data-registry mode is
-		// only the FeatureStore named data-registry. Reject any other name
-		// before the namespace check so a misnamed CR is not admitted.
-		if cr.Name != services.DataRegistryCRName {
-			feast := services.FeastServices{
-				Handler: feasthandler.FeastHandler{
-					Client:       r.Client,
-					Context:      ctx,
-					FeatureStore: cr,
-					Scheme:       r.Scheme,
-				},
-			}
-			cleanupErr := feast.CleanupDataRegistry()
-			var registryErr error
-			if cleanupErr == nil {
-				registryErr = feast.RemoveFromNamespaceRegistry()
-			}
-
-			rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNameRejectedMessage,
-				services.DataRegistryCRName, cr.Name)
-			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
-			drCond.Reason = feastdevv1.DataRegistryNameRejectedReason
-			drCond.Message = services.ErrorMessagePrefix + rejMsg
-			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
-			condition = metav1.Condition{
-				Type:    feastdevv1.ReadyType,
-				Status:  metav1.ConditionFalse,
-				Reason:  feastdevv1.DataRegistryNameRejectedReason,
-				Message: rejMsg,
-			}
-			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
-			cr.Status.Phase = feastdevv1.FailedPhase
-			logger.Info("Data Registry name rejected",
-				"cr", cr.Name, "requiredName", services.DataRegistryCRName)
-
-			if cleanupErr != nil {
-				logger.Error(cleanupErr, "Failed to cleanup data registry resources after name rejection")
-				return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
-			}
-			if registryErr != nil {
-				logger.Error(registryErr, "Failed to remove data registry from namespace registry after name rejection")
-				return ctrl.Result{RequeueAfter: RequeueDelayError}, registryErr
-			}
-			return ctrl.Result{}, nil
-		}
-		// Enforce exact namespace match. The data-registry namespace is always
-		// rhoai-data-registry (custom namespace selection is deferred). The
-		// check runs regardless of whether the ConfigMap is present because
-		// caps.DataRegistryNamespace defaults to rhoai-data-registry.
-		if cr.Namespace != caps.DataRegistryNamespace {
-			rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNamespaceRejectedMessage,
-				caps.DataRegistryNamespace, cr.Namespace)
-			drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
-			drCond.Reason = feastdevv1.DataRegistryNamespaceRejectedReason
-			drCond.Message = services.ErrorMessagePrefix + rejMsg
-			apimeta.SetStatusCondition(&cr.Status.Conditions, drCond)
-			condition = metav1.Condition{
-				Type:    feastdevv1.ReadyType,
-				Status:  metav1.ConditionFalse,
-				Reason:  feastdevv1.DataRegistryNamespaceRejectedReason,
-				Message: rejMsg,
-			}
-			apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
-			cr.Status.Phase = feastdevv1.FailedPhase
-			logger.Info("Data Registry namespace rejected",
-				"cr", cr.Name, "crNamespace", cr.Namespace,
-				"expectedNamespace", caps.DataRegistryNamespace)
-			return ctrl.Result{}, nil
+		if gateResult, stop, gateErr := r.guardDataRegistry(ctx, cr, caps); stop {
+			return gateResult, gateErr
 		}
 	} else if !caps.FeatureStoreEnabled {
 		condition = metav1.Condition{
