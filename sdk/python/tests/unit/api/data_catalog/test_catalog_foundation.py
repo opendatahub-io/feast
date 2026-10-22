@@ -32,9 +32,14 @@ from feast.api.data_catalog.catalog_utils import (
     delete_namespace_meta,
 )
 from feast.api.data_catalog.errors import NoSuchNamespaceException
+from feast.api.registry.rest.data_catalog_integration import (
+    sync_registry_project_protection,
+)
+from feast.constants import PROTECTED_PROJECT_TAG
 from feast.errors import ProjectObjectNotFoundException
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.sql import SqlRegistry, SqlRegistryConfig
+from feast.project import Project
 from feast.saved_dataset import SavedDataset
 
 
@@ -84,6 +89,98 @@ def test_ensure_catalog_project_creates_once(sqlite_registry):
     assert CATALOG_PROJECT in names
     assert "demo-user-1" not in names
     assert names.count(CATALOG_PROJECT) == 1
+
+
+def test_ensure_catalog_project_tags_protected(sqlite_registry):
+    project = ensure_catalog_project(sqlite_registry)
+    assert project.tags.get(PROTECTED_PROJECT_TAG) == "true"
+    stored = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert stored.tags.get(PROTECTED_PROJECT_TAG) == "true"
+
+
+def test_ensure_catalog_project_merges_protected_tag(sqlite_registry, monkeypatch):
+    """Existing namespace tags survive, and the write goes through mutate_project."""
+    meta_key = ns_meta_key("team", "billing")
+    sqlite_registry.apply_project(
+        Project(
+            name=CATALOG_PROJECT,
+            description="RHOAI Data Registry",
+            tags={meta_key: "{}"},
+        )
+    )
+    calls = {"apply": 0, "mutate": 0}
+    real_apply = sqlite_registry.apply_project
+    real_mutate = sqlite_registry.mutate_project
+
+    def apply_wrapper(*args, **kwargs):
+        calls["apply"] += 1
+        return real_apply(*args, **kwargs)
+
+    def mutate_wrapper(*args, **kwargs):
+        calls["mutate"] += 1
+        return real_mutate(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite_registry, "apply_project", apply_wrapper)
+    monkeypatch.setattr(sqlite_registry, "mutate_project", mutate_wrapper)
+
+    project = ensure_catalog_project(sqlite_registry)
+    assert calls["mutate"] == 1
+    assert calls["apply"] == 0
+    assert project.tags[meta_key] == "{}"
+    assert project.tags[PROTECTED_PROJECT_TAG] == "true"
+
+    stored = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    ts = stored.last_updated_timestamp
+    again = ensure_catalog_project(sqlite_registry)
+    assert again.tags[meta_key] == "{}"
+    assert again.tags[PROTECTED_PROJECT_TAG] == "true"
+    assert calls["mutate"] == 1
+    assert calls["apply"] == 0
+    reread = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert reread.last_updated_timestamp == ts
+    assert reread.tags[meta_key] == "{}"
+
+
+def test_data_registry_startup_protects_catalog_project_only(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    # This env would hide spec.feastProject if startup still ran that sync.
+    monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
+    meta_key = ns_meta_key("team", "billing")
+    sqlite_registry.apply_project(
+        Project(
+            name=CATALOG_PROJECT,
+            description="RHOAI Data Registry",
+            tags={meta_key: "{}"},
+        )
+    )
+
+    class _Store:
+        project = "catalog_mode"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    stored = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
+    assert stored.tags[PROTECTED_PROJECT_TAG] == "true"
+    assert stored.tags[meta_key] == "{}"
+    with pytest.raises(ProjectObjectNotFoundException):
+        sqlite_registry.get_project("catalog_mode", allow_cache=False)
+
+
+def test_registry_startup_skips_catalog_project_when_disabled(
+    sqlite_registry, monkeypatch
+):
+    monkeypatch.delenv("DATA_REGISTRY_ENABLED", raising=False)
+    monkeypatch.delenv("FEAST_PROTECTED_PROJECT", raising=False)
+
+    class _Store:
+        project = "catalog_mode"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    with pytest.raises(ProjectObjectNotFoundException):
+        sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
 
 
 def test_resolve_namespace_accepts_string_and_single_element_list():

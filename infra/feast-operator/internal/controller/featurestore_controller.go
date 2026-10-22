@@ -255,6 +255,12 @@ func (r *FeatureStoreReconciler) addToNamespaceRegistry(ctx context.Context, cr 
 			Scheme:       r.Scheme,
 		},
 	}
+	if services.IsDataRegistryCREnabled(cr) {
+		if err := feast.RemoveFromNamespaceRegistry(); err != nil {
+			logger.Error(err, "Failed to remove data registry from namespace registry")
+		}
+		return
+	}
 	if err := feast.AddToNamespaceRegistry(); err != nil {
 		logger.Error(err, "Failed to add feature store to namespace registry")
 	}
@@ -412,6 +418,9 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 		}
 		if cleanupErr := feast.CleanupStandardResources(); cleanupErr != nil {
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
+		}
+		if cleanupErr := feast.RemoveFromNamespaceRegistry(); cleanupErr != nil {
 			return ctrl.Result{RequeueAfter: RequeueDelayError}, cleanupErr
 		}
 		return ctrl.Result{}, nil
