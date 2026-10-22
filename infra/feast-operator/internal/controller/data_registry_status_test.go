@@ -345,6 +345,9 @@ func TestDataRegistryWrongNameRejected(t *testing.T) {
 	if updated.Spec.FeastProject != "customer_project" {
 		t.Fatalf("spec.feastProject was mutated: %q", updated.Spec.FeastProject)
 	}
+	if updated.Status.Applied.FeastProject != "customer_project" {
+		t.Fatalf("status.applied.feastProject = %q, want a CRD-valid project so the rejection status can be stored", updated.Status.Applied.FeastProject)
+	}
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, feastdevv1.ReadyType)
 	if ready == nil || ready.Status != metav1.ConditionFalse ||
 		ready.Reason != feastdevv1.DataRegistryNameRejectedReason {
