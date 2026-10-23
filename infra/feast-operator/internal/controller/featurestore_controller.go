@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -61,6 +62,22 @@ const (
 	RequeueDelayError       = 5 * time.Second
 	RequeuePeriodicInterval = 30 * time.Second
 )
+
+// feastProjectPattern is the CRD pattern on spec.feastProject and status.applied.feastProject.
+var feastProjectPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// ensureAppliedFeastProject keeps status.applied.feastProject valid so a status
+// update that reports a rejection is accepted by the API server.
+func ensureAppliedFeastProject(cr *feastdevv1.FeatureStore) {
+	if feastProjectPattern.MatchString(cr.Status.Applied.FeastProject) {
+		return
+	}
+	if feastProjectPattern.MatchString(cr.Spec.FeastProject) {
+		cr.Status.Applied.FeastProject = cr.Spec.FeastProject
+		return
+	}
+	cr.Status.Applied.FeastProject = services.DataRegistryProject
+}
 
 // FeatureStoreReconciler reconciles a FeatureStore object
 type FeatureStoreReconciler struct {
@@ -163,6 +180,12 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if recErr == nil && r.Metrics != nil {
 		r.Metrics.RecordFeatureStore(cr)
 	}
+	// status.applied is a FeatureStoreSpec, so feastProject must match the CRD
+	// pattern. Early returns (wrong data-registry name, missing annotation)
+	// never run ApplyDefaults, and dropping the finalizer clears status.
+	// An empty project makes the status update invalid, so the rejection
+	// condition never persists and the CR looks ignored.
+	ensureAppliedFeastProject(cr)
 	if cr.DeletionTimestamp == nil && !reflect.DeepEqual(currentStatus, cr.Status) {
 		if err = r.Client.Status().Update(ctx, cr); err != nil {
 			if apierrors.IsConflict(err) {
