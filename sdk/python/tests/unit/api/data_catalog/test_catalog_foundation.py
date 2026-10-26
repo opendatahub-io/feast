@@ -31,7 +31,10 @@ from feast.api.data_catalog.catalog_utils import (
     create_namespace_meta,
     delete_namespace_meta,
 )
-from feast.api.data_catalog.errors import NoSuchNamespaceException
+from feast.api.data_catalog.errors import (
+    NoSuchNamespaceException,
+    ServiceFailureException,
+)
 from feast.api.registry.rest.data_catalog_integration import (
     sync_registry_project_protection,
 )
@@ -227,9 +230,70 @@ def test_data_registry_startup_clears_stale_feast_project_protection(
     assert visible == ["credit_scoring"]
 
 
-def test_data_registry_startup_clears_protection_without_compare_and_swap(
+def test_data_registry_startup_keeps_tags_written_after_protection_read(
     sqlite_registry, monkeypatch
 ):
+    """A tag written after the guard read must survive the protection clear.
+
+    mutate_project re-reads the row. apply_project of the guard snapshot would
+    drop the tag added in between.
+    """
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    sqlite_registry.apply_project(
+        Project(
+            name="credit_scoring",
+            description="user project",
+            owner="platform",
+            tags={PROTECTED_PROJECT_TAG: "true", "owner": "team"},
+        )
+    )
+    real_get = sqlite_registry.get_project
+    injected = {"done": False}
+
+    def get_project(name, allow_cache=False):
+        project = real_get(name, allow_cache=allow_cache)
+        if name != "credit_scoring" or injected["done"]:
+            return project
+        injected["done"] = True
+        stale_tags = dict(project.tags)
+        current = real_get(name, allow_cache=False)
+        current.tags = {**current.tags, "fresh": "yes"}
+        sqlite_registry.apply_project(current, commit=True)
+        project.tags = stale_tags
+        return project
+
+    monkeypatch.setattr(sqlite_registry, "get_project", get_project)
+
+    class _Store:
+        project = "credit_scoring"
+        registry = sqlite_registry
+
+    sync_registry_project_protection(_Store())
+    assert injected["done"]
+    stored = real_get("credit_scoring", allow_cache=False)
+    assert PROTECTED_PROJECT_TAG not in stored.tags
+    assert stored.tags == {"owner": "team", "fresh": "yes"}
+    assert stored.description == "user project"
+    assert stored.owner == "platform"
+
+
+class _RegistryWithoutProjectMutation:
+    """Registry that can read and replace a project, but cannot merge a write."""
+
+    def __init__(self, registry):
+        self._registry = registry
+
+    def get_project(self, name, allow_cache=False):
+        return self._registry.get_project(name, allow_cache=allow_cache)
+
+    def apply_project(self, project, commit=True):
+        return self._registry.apply_project(project, commit=commit)
+
+
+def test_data_registry_startup_refuses_snapshot_clear_without_compare_and_swap(
+    sqlite_registry, monkeypatch
+):
+    """Do not apply the guard snapshot when concurrent tag writes cannot merge."""
     monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
     monkeypatch.setenv("FEAST_PROTECTED_PROJECT", "true")
     sqlite_registry.apply_project(
@@ -240,24 +304,41 @@ def test_data_registry_startup_clears_protection_without_compare_and_swap(
         )
     )
 
-    class _Registry:
-        def get_project(self, name, allow_cache=False):
-            return sqlite_registry.get_project(name, allow_cache=allow_cache)
-
-        def apply_project(self, project, commit=True):
-            return sqlite_registry.apply_project(project, commit=commit)
-
     class _Store:
         project = "credit_scoring"
-        registry = _Registry()
+        registry = _RegistryWithoutProjectMutation(sqlite_registry)
 
-    sync_registry_project_protection(_Store())
+    with pytest.raises(ServiceFailureException, match="atomic project mutation"):
+        sync_registry_project_protection(_Store())
+
     stored = sqlite_registry.get_project("credit_scoring", allow_cache=False)
-    assert PROTECTED_PROJECT_TAG not in stored.tags
-    assert stored.tags == {"owner": "team"}
+    assert stored.tags == {PROTECTED_PROJECT_TAG: "true", "owner": "team"}
     assert stored.description == "user project"
     catalog = sqlite_registry.get_project(CATALOG_PROJECT, allow_cache=False)
     assert catalog.tags[PROTECTED_PROJECT_TAG] == "true"
+
+
+def test_data_registry_startup_without_compare_and_swap_leaves_unprotected_project(
+    sqlite_registry, monkeypatch
+):
+    """Missing mutate_project is an error only when a stale tag must be cleared."""
+    monkeypatch.setenv("DATA_REGISTRY_ENABLED", "true")
+    sqlite_registry.apply_project(
+        Project(
+            name="credit_scoring",
+            description="kept",
+            tags={"owner": "team"},
+        )
+    )
+
+    class _Store:
+        project = "credit_scoring"
+        registry = _RegistryWithoutProjectMutation(sqlite_registry)
+
+    sync_registry_project_protection(_Store())
+    stored = sqlite_registry.get_project("credit_scoring", allow_cache=False)
+    assert stored.tags == {"owner": "team"}
+    assert stored.description == "kept"
 
 
 def test_data_registry_startup_does_not_unprotect_catalog_project(
