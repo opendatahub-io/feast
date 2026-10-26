@@ -83,8 +83,12 @@ def _clear_stale_feast_project_protection(store: Any) -> None:
 
     No-op when that project is missing, is the catalog project, or is not
     tagged protected. Other tags are kept. The catalog project is updated
-    separately with compare-and-swap and must not be rewritten here: a full
-    ``apply_project`` of its snapshot would drop concurrent ``_ns_meta_*`` tags.
+    separately with compare-and-swap and is not rewritten here.
+
+    The tag is removed with ``mutate_project``, which re-reads the row and
+    compare-and-swaps. A registry without that update fails startup.
+    ``apply_project`` of the project read above would replace tags written
+    after that read.
     """
     from feast.api.data_catalog.catalog_utils import CATALOG_PROJECT
     from feast.constants import PROTECTED_PROJECT_TAG
@@ -106,26 +110,26 @@ def _clear_stale_feast_project_protection(store: Any) -> None:
     if existing.tags.get(PROTECTED_PROJECT_TAG) != "true":
         return
 
-    # Read-modify-write so a concurrent tag update on this project is merged
-    # instead of replaced by the snapshot from the read above.
+    # Re-read inside compare-and-swap. The guard snapshot in ``existing`` is
+    # only used to decide whether a write is needed.
     def mutator(project: Any, _conn: Any) -> None:
         if project.tags.get(PROTECTED_PROJECT_TAG) == "true":
             del project.tags[PROTECTED_PROJECT_TAG]
 
-    mutate = getattr(store.registry, "mutate_project", None)
-    if callable(mutate):
-        from feast.api.data_catalog.errors import ServiceFailureException
-        from feast.errors import ConcurrentVersionConflict
+    from feast.api.data_catalog.errors import ServiceFailureException
+    from feast.errors import ConcurrentVersionConflict
 
-        try:
-            mutate(project_name, mutator, create_if_missing=False)
-        except ProjectObjectNotFoundException:
-            return
-        except ConcurrentVersionConflict as exc:
-            raise ServiceFailureException(str(exc)) from exc
-    else:
-        del existing.tags[PROTECTED_PROJECT_TAG]
-        store.registry.apply_project(existing, commit=True)
+    mutate = getattr(store.registry, "mutate_project", None)
+    if not callable(mutate):
+        raise ServiceFailureException(
+            "Registry does not support atomic project mutation required to clear stale protection"
+        )
+    try:
+        mutate(project_name, mutator, create_if_missing=False)
+    except ProjectObjectNotFoundException:
+        return
+    except ConcurrentVersionConflict as exc:
+        raise ServiceFailureException(str(exc)) from exc
     logger.info("Removed protected tag from project '%s'", project_name)
 
 

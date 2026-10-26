@@ -391,6 +391,22 @@ func (r *FeatureStoreReconciler) countOtherFeatureStoresInCluster(ctx context.Co
 	return count
 }
 
+// removeRejectedDataRegistryWorkload deletes the data-registry workload and
+// drops this FeatureStore from feature-store discovery. Discovery is removed
+// only after the workload is gone, so a failed delete is retried while the
+// entry is still present. Callers write status after this returns: removing
+// the finalizer updates the CR, and that response replaces .status.
+func removeRejectedDataRegistryWorkload(feast services.FeastServices) (cleanupErr, registryErr error) {
+	cleanupErr = feast.CleanupDataRegistry()
+	if cleanupErr != nil {
+		return cleanupErr, nil
+	}
+	// Older operators registered this CR for feature-store discovery. The
+	// Service is gone; the discovery entry has to go with it or workbenches
+	// keep a dead endpoint.
+	return nil, feast.RemoveFromNamespaceRegistry()
+}
+
 // guardDataRegistry applies data-registry admission. stop is true when
 // deployFeast must return without deploying.
 func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feastdevv1.FeatureStore, caps capabilities.Config) (ctrl.Result, bool, error) {
@@ -408,14 +424,7 @@ func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feas
 		// Delete the workload before writing status. Dropping the
 		// data-registry finalizer updates the CR, and that update
 		// response replaces .status with the persisted status.
-		cleanupErr := feast.CleanupDataRegistry()
-		var registryErr error
-		if cleanupErr == nil {
-			// Older operators registered this CR for feature-store
-			// discovery. The Service is gone; the discovery entry has to
-			// go with it or workbenches keep a dead endpoint.
-			registryErr = feast.RemoveFromNamespaceRegistry()
-		}
+		cleanupErr, registryErr := removeRejectedDataRegistryWorkload(feast)
 
 		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
 		drCond.Reason = feastdevv1.DataRegistryDisabledReason
@@ -445,11 +454,7 @@ func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feas
 	// Data-registry mode deploys only the FeatureStore named data-registry.
 	// Reject any other name before the namespace check.
 	if cr.Name != services.DataRegistryCRName {
-		cleanupErr := feast.CleanupDataRegistry()
-		var registryErr error
-		if cleanupErr == nil {
-			registryErr = feast.RemoveFromNamespaceRegistry()
-		}
+		cleanupErr, registryErr := removeRejectedDataRegistryWorkload(feast)
 
 		rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNameRejectedMessage,
 			services.DataRegistryCRName, cr.Name)
@@ -484,6 +489,11 @@ func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feas
 	// check runs regardless of whether the ConfigMap is present because
 	// caps.DataRegistryNamespace defaults to rhoai-data-registry.
 	if cr.Namespace != caps.DataRegistryNamespace {
+		// The expected namespace can change, and an older operator may already
+		// have deployed this CR. Leave neither the workload nor its discovery
+		// entry behind.
+		cleanupErr, registryErr := removeRejectedDataRegistryWorkload(feast)
+
 		rejMsg := fmt.Sprintf(feastdevv1.DataRegistryNamespaceRejectedMessage,
 			caps.DataRegistryNamespace, cr.Namespace)
 		drCond := services.FeastServiceConditions[services.DataRegistryFeastType][metav1.ConditionFalse]
@@ -501,6 +511,15 @@ func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feas
 		logger.Info("Data Registry namespace rejected",
 			"cr", cr.Name, "crNamespace", cr.Namespace,
 			"expectedNamespace", caps.DataRegistryNamespace)
+
+		if cleanupErr != nil {
+			logger.Error(cleanupErr, "Failed to cleanup data registry resources after namespace rejection")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, cleanupErr
+		}
+		if registryErr != nil {
+			logger.Error(registryErr, "Failed to remove data registry from namespace registry after namespace rejection")
+			return ctrl.Result{RequeueAfter: RequeueDelayError}, true, registryErr
+		}
 		return ctrl.Result{}, true, nil
 	}
 	return ctrl.Result{}, false, nil
