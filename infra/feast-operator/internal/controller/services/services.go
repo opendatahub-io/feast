@@ -257,9 +257,6 @@ func (feast *FeastServices) deployDataRegistryMode() error {
 	if err := feast.deployClient(); err != nil {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
-	if err := feast.deployNamespaceRegistry(); err != nil {
-		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
-	}
 	if err := feast.reconcileDataRegistryNetworkPolicies(); err != nil {
 		return feast.setFeastServiceCondition(err, DataRegistryFeastType)
 	}
