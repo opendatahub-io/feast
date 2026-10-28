@@ -35,6 +35,8 @@ import (
 const (
 	npSuffixSameNs     = "-allow-same-ns"
 	npSuffixDashboard  = "-allow-dashboard"
+	npSuffixIngress    = "-allow-ingress-controller"
+	npSuffixRemoteReg  = "-allow-remote-registry"
 	npSuffixMonitoring = "-allow-monitoring"
 	npSuffixDataReg    = "-allow-data-registry"
 	npSuffixEgress     = "-allow-egress"
@@ -44,6 +46,12 @@ const (
 	dashboardNamespaceLabel  = "platform.opendatahub.io/part-of"
 	dashboardNamespaceValue  = "workbenches"
 	dashboardPodLabel        = "app.opendatahub.io/dashboard"
+	ingressNamespaceLabel    = "kubernetes.io/metadata.name"
+	ingressNamespaceValue    = "ingress-nginx"
+	ingressPodNameLabel      = "app.kubernetes.io/name"
+	ingressPodNameValue      = "ingress-nginx"
+	ingressPodComponentLabel = "app.kubernetes.io/component"
+	ingressPodComponentValue = "controller"
 	monitoringNamespaceLabel = "network.openshift.io/policy-group"
 	monitoringNamespaceValue = "monitoring"
 )
@@ -61,7 +69,7 @@ func (feast *FeastServices) reconcileNetworkPolicies() error {
 
 	ports := feast.collectEnabledServicePorts()
 	if len(ports) == 0 {
-		return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixMonitoring)
+		return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring)
 	}
 
 	selectorLabels := feast.getSelectorLabels()
@@ -90,6 +98,36 @@ func (feast *FeastServices) reconcileNetworkPolicies() error {
 		if err := feast.deleteNetworkPolicies(npSuffixDashboard); err != nil {
 			return err
 		}
+	}
+
+	// The standard ingress-nginx controller forwards Registry REST requests
+	// from its own namespace, so allow only its controller pods on that port.
+	ingressPorts := feast.collectDashboardPorts()
+	if len(ingressPorts) > 0 {
+		if err := feast.applyNetworkPolicy(
+			GetFeastName(cr)+npSuffixIngress,
+			selectorLabels,
+			buildIngressControllerRules(ingressPorts),
+		); err != nil {
+			return err
+		}
+	} else if err := feast.deleteNetworkPolicies(npSuffixIngress); err != nil {
+		return err
+	}
+
+	// Remote FeatureStores reference the local Registry gRPC endpoint across
+	// namespaces. Limit that exception to Feast-managed pods and the Registry port.
+	remoteRegistryPorts := feast.collectRemoteRegistryPorts()
+	if len(remoteRegistryPorts) > 0 {
+		if err := feast.applyNetworkPolicy(
+			GetFeastName(cr)+npSuffixRemoteReg,
+			selectorLabels,
+			buildRemoteRegistryIngressRules(remoteRegistryPorts),
+		); err != nil {
+			return err
+		}
+	} else if err := feast.deleteNetworkPolicies(npSuffixRemoteReg); err != nil {
+		return err
 	}
 
 	// Monitoring cross-namespace → metrics port.
@@ -184,7 +222,7 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 	}
 
 	// Clean up standard-mode-only Dashboard policy.
-	if err := feast.deleteNetworkPolicies(npSuffixDashboard); err != nil {
+	if err := feast.deleteNetworkPolicies(npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg); err != nil {
 		return err
 	}
 
@@ -195,7 +233,7 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 // deleteAllNetworkPolicies removes all operand NetworkPolicies owned by
 // this FeatureStore.
 func (feast *FeastServices) deleteAllNetworkPolicies() error {
-	return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixMonitoring, npSuffixDataReg, npSuffixEgress, npSuffixCronJob)
+	return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring, npSuffixDataReg, npSuffixEgress, npSuffixCronJob)
 }
 
 // --- Port collection helpers ---
@@ -253,6 +291,15 @@ func (feast *FeastServices) collectDashboardPorts() []*npac.NetworkPolicyPortApp
 	return ports
 }
 
+func (feast *FeastServices) collectRemoteRegistryPorts() []*npac.NetworkPolicyPortApplyConfiguration {
+	if feast.isRegistryServer() && feast.isRegistryGrpcEnabled() {
+		return []*npac.NetworkPolicyPortApplyConfiguration{
+			npPort(getTargetPort(RegistryFeastType, feast.getRegistryServerTLS())),
+		}
+	}
+	return nil
+}
+
 func (feast *FeastServices) collectMetricsPorts() []*npac.NetworkPolicyPortApplyConfiguration {
 	var ports []*npac.NetworkPolicyPortApplyConfiguration
 	if feast.isMetricsEnabled(OnlineFeastType) {
@@ -291,6 +338,36 @@ func buildDashboardIngressRules(ports []*npac.NetworkPolicyPortApplyConfiguratio
 				WithPodSelector(metaac.LabelSelector().
 					WithMatchLabels(map[string]string{
 						dashboardPodLabel: "true",
+					}))).
+			WithPorts(ports...),
+	}
+}
+
+func buildIngressControllerRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
+	return []*npac.NetworkPolicyIngressRuleApplyConfiguration{
+		npac.NetworkPolicyIngressRule().
+			WithFrom(npac.NetworkPolicyPeer().
+				WithNamespaceSelector(metaac.LabelSelector().
+					WithMatchLabels(map[string]string{
+						ingressNamespaceLabel: ingressNamespaceValue,
+					})).
+				WithPodSelector(metaac.LabelSelector().
+					WithMatchLabels(map[string]string{
+						ingressPodNameLabel:      ingressPodNameValue,
+						ingressPodComponentLabel: ingressPodComponentValue,
+					}))).
+			WithPorts(ports...),
+	}
+}
+
+func buildRemoteRegistryIngressRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
+	return []*npac.NetworkPolicyIngressRuleApplyConfiguration{
+		npac.NetworkPolicyIngressRule().
+			WithFrom(npac.NetworkPolicyPeer().
+				WithNamespaceSelector(metaac.LabelSelector()).
+				WithPodSelector(metaac.LabelSelector().
+					WithMatchLabels(map[string]string{
+						ManagedByLabelKey: ManagedByLabelValue,
 					}))).
 			WithPorts(ports...),
 	}
