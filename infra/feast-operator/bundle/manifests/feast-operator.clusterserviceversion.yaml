@@ -399,6 +399,18 @@ spec:
           - patch
           - watch
         - apiGroups:
+          - networking.k8s.io
+          resources:
+          - networkpolicies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - policy
           resources:
           - poddisruptionbudgets
