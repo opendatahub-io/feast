@@ -407,6 +407,103 @@ func removeRejectedDataRegistryWorkload(feast services.FeastServices) (cleanupEr
 	return nil, feast.RemoveFromNamespaceRegistry()
 }
 
+// reconcileCapabilitiesConfigFinalizer manages this operator's finalizer on
+// the platform capabilities ConfigMap, implementing the deletion handshake
+// with feast-module-operator:
+//   - healthy ConfigMap: the finalizer is ensured (idempotent) so a later
+//     deletion cannot complete without this operator observing it;
+//   - Terminating ConfigMap with the capabilities still enabled (manual
+//     deletion, recreated by the module operator): the finalizer is released
+//     without any teardown so the recreation can proceed;
+//   - Terminating ConfigMap with the capabilities disabled (module operator
+//     uninstall intent): the finalizer is held until no data-registry
+//     FeatureStore CR still carries the DataRegistryFinalizer, i.e. until the
+//     Data Registry cleanup triggered by the capability gates has finished.
+func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigFinalizer(ctx context.Context, caps capabilities.Config) error {
+	if !caps.PlatformConfigPresent {
+		return nil
+	}
+
+	if !caps.PlatformConfigTerminating {
+		return r.ensureCapabilitiesConfigFinalizer(ctx)
+	}
+
+	if caps.DataRegistryEnabled {
+		// Deletion without teardown intent: let the module operator's
+		// ConfigMap recreation proceed.
+		return r.removeCapabilitiesConfigFinalizer(ctx)
+	}
+
+	// Teardown intent: hold the finalizer until every data-registry
+	// FeatureStore CR has dropped its cleanup finalizer, i.e. until the
+	// Data Registry workload and cluster-scoped RBAC are gone.
+	var list feastdevv1.FeatureStoreList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("failed to list FeatureStores for capabilities teardown check: %w", err)
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if !services.IsDataRegistryCREnabled(item) {
+			continue
+		}
+		if controllerutil.ContainsFinalizer(item, services.DataRegistryFinalizer) {
+			// Data Registry cleanup still in flight; keep holding.
+			return nil
+		}
+	}
+
+	return r.removeCapabilitiesConfigFinalizer(ctx)
+}
+
+// ensureCapabilitiesConfigFinalizer adds the capabilities ConfigMap finalizer
+// when absent. The ConfigMap must not be terminating: the API server rejects
+// adding finalizers to objects being deleted, and a recreated ConfigMap is
+// re-adopted by a later reconcile.
+func (r *FeatureStoreReconciler) ensureCapabilitiesConfigFinalizer(ctx context.Context) error {
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      capabilities.ConfigMapName,
+		Namespace: capabilities.OperatorNamespace(),
+	}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read %s ConfigMap: %w", capabilities.ConfigMapName, err)
+	}
+	if cm.DeletionTimestamp != nil || controllerutil.ContainsFinalizer(cm, capabilities.CapabilitiesConfigFinalizer) {
+		return nil
+	}
+	controllerutil.AddFinalizer(cm, capabilities.CapabilitiesConfigFinalizer)
+	if err := r.Update(ctx, cm); err != nil {
+		return fmt.Errorf("failed to add finalizer to %s ConfigMap: %w", capabilities.ConfigMapName, err)
+	}
+	return nil
+}
+
+// removeCapabilitiesConfigFinalizer removes the capabilities ConfigMap
+// finalizer from a Terminating ConfigMap. A ConfigMap that is no longer
+// terminating (recreated) is left untouched so a later reconcile re-adopts it.
+func (r *FeatureStoreReconciler) removeCapabilitiesConfigFinalizer(ctx context.Context) error {
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      capabilities.ConfigMapName,
+		Namespace: capabilities.OperatorNamespace(),
+	}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read %s ConfigMap: %w", capabilities.ConfigMapName, err)
+	}
+	if cm.DeletionTimestamp == nil || !controllerutil.ContainsFinalizer(cm, capabilities.CapabilitiesConfigFinalizer) {
+		return nil
+	}
+	controllerutil.RemoveFinalizer(cm, capabilities.CapabilitiesConfigFinalizer)
+	if err := r.Update(ctx, cm); err != nil {
+		return fmt.Errorf("failed to remove finalizer from %s ConfigMap: %w", capabilities.ConfigMapName, err)
+	}
+	return nil
+}
+
 // guardDataRegistry applies data-registry admission. stop is true when
 // deployFeast must return without deploying.
 func (r *FeatureStoreReconciler) guardDataRegistry(ctx context.Context, cr *feastdevv1.FeatureStore, caps capabilities.Config) (ctrl.Result, bool, error) {
@@ -553,6 +650,25 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
 		cr.Status.Phase = feastdevv1.FailedPhase
 		return ctrl.Result{Requeue: true, RequeueAfter: RequeueDelayError}, capErr
+	}
+
+	// Manage this operator's finalizer on the capabilities ConfigMap before
+	// any capability gating: on a healthy ConfigMap the finalizer is ensured
+	// so a later deletion cannot bypass this operator; on a Terminating
+	// ConfigMap it is released once the Data Registry cleanup signaled by the
+	// disabled capability flags has completed, or immediately when the
+	// deletion carries no teardown intent (manual deletion, recreated by the
+	// module operator).
+	if err := r.reconcileCapabilitiesConfigFinalizer(ctx, caps); err != nil {
+		condition = metav1.Condition{
+			Type:    feastdevv1.ReadyType,
+			Status:  metav1.ConditionFalse,
+			Reason:  feastdevv1.FailedReason,
+			Message: "Error: " + err.Error(),
+		}
+		apimeta.SetStatusCondition(&cr.Status.Conditions, condition)
+		cr.Status.Phase = feastdevv1.FailedPhase
+		return ctrl.Result{RequeueAfter: RequeueDelayError}, err
 	}
 
 	if cr.Namespace == caps.DataRegistryNamespace && !services.IsDataRegistryCREnabled(cr) {
