@@ -162,6 +162,26 @@ var _ = Describe("NetworkPolicy", func() {
 		})
 	})
 
+	Describe("collectRemoteRegistryPorts", func() {
+		It("should return the registry gRPC port when the local registry is enabled", func() {
+			ports := feast.collectRemoteRegistryPorts()
+			Expect(ports).To(HaveLen(1))
+			Expect(ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetHttpPort,
+			))
+		})
+
+		It("should return no ports when the registry gRPC server is disabled", func() {
+			featureStore.Spec.Services.Registry.Local.Server.GRPC = ptr.To(false)
+			Expect(feast.ApplyDefaults()).To(Succeed())
+			applySpecToStatus(featureStore)
+			key := types.NamespacedName{Name: featureStore.Name, Namespace: featureStore.Namespace}
+			feast.refreshFeatureStore(ctx, key)
+
+			Expect(feast.collectRemoteRegistryPorts()).To(BeEmpty())
+		})
+	})
+
 	Describe("buildSameNamespaceIngressRules", func() {
 		It("should create a rule with empty podSelector (all pods in namespace)", func() {
 			ports := feast.collectEnabledServicePorts()
@@ -190,6 +210,47 @@ var _ = Describe("NetworkPolicy", func() {
 		})
 	})
 
+	Describe("buildIngressControllerRules", func() {
+		It("should allow only the ingress-nginx controller in its namespace", func() {
+			ports := feast.collectDashboardPorts()
+			rules := buildIngressControllerRules(ports)
+			Expect(rules).To(HaveLen(1))
+			Expect(rules[0].From).To(HaveLen(1))
+			peer := rules[0].From[0]
+			Expect(peer.NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
+				ingressNamespaceLabel, ingressNamespaceValue,
+			))
+			Expect(peer.PodSelector.MatchLabels).To(HaveKeyWithValue(
+				ingressPodNameLabel, ingressPodNameValue,
+			))
+			Expect(peer.PodSelector.MatchLabels).To(HaveKeyWithValue(
+				ingressPodComponentLabel, ingressPodComponentValue,
+			))
+			Expect(rules[0].Ports).To(HaveLen(1))
+			Expect(rules[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetRestHttpPort,
+			))
+		})
+	})
+
+	Describe("buildRemoteRegistryIngressRules", func() {
+		It("should allow Feast-managed pods in other namespaces on registry gRPC only", func() {
+			ports := feast.collectRemoteRegistryPorts()
+			rules := buildRemoteRegistryIngressRules(ports)
+			Expect(rules).To(HaveLen(1))
+			Expect(rules[0].From).To(HaveLen(1))
+			peer := rules[0].From[0]
+			Expect(peer.NamespaceSelector.MatchLabels).To(BeEmpty())
+			Expect(peer.PodSelector.MatchLabels).To(HaveKeyWithValue(
+				ManagedByLabelKey, ManagedByLabelValue,
+			))
+			Expect(rules[0].Ports).To(HaveLen(1))
+			Expect(rules[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetHttpPort,
+			))
+		})
+	})
+
 	Describe("buildMonitoringIngressRules", func() {
 		It("should create a rule with monitoring namespace selector", func() {
 			ports := []*npac.NetworkPolicyPortApplyConfiguration{npPort(MetricsPort)}
@@ -204,7 +265,7 @@ var _ = Describe("NetworkPolicy", func() {
 	})
 
 	Describe("reconcileNetworkPolicies", func() {
-		It("should create same-ns and dashboard policies for standard deployment", func() {
+		It("should create scoped ingress policies for standard deployment", func() {
 			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
 
 			sameNsNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixSameNs, featureStore.Namespace)
@@ -222,6 +283,26 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(dashNP.Spec.Ingress).To(HaveLen(1))
 			Expect(dashNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
 				dashboardNamespaceLabel, dashboardNamespaceValue,
+			))
+
+			ingressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixIngress, featureStore.Namespace)
+			Expect(ingressNP).NotTo(BeNil())
+			Expect(ingressNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
+				ingressNamespaceLabel, ingressNamespaceValue,
+			))
+			Expect(ingressNP.Spec.Ingress[0].Ports).To(HaveLen(1))
+			Expect(ingressNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetRestHttpPort,
+			))
+
+			remoteRegistryNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
+			Expect(remoteRegistryNP).NotTo(BeNil())
+			Expect(remoteRegistryNP.Spec.Ingress[0].From[0].PodSelector.MatchLabels).To(HaveKeyWithValue(
+				ManagedByLabelKey, ManagedByLabelValue,
+			))
+			Expect(remoteRegistryNP.Spec.Ingress[0].Ports).To(HaveLen(1))
+			Expect(remoteRegistryNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetHttpPort,
 			))
 		})
 
@@ -318,6 +399,8 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
 			dashNP = getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDashboard, featureStore.Namespace)
 			Expect(dashNP).To(BeNil())
+			ingressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixIngress, featureStore.Namespace)
+			Expect(ingressNP).To(BeNil())
 		})
 	})
 
@@ -333,6 +416,10 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(sameNsNP).To(BeNil())
 			dashNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDashboard, featureStore.Namespace)
 			Expect(dashNP).To(BeNil())
+			ingressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixIngress, featureStore.Namespace)
+			Expect(ingressNP).To(BeNil())
+			remoteRegistryNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
+			Expect(remoteRegistryNP).To(BeNil())
 			egressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixEgress, featureStore.Namespace)
 			Expect(egressNP).To(BeNil())
 			cronNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixCronJob, featureStore.Namespace)
