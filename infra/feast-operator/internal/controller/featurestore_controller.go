@@ -33,11 +33,13 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -45,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/access"
@@ -136,6 +139,13 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				r.Metrics.DeleteFeatureStore(req.NamespacedName.Namespace, req.NamespacedName.Name)
 			}
 			r.cleanupOnDeletion(ctx, req.NamespacedName.Namespace, req.NamespacedName.Name)
+			// A deleted CR no longer triggers reconciles — the capabilities
+			// ConfigMap watch enqueues only existing CRs — so this not-found
+			// pass is the last chance to release the ConfigMap finalizer for
+			// the module operator uninstall handshake.
+			if relErr := r.reconcileCapabilitiesConfigOnCRRemoval(ctx, types.NamespacedName{}); relErr != nil {
+				return ctrl.Result{}, relErr
+			}
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Unable to get FeatureStore CR")
@@ -147,33 +157,7 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if r.Metrics != nil {
 			r.Metrics.DeleteFeatureStore(cr.Namespace, cr.Name)
 		}
-		// Handle the data-registry finalizer before namespace-scoped GC:
-		// cluster-scoped ClusterRoles and CRBs have no owner references and would
-		// be orphaned if we skipped this step and the pod restarted.
-		if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
-			feast := services.FeastServices{
-				Handler: feasthandler.FeastHandler{
-					Client:       r.Client,
-					Context:      ctx,
-					FeatureStore: cr,
-					Scheme:       r.Scheme,
-				},
-			}
-			if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
-				logger.Error(err, "Failed to cleanup data registry ClusterRoles during finalizer handling")
-				return ctrl.Result{}, err
-			}
-			if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
-				logger.Error(err, "Failed to cleanup data registry auth-delegator binding during finalizer handling")
-				return ctrl.Result{}, err
-			}
-			controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
-			if err := r.Update(ctx, cr); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		r.cleanupOnDeletion(ctx, cr.Namespace, cr.Name)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.finalizeFeatureStore(ctx, cr)
 	}
 
 	result, recErr = r.deployFeast(ctx, cr)
@@ -231,6 +215,51 @@ func (r *FeatureStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		result.RequeueAfter = RequeuePeriodicInterval
 	}
 	return result, recErr
+}
+
+// finalizeFeatureStore completes the removal of a deleting FeatureStore CR.
+// The data-registry finalizer is dropped first: cluster-scoped ClusterRoles
+// and CRBs have no owner references and would be orphaned if this pod
+// restarted. The CR's own registry and discovery cleanup runs next, and only
+// then is the capabilities ConfigMap finalizer released — the module operator
+// uninstalls this operator once that finalizer is gone, so cleanup has to
+// finish first. The CR delete event still enqueues one not-found reconcile
+// that releases again if this attempt did not.
+func (r *FeatureStoreReconciler) finalizeFeatureStore(ctx context.Context, cr *feastdevv1.FeatureStore) error {
+	logger := log.FromContext(ctx)
+	// cleaned is set only after the data-registry finalizer is removed, so
+	// the hold check can ignore the informer's stale copy of this object.
+	var cleaned types.NamespacedName
+	if controllerutil.ContainsFinalizer(cr, services.DataRegistryFinalizer) {
+		feast := services.FeastServices{
+			Handler: feasthandler.FeastHandler{
+				Client:       r.Client,
+				Context:      ctx,
+				FeatureStore: cr,
+				Scheme:       r.Scheme,
+			},
+		}
+		if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+			logger.Error(err, "Failed to cleanup data registry ClusterRoles during finalizer handling")
+			return err
+		}
+		if err := feast.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
+			logger.Error(err, "Failed to cleanup data registry auth-delegator binding during finalizer handling")
+			return err
+		}
+		controllerutil.RemoveFinalizer(cr, services.DataRegistryFinalizer)
+		if err := r.Update(ctx, cr); err != nil {
+			return err
+		}
+		// The Update is in the API, but the List below reads the informer
+		// cache, which still has the finalizer until this write is
+		// observed. Pass the key so that stale copy cannot keep the
+		// ConfigMap finalizer held if this object is then deleted and
+		// no later reconcile runs.
+		cleaned = client.ObjectKeyFromObject(cr)
+	}
+	r.cleanupOnDeletion(ctx, cr.Namespace, cr.Name)
+	return r.reconcileCapabilitiesConfigOnCRRemoval(ctx, cleaned)
 }
 
 func (r *FeatureStoreReconciler) fetchPermissionsFromRegistry(ctx context.Context, cr *feastdevv1.FeatureStore) ([]registry.PermissionPolicy, error) {
@@ -419,7 +448,12 @@ func removeRejectedDataRegistryWorkload(feast services.FeastServices) (cleanupEr
 //     uninstall intent): the finalizer is held until no data-registry
 //     FeatureStore CR still carries the DataRegistryFinalizer, i.e. until the
 //     Data Registry cleanup triggered by the capability gates has finished.
-func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigFinalizer(ctx context.Context, caps capabilities.Config) error {
+//
+// cleaned is the FeatureStore whose cleanup finalizer this reconcile already
+// removed. An empty name excludes nothing. The informer cache still lists
+// that finalizer until the update is observed, and trusting it would hold
+// the ConfigMap finalizer on an object that is about to disappear.
+func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigFinalizer(ctx context.Context, caps capabilities.Config, cleaned types.NamespacedName) error {
 	if !caps.PlatformConfigPresent {
 		return nil
 	}
@@ -437,12 +471,21 @@ func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigFinalizer(ctx contex
 	// Teardown intent: hold the finalizer until every data-registry
 	// FeatureStore CR has dropped its cleanup finalizer, i.e. until the
 	// Data Registry workload and cluster-scoped RBAC are gone.
+	//
+	// Returning without an error does not end the handshake. While a
+	// FeatureStore still exists, the capabilities ConfigMap watch and that
+	// CR's 30s periodic requeue both run this check again, and removing the
+	// cleanup finalizer is itself a FeatureStore update. A CR that is
+	// deleted is released from the deletion and not-found paths.
 	var list feastdevv1.FeatureStoreList
 	if err := r.List(ctx, &list); err != nil {
 		return fmt.Errorf("failed to list FeatureStores for capabilities teardown check: %w", err)
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
+		if cleaned.Name != "" && item.Name == cleaned.Name && item.Namespace == cleaned.Namespace {
+			continue
+		}
 		if !services.IsDataRegistryCREnabled(item) {
 			continue
 		}
@@ -453,6 +496,23 @@ func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigFinalizer(ctx contex
 	}
 
 	return r.removeCapabilitiesConfigFinalizer(ctx)
+}
+
+// reconcileCapabilitiesConfigOnCRRemoval manages the capabilities ConfigMap
+// finalizer while a FeatureStore CR is being removed. The ConfigMap watch
+// mapper enqueues only existing CRs, so the deletion and not-found paths are
+// what release this operator's finalizer after the CR is gone. cleaned is
+// forwarded to the hold check; see reconcileCapabilitiesConfigFinalizer.
+// A missing or unreadable ConfigMap is skipped: it must never block CR deletion.
+func (r *FeatureStoreReconciler) reconcileCapabilitiesConfigOnCRRemoval(ctx context.Context, cleaned types.NamespacedName) error {
+	logger := log.FromContext(ctx)
+	caps, err := capabilities.Load(ctx, r.Client)
+	if err != nil {
+		logger.V(1).Info("Skipping capabilities ConfigMap finalizer handling during CR removal",
+			"reason", err.Error())
+		return nil
+	}
+	return r.reconcileCapabilitiesConfigFinalizer(ctx, caps, cleaned)
 }
 
 // ensureCapabilitiesConfigFinalizer adds the capabilities ConfigMap finalizer
@@ -659,7 +719,7 @@ func (r *FeatureStoreReconciler) deployFeast(ctx context.Context, cr *feastdevv1
 	// disabled capability flags has completed, or immediately when the
 	// deletion carries no teardown intent (manual deletion, recreated by the
 	// module operator).
-	if err := r.reconcileCapabilitiesConfigFinalizer(ctx, caps); err != nil {
+	if err := r.reconcileCapabilitiesConfigFinalizer(ctx, caps, types.NamespacedName{}); err != nil {
 		condition = metav1.Condition{
 			Type:    feastdevv1.ReadyType,
 			Status:  metav1.ConditionFalse,
@@ -863,11 +923,24 @@ func (r *FeatureStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	if capsNS := capabilities.OperatorNamespace(); capsNS != "" {
-		bldr = bldr.Watches(
+		// Watches() uses the manager cache. That cache lists ConfigMaps only
+		// when they carry app.kubernetes.io/managed-by=feast-operator, and
+		// feast-capabilities-config is written by the module operator without
+		// that label, so those events never arrive. Watch the one object by
+		// name instead. Reads already bypass the filtered cache.
+		capsCache, err := newCapabilitiesConfigCache(mgr, capsNS)
+		if err != nil {
+			return fmt.Errorf("create capabilities ConfigMap cache: %w", err)
+		}
+		if err := mgr.Add(capsCache); err != nil {
+			return fmt.Errorf("start capabilities ConfigMap cache: %w", err)
+		}
+		bldr = bldr.WatchesRawSource(source.Kind[client.Object](
+			capsCache,
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.mapCapabilitiesConfigToFeatureStores),
-			builder.WithPredicates(capabilitiesConfigMapPredicate(capsNS)),
-		)
+			capabilitiesConfigMapPredicate(capsNS),
+		))
 	}
 
 	return bldr.Complete(r)
@@ -927,6 +1000,33 @@ func capabilitiesConfigMapPredicate(operatorNamespace string) predicate.Predicat
 	})
 }
 
+// capabilitiesConfigCacheOptions limits an informer to feast-capabilities-config
+// in the operator namespace. The object has no managed-by label, so it is not
+// in the manager's ConfigMap informer. No label selector is set: one would
+// hide the ConfigMap this watch exists to see.
+func capabilitiesConfigCacheOptions(namespace string) cache.Options {
+	return cache.Options{
+		DefaultNamespaces: map[string]cache.Config{
+			namespace: {
+				FieldSelector: fields.OneTermEqualSelector(metav1.ObjectNameField, capabilities.ConfigMapName),
+			},
+		},
+	}
+}
+
+func newCapabilitiesConfigCache(mgr ctrl.Manager, namespace string) (cache.Cache, error) {
+	opts := capabilitiesConfigCacheOptions(namespace)
+	opts.Scheme = mgr.GetScheme()
+	opts.Mapper = mgr.GetRESTMapper()
+	opts.HTTPClient = mgr.GetHTTPClient()
+	return cache.New(mgr.GetConfig(), opts)
+}
+
+// mapCapabilitiesConfigToFeatureStores enqueues every FeatureStore so any
+// surviving CR can finish the ConfigMap handshake. An empty list enqueues
+// nothing: a CR deleted in this process is released by its not-found
+// reconcile, and a cluster that already has no FeatureStores falls through
+// to the module operator's uninstall timeout.
 func (r *FeatureStoreReconciler) mapCapabilitiesConfigToFeatureStores(ctx context.Context, obj client.Object) []reconcile.Request {
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {

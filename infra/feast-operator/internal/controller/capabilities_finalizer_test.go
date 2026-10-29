@@ -24,6 +24,7 @@ import (
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/capabilities"
 	"github.com/feast-dev/feast/infra/feast-operator/internal/controller/services"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -78,10 +79,10 @@ func terminatingCapabilitiesCM(teardownIntent bool) *corev1.ConfigMap {
 	return cm
 }
 
-func dataRegistryCR(name string, withFinalizer bool) *feastdevv1.FeatureStore {
+func dataRegistryCR(withFinalizer bool) *feastdevv1.FeatureStore {
 	cr := &feastdevv1.FeatureStore{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      "data-registry",
 			Namespace: capabilities.DefaultDataRegistryNamespace,
 			Annotations: map[string]string{
 				services.DataRegistryAnnotation: "true",
@@ -109,8 +110,8 @@ func TestReconcileCapabilitiesConfigFinalizerStates(t *testing.T) {
 	t.Setenv("POD_NAMESPACE", "operator-ns")
 	ctx := context.Background()
 
-	annotatedCR := dataRegistryCR("data-registry", true)
-	cleanedCR := dataRegistryCR("data-registry", false)
+	annotatedCR := dataRegistryCR(true)
+	cleanedCR := dataRegistryCR(false)
 
 	tests := []struct {
 		name string
@@ -191,7 +192,7 @@ func TestReconcileCapabilitiesConfigFinalizerStates(t *testing.T) {
 			cl := builder.Build()
 			r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
 
-			if err := r.reconcileCapabilitiesConfigFinalizer(ctx, tt.caps); err != nil {
+			if err := r.reconcileCapabilitiesConfigFinalizer(ctx, tt.caps, types.NamespacedName{}); err != nil {
 				t.Fatalf("reconcileCapabilitiesConfigFinalizer: %v", err)
 			}
 
@@ -220,7 +221,7 @@ func TestDataRegistryTeardownReleasesConfigMapFinalizer(t *testing.T) {
 	ctx := context.Background()
 	scheme := capabilitiesFinalizerTestScheme(t)
 
-	cr := dataRegistryCR("data-registry", true)
+	cr := dataRegistryCR(true)
 	cr.UID = types.UID("data-registry-uid")
 	registryCM := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -269,5 +270,171 @@ func TestDataRegistryTeardownReleasesConfigMapFinalizer(t *testing.T) {
 	// The module operator finalizer still holds the Terminating ConfigMap.
 	if !cmHasFinalizer(ctx, cl, "components.platform.opendatahub.io/feast-capabilities") {
 		t.Fatal("expected module operator finalizer to still hold the ConfigMap")
+	}
+}
+
+// TestDeletedFeatureStoreCRReleasesConfigMapFinalizer covers the gap where
+// the data-registry CR is deleted while the capabilities ConfigMap is
+// Terminating with teardown intent: once the CR is gone the ConfigMap watch
+// mapper enqueues nothing, so the not-found reconcile triggered by the CR
+// delete event must release this operator's ConfigMap finalizer. Without it
+// the module operator times out and the ConfigMap stays Terminating forever
+// after this operator is uninstalled.
+func TestDeletedFeatureStoreCRReleasesConfigMapFinalizer(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-ns")
+	ctx := context.Background()
+	scheme := capabilitiesFinalizerTestScheme(t)
+
+	registryCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      services.NamespaceRegistryConfigMapName,
+			Namespace: services.DefaultKubernetesNamespace,
+		},
+		Data: map[string]string{},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(terminatingCapabilitiesCM(true), registryCM).
+		Build()
+	r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
+
+	// Reconcile for a CR that no longer exists (the delete event enqueues
+	// one final request): the not-found path must release the finalizer.
+	key := types.NamespacedName{Name: "data-registry", Namespace: capabilities.DefaultDataRegistryNamespace}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cmHasFinalizer(ctx, cl, capabilities.CapabilitiesConfigFinalizer) {
+		t.Fatal("expected ConfigMap finalizer to be released on the not-found reconcile")
+	}
+	if !cmHasFinalizer(ctx, cl, "components.platform.opendatahub.io/feast-capabilities") {
+		t.Fatal("expected module operator finalizer to still hold the ConfigMap")
+	}
+}
+
+// TestTerminatingFeatureStoreCRFinalizeReleasesConfigMapFinalizer covers the
+// finalize path: a Terminating data-registry CR drops its cleanup finalizer,
+// and the same reconcile releases this operator's ConfigMap finalizer while
+// the ConfigMap is Terminating with teardown intent.
+func TestTerminatingFeatureStoreCRFinalizeReleasesConfigMapFinalizer(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-ns")
+	ctx := context.Background()
+	scheme := capabilitiesFinalizerTestScheme(t)
+
+	cr := dataRegistryCR(true)
+	cr.UID = types.UID("data-registry-uid")
+	now := metav1.Now()
+	cr.DeletionTimestamp = &now
+	registryCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      services.NamespaceRegistryConfigMapName,
+			Namespace: services.DefaultKubernetesNamespace,
+		},
+		Data: map[string]string{},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(cr).
+		WithObjects(terminatingCapabilitiesCM(true), cr, registryCM).
+		Build()
+	r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The CR finished finalizing and is gone.
+	if err := cl.Get(ctx, key, &feastdevv1.FeatureStore{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected CR to be deleted, got: %v", err)
+	}
+	// Its final reconcile released the ConfigMap finalizer.
+	if cmHasFinalizer(ctx, cl, capabilities.CapabilitiesConfigFinalizer) {
+		t.Fatal("expected ConfigMap finalizer to be released during CR finalize")
+	}
+	if !cmHasFinalizer(ctx, cl, "components.platform.opendatahub.io/feast-capabilities") {
+		t.Fatal("expected module operator finalizer to still hold the ConfigMap")
+	}
+}
+
+// TestCapabilitiesFinalizerIgnoresJustCleanedCR is the informer-cache case:
+// this reconcile already removed the data-registry finalizer, but List still
+// returns the object with that finalizer. The hold check must not treat that
+// copy as cleanup still in flight.
+func TestCapabilitiesFinalizerIgnoresJustCleanedCR(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-ns")
+	ctx := context.Background()
+	scheme := capabilitiesFinalizerTestScheme(t)
+
+	cr := dataRegistryCR(true)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(terminatingCapabilitiesCM(true), cr).
+		Build()
+	r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
+
+	err := r.reconcileCapabilitiesConfigFinalizer(ctx, capabilities.Config{
+		PlatformConfigPresent:     true,
+		PlatformConfigTerminating: true,
+		FeatureStoreEnabled:       false,
+		DataRegistryEnabled:       false,
+	}, types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmHasFinalizer(ctx, cl, capabilities.CapabilitiesConfigFinalizer) {
+		t.Fatal("expected ConfigMap finalizer to be released despite the stale cleanup finalizer")
+	}
+	if !cmHasFinalizer(ctx, cl, "components.platform.opendatahub.io/feast-capabilities") {
+		t.Fatal("expected module operator finalizer to still hold the ConfigMap")
+	}
+}
+
+// A second data-registry CR that still carries its cleanup finalizer must
+// keep the ConfigMap finalizer held even when this reconcile has finished
+// cleaning a different CR.
+func TestCapabilitiesFinalizerHeldByAnotherCR(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-ns")
+	ctx := context.Background()
+	scheme := capabilitiesFinalizerTestScheme(t)
+
+	cleaned := dataRegistryCR(true)
+	other := dataRegistryCR(true)
+	other.Namespace = "other-ns"
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(terminatingCapabilitiesCM(true), cleaned, other).
+		Build()
+	r := &FeatureStoreReconciler{Client: cl, Scheme: scheme}
+
+	err := r.reconcileCapabilitiesConfigFinalizer(ctx, capabilities.Config{
+		PlatformConfigPresent:     true,
+		PlatformConfigTerminating: true,
+		DataRegistryEnabled:       false,
+	}, types.NamespacedName{Name: cleaned.Name, Namespace: cleaned.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cmHasFinalizer(ctx, cl, capabilities.CapabilitiesConfigFinalizer) {
+		t.Fatal("expected ConfigMap finalizer to stay held while another data-registry CR is still cleaning up")
+	}
+}
+
+func TestCapabilitiesConfigCacheTargetsModuleConfigMap(t *testing.T) {
+	const namespace = "operator-ns"
+	opts := capabilitiesConfigCacheOptions(namespace)
+	if len(opts.DefaultNamespaces) != 1 {
+		t.Fatalf("cache namespaces: %#v", opts.DefaultNamespaces)
+	}
+	cfg, ok := opts.DefaultNamespaces[namespace]
+	if !ok {
+		t.Fatalf("expected cache limited to %s", namespace)
+	}
+	want := "metadata.name=" + capabilities.ConfigMapName
+	if cfg.FieldSelector == nil || cfg.FieldSelector.String() != want {
+		t.Fatalf("field selector = %v, want %s", cfg.FieldSelector, want)
+	}
+	if cfg.LabelSelector != nil && cfg.LabelSelector.String() != "" {
+		t.Fatalf("label selector %q would hide the unlabeled capabilities ConfigMap", cfg.LabelSelector)
 	}
 }
