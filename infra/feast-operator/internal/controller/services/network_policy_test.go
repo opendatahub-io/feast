@@ -198,15 +198,30 @@ var _ = Describe("NetworkPolicy", func() {
 		It("should create a rule with namespace+pod selectors for Dashboard", func() {
 			ports := feast.collectDashboardPorts()
 			rules := buildDashboardIngressRules(ports)
+			Expect(rules).To(HaveLen(2))
+			for i, podLabel := range []string{dashboardPodLabel, dashboardPodLabelCurrent} {
+				Expect(rules[i].From).To(HaveLen(1))
+				peer := rules[i].From[0]
+				Expect(peer.NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
+					dashboardNamespaceLabel, dashboardNamespaceValue,
+				))
+				Expect(peer.PodSelector.MatchLabels).To(HaveKeyWithValue(podLabel, "true"))
+			}
+		})
+	})
+
+	Describe("buildWorkbenchIngressRules", func() {
+		It("should allow Feast-integrated Workbench pods from any namespace", func() {
+			ports := feast.collectWorkbenchPorts()
+			rules := buildWorkbenchIngressRules(ports)
 			Expect(rules).To(HaveLen(1))
 			Expect(rules[0].From).To(HaveLen(1))
 			peer := rules[0].From[0]
-			Expect(peer.NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
-				dashboardNamespaceLabel, dashboardNamespaceValue,
-			))
+			Expect(peer.NamespaceSelector.MatchLabels).To(BeEmpty())
 			Expect(peer.PodSelector.MatchLabels).To(HaveKeyWithValue(
-				dashboardPodLabel, "true",
+				workbenchFeastIntegrationLabel, "true",
 			))
+			Expect(rules[0].Ports).To(HaveLen(len(ports)))
 		})
 	})
 
@@ -280,10 +295,20 @@ var _ = Describe("NetworkPolicy", func() {
 
 			dashNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDashboard, featureStore.Namespace)
 			Expect(dashNP).NotTo(BeNil())
-			Expect(dashNP.Spec.Ingress).To(HaveLen(1))
+			Expect(dashNP.Spec.Ingress).To(HaveLen(2))
 			Expect(dashNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels).To(HaveKeyWithValue(
 				dashboardNamespaceLabel, dashboardNamespaceValue,
 			))
+
+			workbenchNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixWorkbench, featureStore.Namespace)
+			Expect(workbenchNP).NotTo(BeNil())
+			Expect(workbenchNP.Spec.Ingress).To(HaveLen(1))
+			workbenchPeer := workbenchNP.Spec.Ingress[0].From[0]
+			Expect(workbenchPeer.NamespaceSelector.MatchLabels).To(BeEmpty())
+			Expect(workbenchPeer.PodSelector.MatchLabels).To(HaveKeyWithValue(
+				workbenchFeastIntegrationLabel, "true",
+			))
+			Expect(workbenchNP.Spec.Ingress[0].Ports).To(HaveLen(3))
 
 			ingressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixIngress, featureStore.Namespace)
 			Expect(ingressNP).NotTo(BeNil())

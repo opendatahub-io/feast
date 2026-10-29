@@ -35,6 +35,7 @@ import (
 const (
 	npSuffixSameNs     = "-allow-same-ns"
 	npSuffixDashboard  = "-allow-dashboard"
+	npSuffixWorkbench  = "-allow-workbench"
 	npSuffixIngress    = "-allow-ingress-controller"
 	npSuffixRemoteReg  = "-allow-remote-registry"
 	npSuffixMonitoring = "-allow-monitoring"
@@ -43,17 +44,21 @@ const (
 	npSuffixCronJob    = "-cronjob"
 
 	// Labels used in cross-namespace selectors (not owned by us).
-	dashboardNamespaceLabel  = "platform.opendatahub.io/part-of"
-	dashboardNamespaceValue  = "workbenches"
-	dashboardPodLabel        = "app.opendatahub.io/dashboard"
-	ingressNamespaceLabel    = "kubernetes.io/metadata.name"
-	ingressNamespaceValue    = "ingress-nginx"
-	ingressPodNameLabel      = "app.kubernetes.io/name"
-	ingressPodNameValue      = "ingress-nginx"
-	ingressPodComponentLabel = "app.kubernetes.io/component"
-	ingressPodComponentValue = "controller"
-	monitoringNamespaceLabel = "network.openshift.io/policy-group"
-	monitoringNamespaceValue = "monitoring"
+	dashboardNamespaceLabel        = "platform.opendatahub.io/part-of"
+	dashboardNamespaceValue        = "workbenches"
+	dashboardPodLabel              = "app.opendatahub.io/dashboard"
+	dashboardPodLabelCurrent       = "app.opendatahub.io/odh-dashboard"
+	workbenchFeastIntegrationLabel = "opendatahub.io/feast-integration"
+	ingressNamespaceLabel          = "kubernetes.io/metadata.name"
+	ingressNamespaceValue          = "ingress-nginx"
+	ingressPodNameLabel            = "app.kubernetes.io/name"
+	ingressPodNameValue            = "ingress-nginx"
+	ingressPodComponentLabel       = "app.kubernetes.io/component"
+	ingressPodComponentValue       = "controller"
+	openShiftIngressNamespaceLabel = "network.openshift.io/policy-group"
+	openShiftIngressNamespaceValue = "ingress"
+	monitoringNamespaceLabel       = "network.openshift.io/policy-group"
+	monitoringNamespaceValue       = "monitoring"
 )
 
 // reconcileNetworkPolicies creates or updates all operand NetworkPolicies for
@@ -69,7 +74,7 @@ func (feast *FeastServices) reconcileNetworkPolicies() error {
 
 	ports := feast.collectEnabledServicePorts()
 	if len(ports) == 0 {
-		return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring)
+		return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixWorkbench, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring)
 	}
 
 	selectorLabels := feast.getSelectorLabels()
@@ -100,14 +105,39 @@ func (feast *FeastServices) reconcileNetworkPolicies() error {
 		}
 	}
 
-	// The standard ingress-nginx controller forwards Registry REST requests
-	// from its own namespace, so allow only its controller pods on that port.
+	// Workbenches opt in through the Dashboard-managed Feast integration label.
+	// The peer combines an empty namespace selector with the pod label so that
+	// only opted-in pods in any namespace can reach Feast API ports.
+	workbenchPorts := feast.collectWorkbenchPorts()
+	if len(workbenchPorts) > 0 {
+		if err := feast.applyNetworkPolicy(
+			GetFeastName(cr)+npSuffixWorkbench,
+			selectorLabels,
+			buildWorkbenchIngressRules(workbenchPorts),
+		); err != nil {
+			return err
+		}
+	} else if err := feast.deleteNetworkPolicies(npSuffixWorkbench); err != nil {
+		return err
+	}
+
+	// The ingress-nginx controller forwards Registry REST requests from its
+	// namespace. OpenShift's router also needs access to the UI Route backend.
+	// Keep each source restricted to the ports it actually serves.
 	ingressPorts := feast.collectDashboardPorts()
-	if len(ingressPorts) > 0 {
+	openShiftRouterPorts := feast.collectOpenShiftRouterPorts()
+	if len(ingressPorts) > 0 || len(openShiftRouterPorts) > 0 {
+		var ingressRules []*npac.NetworkPolicyIngressRuleApplyConfiguration
+		if len(ingressPorts) > 0 {
+			ingressRules = append(ingressRules, buildIngressControllerRules(ingressPorts)...)
+		}
+		if len(openShiftRouterPorts) > 0 {
+			ingressRules = append(ingressRules, buildOpenShiftRouterRules(openShiftRouterPorts)...)
+		}
 		if err := feast.applyNetworkPolicy(
 			GetFeastName(cr)+npSuffixIngress,
 			selectorLabels,
-			buildIngressControllerRules(ingressPorts),
+			ingressRules,
 		); err != nil {
 			return err
 		}
@@ -201,6 +231,13 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 	); err != nil {
 		return err
 	}
+	if err := feast.applyNetworkPolicy(
+		GetFeastName(cr)+npSuffixWorkbench,
+		selectorLabels,
+		buildWorkbenchIngressRules(proxyPorts),
+	); err != nil {
+		return err
+	}
 
 	// Monitoring → data-registry metrics.
 	monPorts := []*npac.NetworkPolicyPortApplyConfiguration{
@@ -233,7 +270,7 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 // deleteAllNetworkPolicies removes all operand NetworkPolicies owned by
 // this FeatureStore.
 func (feast *FeastServices) deleteAllNetworkPolicies() error {
-	return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring, npSuffixDataReg, npSuffixEgress, npSuffixCronJob)
+	return feast.deleteNetworkPolicies(npSuffixSameNs, npSuffixDashboard, npSuffixWorkbench, npSuffixIngress, npSuffixRemoteReg, npSuffixMonitoring, npSuffixDataReg, npSuffixEgress, npSuffixCronJob)
 }
 
 // --- Port collection helpers ---
@@ -291,6 +328,48 @@ func (feast *FeastServices) collectDashboardPorts() []*npac.NetworkPolicyPortApp
 	return ports
 }
 
+func (feast *FeastServices) collectWorkbenchPorts() []*npac.NetworkPolicyPortApplyConfiguration {
+	var ports []*npac.NetworkPolicyPortApplyConfiguration
+	applied := feast.Handler.FeatureStore.Status.Applied
+
+	if applied.Services == nil {
+		return ports
+	}
+	if feast.isOnlineServer() {
+		ports = append(ports, npPort(getTargetPort(OnlineFeastType, applied.Services.OnlineStore.Server.TLS)))
+	}
+	if feast.isOfflineServer() {
+		ports = append(ports, npPort(getTargetPort(OfflineFeastType, applied.Services.OfflineStore.Server.TLS)))
+	}
+	if feast.isRegistryServer() {
+		tls := feast.getRegistryServerTLS()
+		if feast.isRegistryGrpcEnabled() {
+			ports = append(ports, npPort(getTargetPort(RegistryFeastType, tls)))
+		}
+		if feast.isRegistryRestEnabled() {
+			ports = append(ports, npPort(getTargetRestPort(RegistryFeastType, tls)))
+		}
+	}
+	if feast.isLineageServer() {
+		var tls *feastdevv1.TlsConfigs
+		if server := applied.OpenLineage.Consumer.LineageServer.Server; server != nil {
+			tls = server.TLS
+		}
+		ports = append(ports, npPort(getTargetPort(LineageFeastType, tls)))
+	}
+
+	return ports
+}
+
+func (feast *FeastServices) collectOpenShiftRouterPorts() []*npac.NetworkPolicyPortApplyConfiguration {
+	if feast.isUiServer() {
+		return []*npac.NetworkPolicyPortApplyConfiguration{
+			npPort(getTargetPort(UIFeastType, feast.Handler.FeatureStore.Status.Applied.Services.UI.TLS)),
+		}
+	}
+	return nil
+}
+
 func (feast *FeastServices) collectRemoteRegistryPorts() []*npac.NetworkPolicyPortApplyConfiguration {
 	if feast.isRegistryServer() && feast.isRegistryGrpcEnabled() {
 		return []*npac.NetworkPolicyPortApplyConfiguration{
@@ -329,18 +408,38 @@ func buildSameNamespaceIngressRules(ports []*npac.NetworkPolicyPortApplyConfigur
 
 func buildDashboardIngressRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
 	return []*npac.NetworkPolicyIngressRuleApplyConfiguration{
+		dashboardIngressRule(dashboardPodLabel, ports),
+		// Dashboard deployments in the current ODH release use the more specific
+		// label below. Keep the older label for releases that still emit it.
+		dashboardIngressRule(dashboardPodLabelCurrent, ports),
+	}
+}
+
+func buildWorkbenchIngressRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
+	return []*npac.NetworkPolicyIngressRuleApplyConfiguration{
 		npac.NetworkPolicyIngressRule().
 			WithFrom(npac.NetworkPolicyPeer().
-				WithNamespaceSelector(metaac.LabelSelector().
-					WithMatchLabels(map[string]string{
-						dashboardNamespaceLabel: dashboardNamespaceValue,
-					})).
+				WithNamespaceSelector(metaac.LabelSelector()).
 				WithPodSelector(metaac.LabelSelector().
 					WithMatchLabels(map[string]string{
-						dashboardPodLabel: "true",
+						workbenchFeastIntegrationLabel: "true",
 					}))).
 			WithPorts(ports...),
 	}
+}
+
+func dashboardIngressRule(podLabel string, ports []*npac.NetworkPolicyPortApplyConfiguration) *npac.NetworkPolicyIngressRuleApplyConfiguration {
+	return npac.NetworkPolicyIngressRule().
+		WithFrom(npac.NetworkPolicyPeer().
+			WithNamespaceSelector(metaac.LabelSelector().
+				WithMatchLabels(map[string]string{
+					dashboardNamespaceLabel: dashboardNamespaceValue,
+				})).
+			WithPodSelector(metaac.LabelSelector().
+				WithMatchLabels(map[string]string{
+					podLabel: "true",
+				}))).
+		WithPorts(ports...)
 }
 
 func buildIngressControllerRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
@@ -355,6 +454,18 @@ func buildIngressControllerRules(ports []*npac.NetworkPolicyPortApplyConfigurati
 					WithMatchLabels(map[string]string{
 						ingressPodNameLabel:      ingressPodNameValue,
 						ingressPodComponentLabel: ingressPodComponentValue,
+					}))).
+			WithPorts(ports...),
+	}
+}
+
+func buildOpenShiftRouterRules(ports []*npac.NetworkPolicyPortApplyConfiguration) []*npac.NetworkPolicyIngressRuleApplyConfiguration {
+	return []*npac.NetworkPolicyIngressRuleApplyConfiguration{
+		npac.NetworkPolicyIngressRule().
+			WithFrom(npac.NetworkPolicyPeer().
+				WithNamespaceSelector(metaac.LabelSelector().
+					WithMatchLabels(map[string]string{
+						openShiftIngressNamespaceLabel: openShiftIngressNamespaceValue,
 					}))).
 			WithPorts(ports...),
 	}
