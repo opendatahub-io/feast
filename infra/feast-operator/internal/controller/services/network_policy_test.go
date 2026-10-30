@@ -452,6 +452,61 @@ var _ = Describe("NetworkPolicy", func() {
 		})
 	})
 
+	Describe("reconcileDataRegistryNetworkPolicies", func() {
+		// Other test suites may set isOpenShift = false; restore the original value.
+		var savedIsOpenShift bool
+		BeforeEach(func() {
+			savedIsOpenShift = isOpenShift
+			isOpenShift = true
+		})
+		AfterEach(func() {
+			isOpenShift = savedIsOpenShift
+		})
+
+		It("should create OpenShift router ingress policy for the data-registry Route", func() {
+			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
+
+			ingressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixIngress, featureStore.Namespace)
+			Expect(ingressNP).NotTo(BeNil(), "data-registry mode should create an ingress NP for the OpenShift router")
+			Expect(ingressNP.Spec.Ingress).To(HaveLen(1))
+			Expect(ingressNP.Spec.Ingress[0].From).To(HaveLen(1))
+			nsSelector := ingressNP.Spec.Ingress[0].From[0].NamespaceSelector
+			Expect(nsSelector).NotTo(BeNil())
+			Expect(nsSelector.MatchLabels).To(HaveKeyWithValue(
+				openShiftIngressNamespaceLabel, openShiftIngressNamespaceValue,
+			))
+			Expect(ingressNP.Spec.Ingress[0].Ports).To(HaveLen(1))
+			Expect(ingressNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(DataRegistryProxyPort))
+		})
+
+		It("should create same-namespace, workbench, monitoring, and egress policies", func() {
+			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
+
+			sameNsNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixSameNs, featureStore.Namespace)
+			Expect(sameNsNP).NotTo(BeNil())
+			workbenchNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixWorkbench, featureStore.Namespace)
+			Expect(workbenchNP).NotTo(BeNil())
+			monNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixMonitoring, featureStore.Namespace)
+			Expect(monNP).NotTo(BeNil())
+			egressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixEgress, featureStore.Namespace)
+			Expect(egressNP).NotTo(BeNil())
+			dataRegNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDataReg, featureStore.Namespace)
+			Expect(dataRegNP).NotTo(BeNil())
+		})
+
+		It("should clean up standard-mode-only policies", func() {
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			dashNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDashboard, featureStore.Namespace)
+			Expect(dashNP).NotTo(BeNil())
+
+			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
+			dashNP = getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDashboard, featureStore.Namespace)
+			Expect(dashNP).To(BeNil(), "dashboard NP should be deleted in data-registry mode")
+			remoteRegNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
+			Expect(remoteRegNP).To(BeNil(), "remote-registry NP should be deleted in data-registry mode")
+		})
+	})
+
 	Describe("SSA drift reconciliation", func() {
 		It("should restore policy to desired state after manual modification", func() {
 			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
