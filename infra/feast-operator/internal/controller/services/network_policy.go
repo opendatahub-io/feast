@@ -258,8 +258,21 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 		return err
 	}
 
-	// Clean up standard-mode-only Dashboard policy.
-	if err := feast.deleteNetworkPolicies(npSuffixDashboard, npSuffixIngress, npSuffixRemoteReg); err != nil {
+	// OpenShift router → data-registry proxy (Route backend).
+	if isOpenShift {
+		if err := feast.applyNetworkPolicy(
+			GetFeastName(cr)+npSuffixIngress,
+			selectorLabels,
+			buildOpenShiftRouterRules(proxyPorts),
+		); err != nil {
+			return err
+		}
+	} else if err := feast.deleteNetworkPolicies(npSuffixIngress); err != nil {
+		return err
+	}
+
+	// Clean up standard-mode-only policies.
+	if err := feast.deleteNetworkPolicies(npSuffixDashboard, npSuffixRemoteReg); err != nil {
 		return err
 	}
 
