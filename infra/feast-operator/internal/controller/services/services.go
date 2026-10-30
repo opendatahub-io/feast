@@ -503,6 +503,9 @@ func (feast *FeastServices) CleanupStandardResources() error {
 			return err
 		}
 	}
+	if err := feast.deleteAllNetworkPolicies(); err != nil {
+		return err
+	}
 	return nil
 }
 
