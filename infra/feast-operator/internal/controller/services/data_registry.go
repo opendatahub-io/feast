@@ -209,8 +209,14 @@ func (feast *FeastServices) CleanupDataRegistry() error {
 	return feast.Handler.Client.Update(feast.Handler.Context, cr)
 }
 
-// CleanupDataRegistryResources removes all data-registry owned resources.
+// CleanupDataRegistryResources removes data-registry owned resources.
 // Exported so the controller can call it when the platform capability is disabled.
+//
+// NetworkPolicies stay in place. A normal FeatureStore calls this on every
+// reconcile, and reconcileNetworkPolicies then updates that store's policies
+// in place. Deleting them here removes live allow rules until that later
+// apply recreates them. Rejection removes policies itself, because that path
+// returns without reconciling them.
 func (feast *FeastServices) CleanupDataRegistryResources() error {
 	if isOpenShift {
 		if err := feast.Handler.DeleteOwnedFeastObj(feast.initDataRegistryRoute()); err != nil {
@@ -243,9 +249,6 @@ func (feast *FeastServices) CleanupDataRegistryResources() error {
 		if err := feast.deleteDataRegistryServiceMonitor(); err != nil {
 			return err
 		}
-	}
-	if err := feast.deleteAllNetworkPolicies(); err != nil {
-		return err
 	}
 	return nil
 }
