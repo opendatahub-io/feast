@@ -300,6 +300,14 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 	return nil
 }
 
+// CleanupFeatureStoreNetworkPolicies removes every operand NetworkPolicy for
+// this FeatureStore. Rejection calls it when the custom resource stays and
+// Deploy will not reconcile the policies. Steady-state data-registry cleanup
+// leaves the policies for reconcileNetworkPolicies to update in place.
+func (feast *FeastServices) CleanupFeatureStoreNetworkPolicies() error {
+	return feast.deleteAllNetworkPolicies()
+}
+
 // deleteAllNetworkPolicies removes all operand NetworkPolicies owned by
 // this FeatureStore.
 func (feast *FeastServices) deleteAllNetworkPolicies() error {
