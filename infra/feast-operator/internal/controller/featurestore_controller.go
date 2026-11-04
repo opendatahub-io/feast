@@ -439,6 +439,12 @@ func removeRejectedDataRegistryWorkload(feast services.FeastServices) (cleanupEr
 	if cleanupErr != nil {
 		return cleanupErr, nil
 	}
+	// The custom resource stays and Deploy does not run, so nothing reconciles
+	// these policies afterward. A normal FeatureStore reconcile does not use
+	// this path.
+	if cleanupErr = feast.CleanupFeatureStoreNetworkPolicies(); cleanupErr != nil {
+		return cleanupErr, nil
+	}
 	// Older operators registered this CR for feature-store discovery. The
 	// Service is gone; the discovery entry has to go with it or workbenches
 	// keep a dead endpoint.

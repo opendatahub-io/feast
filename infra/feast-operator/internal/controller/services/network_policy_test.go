@@ -584,6 +584,59 @@ var _ = Describe("NetworkPolicy", func() {
 		})
 	})
 
+	Describe("data-registry cleanup on a standard FeatureStore", func() {
+		standardPolicySuffixes := []string{
+			npSuffixSameNs,
+			npSuffixDashboard,
+			npSuffixWorkbench,
+			npSuffixIngress,
+			npSuffixRemoteReg,
+			npSuffixEgress,
+			npSuffixCronJob,
+		}
+
+		It("keeps standard NetworkPolicies in place", func() {
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+
+			uids := map[string]types.UID{}
+			for _, suffix := range standardPolicySuffixes {
+				np := getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)
+				Expect(np).NotTo(BeNil(), "policy %s should exist before cleanup", suffix)
+				uids[suffix] = np.UID
+			}
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDataReg, featureStore.Namespace)).To(BeNil())
+
+			savedOpenShift := isOpenShift
+			isOpenShift = false
+			defer func() { isOpenShift = savedOpenShift }()
+
+			// Deploy() calls this for every FeatureStore that is not a data registry.
+			Expect(feast.deployDataRegistry()).To(Succeed())
+
+			for _, suffix := range standardPolicySuffixes {
+				np := getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)
+				Expect(np).NotTo(BeNil(), "policy %s should survive data-registry cleanup", suffix)
+				Expect(np.UID).To(Equal(uids[suffix]), "policy %s should keep its identity", suffix)
+			}
+		})
+
+		It("still removes NetworkPolicies when the standard workload is torn down", func() {
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixSameNs, featureStore.Namespace)).NotTo(BeNil())
+
+			savedOpenShift := isOpenShift
+			isOpenShift = false
+			defer func() { isOpenShift = savedOpenShift }()
+
+			Expect(feast.CleanupStandardResources()).To(Succeed())
+
+			for _, suffix := range standardPolicySuffixes {
+				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).To(BeNil(),
+					"policy %s should be removed with the standard workload", suffix)
+			}
+		})
+	})
+
 	Describe("reconcileDataRegistryNetworkPolicies", func() {
 		// Other test suites may set isOpenShift = false; restore the original value.
 		var savedIsOpenShift bool
@@ -658,6 +711,41 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(dashNP).To(BeNil(), "dashboard NP should be deleted in data-registry mode")
 			remoteRegNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
 			Expect(remoteRegNP).To(BeNil(), "remote-registry NP should be deleted in data-registry mode")
+		})
+
+		It("removes data-registry NetworkPolicies when the workload is rejected", func() {
+			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
+
+			rejectedSuffixes := []string{
+				npSuffixDataReg,
+				npSuffixSameNs,
+				npSuffixWorkbench,
+				npSuffixMonitoring,
+				npSuffixEgress,
+				npSuffixIngress,
+			}
+			for _, suffix := range rejectedSuffixes {
+				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).NotTo(BeNil(),
+					"policy %s should exist before rejection", suffix)
+			}
+
+			// envtest has no Route API. Skip the OpenShift route delete; the
+			// policies under test are already created.
+			savedOpenShift := isOpenShift
+			isOpenShift = false
+			defer func() { isOpenShift = savedOpenShift }()
+
+			Expect(feast.CleanupDataRegistry()).To(Succeed())
+			for _, suffix := range rejectedSuffixes {
+				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).NotTo(BeNil(),
+					"object cleanup should leave policy %s in place", suffix)
+			}
+
+			Expect(feast.CleanupFeatureStoreNetworkPolicies()).To(Succeed())
+			for _, suffix := range rejectedSuffixes {
+				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).To(BeNil(),
+					"rejection should remove policy %s", suffix)
+			}
 		})
 	})
 
