@@ -110,6 +110,9 @@ var _ = Describe("Feast Workbench Integration Connection Testing", Ordered, func
 		// Pass feastProject parameter to set the opendatahub.io/feast-config annotation
 		CreateNotebookTest(namespace, configMapName, notebookFile, "test/e2e_rhoai/resources/feature_repo", pvcFile, rolebindingName, notebookPVC, notebookName, testDir, "credit_scoring_local")
 
+		By("Verifying FeatureStore NetworkPolicies and workbench feast-integration label")
+		VerifyFeatureStoreNetworkPoliciesBasic(namespace, feastCRName)
+
 		// Verify Feast ConfigMap was created with correct auth type
 		verifyFeastConfigMap(authEnabled)
 
