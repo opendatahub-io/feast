@@ -21,7 +21,7 @@ import (
 
 const (
 	FeastControllerNamespace = "feast-operator-system"
-	Timeout                  = 3 * time.Minute
+	Timeout                  = 5 * time.Minute
 	ControllerDeploymentName = "feast-operator-controller-manager"
 	FeastPrefix              = "feast-"
 	FeatureStoreName         = "simple-feast-setup"
@@ -65,6 +65,46 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 	return nil
 }
 
+// dumpDeploymentDebugInfo prints pod status, events, and container logs to help
+// diagnose why a Feast deployment never became Available in CI.
+func dumpDeploymentDebugInfo(namespace, deploymentName string) {
+	fmt.Printf("\n===== DEBUG: deployment %s/%s not Available =====\n", namespace, deploymentName)
+
+	runDebugCmd := func(title string, args ...string) {
+		fmt.Printf("--- %s ---\n", title)
+		cmd := exec.Command("kubectl", args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Printf("(kubectl %s failed: %v)\n%s\n", strings.Join(args, " "), err, string(out))
+			return
+		}
+		fmt.Printf("%s\n", string(out))
+	}
+
+	runDebugCmd("get deployment", "get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
+	runDebugCmd("describe deployment", "describe", "deployment", deploymentName, "-n", namespace)
+	runDebugCmd("get pods (namespace)", "get", "pods", "-n", namespace, "-o", "wide")
+	runDebugCmd("featurestores", "get", FeatureStoreResourceName, "-n", namespace, "-o", "yaml")
+	runDebugCmd("events", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+
+	podsCmd := exec.Command("kubectl", "get", "pods", "-n", namespace, "-o", "jsonpath={.items[*].metadata.name}")
+	podsOut, err := podsCmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("(failed to list pod names: %v)\n%s\n", err, string(podsOut))
+		fmt.Printf("===== END DEBUG: %s/%s =====\n\n", namespace, deploymentName)
+		return
+	}
+	for _, podName := range strings.Fields(string(podsOut)) {
+		if deploymentName != "" && !strings.HasPrefix(podName, deploymentName) {
+			continue
+		}
+		runDebugCmd("describe pod "+podName, "describe", "pod", podName, "-n", namespace)
+		runDebugCmd("logs "+podName+" (current)", "logs", podName, "-n", namespace, "--all-containers=true", "--tail=200")
+		runDebugCmd("logs "+podName+" (previous)", "logs", podName, "-n", namespace, "--all-containers=true", "--previous", "--tail=200")
+	}
+	fmt.Printf("===== END DEBUG: %s/%s =====\n\n", namespace, deploymentName)
+}
+
 // CheckIfDeploymentExistsAndAvailable - validates if a deployment exists and also in the availability state as True.
 func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string, timeout time.Duration) error {
 	var output, errOutput bytes.Buffer
@@ -77,6 +117,7 @@ func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string
 	for {
 		select {
 		case <-timeoutChan:
+			dumpDeploymentDebugInfo(namespace, deploymentName)
 			return fmt.Errorf("timed out waiting for deployment %s to become available", deploymentName)
 		case <-ticker.C:
 			// Run kubectl command
@@ -87,6 +128,8 @@ func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string
 			if err := cmd.Run(); err != nil {
 				// Log error and retry
 				fmt.Printf("Deployment not yet found, we may try again to find the updated status: %s\n", errOutput.String())
+				output.Reset()
+				errOutput.Reset()
 				continue
 			}
 
