@@ -19,6 +19,10 @@ metadata:
   name: credit-scoring
   namespace: test-ns-feast
 spec:
+  # Workaround: ose-cli-rhel9 multi-arch digest for ppc64le CronJob pods
+  cronJob:
+    containerConfigs:
+      image: "registry.redhat.io/openshift4/ose-cli-rhel9@sha256:cf5b139ba5e36e8072bbf73ae776c0b7bb46673d531403cfb64fd31859210f22"
   authz:
     noAuth: true
   feastProject: credit_scoring_local
