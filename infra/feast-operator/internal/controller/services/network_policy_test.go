@@ -35,6 +35,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func newTestFeatureStore(name, namespace string) *feastdevv1.FeatureStore {
@@ -713,7 +714,7 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(remoteRegNP).To(BeNil(), "remote-registry NP should be deleted in data-registry mode")
 		})
 
-		It("removes data-registry NetworkPolicies when the workload is rejected", func() {
+		It("removes data-registry NetworkPolicies before releasing the finalizer", func() {
 			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
 
 			rejectedSuffixes := []string{
@@ -724,24 +725,39 @@ var _ = Describe("NetworkPolicy", func() {
 				npSuffixEgress,
 				npSuffixIngress,
 			}
-			for _, suffix := range rejectedSuffixes {
-				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).NotTo(BeNil(),
-					"policy %s should exist before rejection", suffix)
-			}
+			key := types.NamespacedName{Name: featureStore.Name, Namespace: featureStore.Namespace}
+			feast.refreshFeatureStore(ctx, key)
+			controllerutil.AddFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)
+			Expect(k8sClient.Update(ctx, feast.Handler.FeatureStore)).To(Succeed())
+			feast.refreshFeatureStore(ctx, key)
 
 			// envtest has no Route API. Skip the OpenShift route delete; the
 			// policies under test are already created.
 			savedOpenShift := isOpenShift
 			isOpenShift = false
-			defer func() { isOpenShift = savedOpenShift }()
+			defer func() {
+				isOpenShift = savedOpenShift
+				latest := &feastdevv1.FeatureStore{}
+				if err := k8sClient.Get(ctx, key, latest); err != nil {
+					return
+				}
+				if controllerutil.ContainsFinalizer(latest, DataRegistryFinalizer) {
+					controllerutil.RemoveFinalizer(latest, DataRegistryFinalizer)
+					Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+				}
+			}()
 
-			Expect(feast.CleanupDataRegistry()).To(Succeed())
+			Expect(feast.CleanupDataRegistryResources()).To(Succeed())
+			feast.refreshFeatureStore(ctx, key)
+			Expect(controllerutil.ContainsFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)).To(BeTrue())
 			for _, suffix := range rejectedSuffixes {
 				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).NotTo(BeNil(),
 					"object cleanup should leave policy %s in place", suffix)
 			}
 
-			Expect(feast.CleanupFeatureStoreNetworkPolicies()).To(Succeed())
+			Expect(feast.CleanupRejectedDataRegistry()).To(Succeed())
+			feast.refreshFeatureStore(ctx, key)
+			Expect(controllerutil.ContainsFinalizer(feast.Handler.FeatureStore, DataRegistryFinalizer)).To(BeFalse())
 			for _, suffix := range rejectedSuffixes {
 				Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+suffix, featureStore.Namespace)).To(BeNil(),
 					"rejection should remove policy %s", suffix)

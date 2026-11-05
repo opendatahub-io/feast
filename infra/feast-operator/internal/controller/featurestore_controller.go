@@ -435,14 +435,10 @@ func (r *FeatureStoreReconciler) countOtherFeatureStoresInCluster(ctx context.Co
 // entry is still present. Callers write status after this returns: removing
 // the finalizer updates the CR, and that response replaces .status.
 func removeRejectedDataRegistryWorkload(feast services.FeastServices) (cleanupErr, registryErr error) {
-	cleanupErr = feast.CleanupDataRegistry()
+	// Objects, then NetworkPolicies, then the finalizer. A failed policy
+	// delete leaves the finalizer in place so this reconcile is retried.
+	cleanupErr = feast.CleanupRejectedDataRegistry()
 	if cleanupErr != nil {
-		return cleanupErr, nil
-	}
-	// The custom resource stays and Deploy does not run, so nothing reconciles
-	// these policies afterward. A normal FeatureStore reconcile does not use
-	// this path.
-	if cleanupErr = feast.CleanupFeatureStoreNetworkPolicies(); cleanupErr != nil {
 		return cleanupErr, nil
 	}
 	// Older operators registered this CR for feature-store discovery. The
