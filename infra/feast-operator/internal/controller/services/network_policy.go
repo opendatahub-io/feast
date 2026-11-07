@@ -300,6 +300,13 @@ func (feast *FeastServices) reconcileDataRegistryNetworkPolicies() error {
 	return nil
 }
 
+// CleanupFeatureStoreNetworkPolicies removes every operand NetworkPolicy for
+// this FeatureStore. CleanupRejectedDataRegistry calls it before releasing
+// DataRegistryFinalizer. A normal FeatureStore reconcile does not call it.
+func (feast *FeastServices) CleanupFeatureStoreNetworkPolicies() error {
+	return feast.deleteAllNetworkPolicies()
+}
+
 // deleteAllNetworkPolicies removes all operand NetworkPolicies owned by
 // this FeatureStore.
 func (feast *FeastServices) deleteAllNetworkPolicies() error {
