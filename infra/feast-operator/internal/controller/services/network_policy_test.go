@@ -143,6 +143,15 @@ var _ = Describe("NetworkPolicy", func() {
 	)
 
 	BeforeEach(func() {
+		originalNamespace, hadNamespace := os.LookupEnv("POD_NAMESPACE")
+		Expect(os.Setenv("POD_NAMESPACE", "feast-operator-system")).To(Succeed())
+		DeferCleanup(func() {
+			if hadNamespace {
+				Expect(os.Setenv("POD_NAMESPACE", originalNamespace)).To(Succeed())
+			} else {
+				Expect(os.Unsetenv("POD_NAMESPACE")).To(Succeed())
+			}
+		})
 		ctx = context.Background()
 		featureStore = newTestFeatureStore("np-test-fs", DefaultNs)
 		Expect(k8sClient.Create(ctx, featureStore)).To(Succeed())
@@ -442,6 +451,56 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(remoteRegistryNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(
 				FeastServiceConstants[RegistryFeastType].TargetHttpPort,
 			))
+
+			operatorNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)
+			Expect(operatorNP).NotTo(BeNil())
+			Expect(operatorNP.Spec.Ingress).To(HaveLen(1))
+			Expect(operatorNP.Spec.Ingress[0].From).To(HaveLen(1))
+			operatorPeer := operatorNP.Spec.Ingress[0].From[0]
+			Expect(operatorPeer.NamespaceSelector.MatchLabels).To(Equal(map[string]string{
+				operatorNamespaceLabel: "feast-operator-system",
+			}))
+			Expect(operatorPeer.PodSelector.MatchLabels).To(Equal(map[string]string{
+				operatorPodNameLabel:         operatorPodNameValue,
+				operatorPodControlPlaneLabel: operatorPodControlPlaneValue,
+			}))
+			Expect(operatorNP.Spec.Ingress[0].Ports).To(HaveLen(1))
+			Expect(operatorNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetRestHttpPort,
+			))
+		})
+
+		It("should use the registry REST TLS target port for the operator", func() {
+			featureStore.Spec.Services.Registry.Local.Server.TLS = &feastdevv1.TlsConfigs{
+				SecretRef: &corev1.LocalObjectReference{Name: "tls-secret"},
+			}
+			Expect(feast.ApplyDefaults()).To(Succeed())
+			applySpecToStatus(featureStore)
+			feast.refreshFeatureStore(ctx, types.NamespacedName{Name: featureStore.Name, Namespace: featureStore.Namespace})
+
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			operatorNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)
+			Expect(operatorNP).NotTo(BeNil())
+			Expect(operatorNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(
+				FeastServiceConstants[RegistryFeastType].TargetRestHttpsPort,
+			))
+		})
+
+		It("should remove the operator allowance when registry REST is disabled", func() {
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			featureStore.Spec.Services.Registry.Local.Server.RestAPI = ptr.To(false)
+			Expect(feast.ApplyDefaults()).To(Succeed())
+			applySpecToStatus(featureStore)
+			feast.refreshFeatureStore(ctx, types.NamespacedName{Name: featureStore.Name, Namespace: featureStore.Namespace})
+
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)).To(BeNil())
+		})
+
+		It("should reject an empty operator namespace rather than write a broad selector", func() {
+			Expect(os.Unsetenv("POD_NAMESPACE")).To(Succeed())
+			Expect(feast.reconcileNetworkPolicies()).To(MatchError(ContainSubstring("POD_NAMESPACE is required")))
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)).To(BeNil())
 		})
 
 		It("should not create monitoring policy when metrics is disabled", func() {
@@ -577,6 +636,8 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(ingressNP).To(BeNil())
 			remoteRegistryNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
 			Expect(remoteRegistryNP).To(BeNil())
+			operatorNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)
+			Expect(operatorNP).To(BeNil())
 			egressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixEgress, featureStore.Namespace)
 			Expect(egressNP).To(BeNil())
 			cronNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixCronJob, featureStore.Namespace)
@@ -618,6 +679,17 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(sameNsNP).NotTo(BeNil())
 			workbenchNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixWorkbench, featureStore.Namespace)
 			Expect(workbenchNP).NotTo(BeNil())
+			Expect(workbenchNP.Spec.Ingress).To(HaveLen(1))
+			Expect(workbenchNP.Spec.Ingress[0].Ports).To(HaveLen(1))
+			Expect(workbenchNP.Spec.Ingress[0].Ports[0].Port.IntVal).To(Equal(DataRegistryProxyPort))
+			Expect(workbenchNP.Spec.Ingress[0].From).To(HaveLen(2))
+			Expect(workbenchNP.Spec.Ingress[0].From[0].PodSelector.MatchLabels).To(Equal(map[string]string{
+				workbenchFeastIntegrationLabel: "true",
+			}))
+			Expect(workbenchNP.Spec.Ingress[0].From[1].NamespaceSelector.MatchLabels).To(BeEmpty())
+			Expect(workbenchNP.Spec.Ingress[0].From[1].PodSelector.MatchLabels).To(Equal(map[string]string{
+				workbenchPodLabel: "true",
+			}))
 			monNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixMonitoring, featureStore.Namespace)
 			Expect(monNP).NotTo(BeNil())
 			egressNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixEgress, featureStore.Namespace)
@@ -658,6 +730,15 @@ var _ = Describe("NetworkPolicy", func() {
 			Expect(dashNP).To(BeNil(), "dashboard NP should be deleted in data-registry mode")
 			remoteRegNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixRemoteReg, featureStore.Namespace)
 			Expect(remoteRegNP).To(BeNil(), "remote-registry NP should be deleted in data-registry mode")
+			operatorNP := getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)
+			Expect(operatorNP).To(BeNil(), "operator REST NP should be deleted in data-registry mode")
+		})
+
+		It("should restore the operator REST policy when returning to standard mode", func() {
+			Expect(feast.reconcileDataRegistryNetworkPolicies()).To(Succeed())
+			Expect(feast.reconcileNetworkPolicies()).To(Succeed())
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixOperatorReg, featureStore.Namespace)).NotTo(BeNil())
+			Expect(getNetworkPolicy(ctx, GetFeastName(featureStore)+npSuffixDataReg, featureStore.Namespace)).To(BeNil())
 		})
 	})
 
