@@ -116,7 +116,7 @@ func MonitorNotebookPod(namespace, podPrefix string, notebookName string) error 
 	// Start monitoring notebook logs
 	fmt.Printf("⏳ Monitoring  Notebook pod %s Logs for Jupyter Notebook %s execution status\n", pod.Name, notebookName)
 
-	for i := 0; i < 90; i++ {
+	for i := 0; i < 180; i++ {
 		logs, err := getPodLogs(namespace, pod.Name)
 		if err != nil {
 			fmt.Printf("⏳ Failed to get logs for pod %s: %v\n", pod.Name, err)
