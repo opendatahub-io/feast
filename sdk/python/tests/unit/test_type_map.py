@@ -15,12 +15,14 @@ from feast.type_map import (
     _convert_value_type_str_to_value_type,
     _python_dict_to_map_proto,
     _python_list_to_map_list_proto,
+    _python_value_to_map_key_proto,
     arrow_to_pg_type,
     feast_value_type_to_pa,
     feast_value_type_to_python_type,
     mssql_to_feast_value_type,
     pa_to_athena_value_type,
     pa_to_feast_value_type,
+    pa_to_mssql_type,
     pa_to_redshift_value_type,
     pg_type_to_feast_value_type,
     python_type_to_feast_value_type,
@@ -107,6 +109,42 @@ def test_naive_datetime_unix_timestamp_is_utc(
         assert converted == expected
     else:
         assert list(converted) == [expected]
+
+
+_PRE_EPOCH_DATETIME = datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=timezone.utc)
+_PRE_EPOCH_DATETIME64 = np.datetime64("1969-12-31T23:59:59.5")
+
+
+@pytest.mark.parametrize(
+    "value_type, value",
+    [
+        (ValueType.UNIX_TIMESTAMP, _PRE_EPOCH_DATETIME),
+        (ValueType.UNIX_TIMESTAMP, pd.Timestamp(_PRE_EPOCH_DATETIME)),
+        (ValueType.UNIX_TIMESTAMP, _PRE_EPOCH_DATETIME64),
+        (ValueType.UNIX_TIMESTAMP_LIST, [_PRE_EPOCH_DATETIME]),
+        (ValueType.UNIX_TIMESTAMP_LIST, [_PRE_EPOCH_DATETIME64]),
+        (ValueType.UNIX_TIMESTAMP_SET, [_PRE_EPOCH_DATETIME]),
+        (ValueType.ZONED_TIMESTAMP, _PRE_EPOCH_DATETIME),
+        (ValueType.ZONED_TIMESTAMP, pd.Timestamp(_PRE_EPOCH_DATETIME)),
+    ],
+)
+def test_pre_epoch_fractional_second_floors(value_type, value):
+    """A pre-1970 instant with a fractional second floors to the earlier second,
+    as numpy's datetime64[s] cast does, instead of rounding up to the epoch."""
+    proto = python_values_to_proto_values([value], value_type)[0]
+    converted = feast_value_type_to_python_type(proto)
+
+    expected = datetime(1969, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    if isinstance(value, list):
+        assert list(converted) == [expected]
+    else:
+        assert converted == expected
+
+
+def test_pre_epoch_fractional_second_map_key_floors():
+    """A pre-1970 SCALAR_MAP datetime key floors like a UNIX_TIMESTAMP value."""
+    key = _python_value_to_map_key_proto(_PRE_EPOCH_DATETIME)
+    assert key.unix_timestamp_key == -1
 
 
 @pytest.mark.parametrize(
@@ -639,6 +677,23 @@ class TestMapArrowTypeSupport:
         """Every ValueType name converts back to that ValueType."""
         assert _convert_value_type_str_to_value_type(value_type.name) == value_type
 
+    @pytest.mark.parametrize(
+        "arrow_type, expected",
+        [
+            (pyarrow.int8(), "smallint"),
+            (pyarrow.binary(), "bytea"),
+            (pyarrow.large_binary(), "bytea"),
+            (pyarrow.null(), "text"),
+            (pyarrow.date32(), "date"),
+            (pyarrow.date64(), "date"),
+            (pyarrow.decimal128(10, 2), "numeric"),
+        ],
+    )
+    def test_arrow_to_pg_type_uses_postgres_type_names(self, arrow_type, expected):
+        """Postgres has no tinyint, binary or null type; the entity dataframe
+        upload builds CREATE TABLE from these names."""
+        assert arrow_to_pg_type(str(arrow_type)) == expected
+
     def test_arrow_to_pg_type_map(self):
         """Test that Arrow map type converts to Postgres jsonb."""
         assert arrow_to_pg_type("map<string, string>") == "jsonb"
@@ -685,6 +740,22 @@ class TestMapArrowTypeSupport:
         assert mssql_to_feast_value_type("float") == ValueType.DOUBLE
         assert mssql_to_feast_value_type("real") == ValueType.FLOAT
         assert mssql_to_feast_value_type("int") == ValueType.INT32
+
+    def test_mssql_to_feast_value_type_decimal_numeric(self):
+        """SQL Server DECIMAL/NUMERIC are exact numeric types, so schema
+        inference must map them to ValueType.DECIMAL instead of rejecting any
+        table that contains such a column."""
+        assert mssql_to_feast_value_type("decimal") == ValueType.DECIMAL
+        assert mssql_to_feast_value_type("numeric") == ValueType.DECIMAL
+
+    def test_pa_to_mssql_type_unsigned_ints_widen(self):
+        """MSSQL integer types are signed, except tinyint (unsigned 0..255),
+        which already covers the full uint8 range. uint16/uint32 must widen to
+        the next larger signed type to avoid overflow in the generated DDL."""
+        assert pa_to_mssql_type(pyarrow.uint8()) == "tinyint"
+        assert pa_to_mssql_type(pyarrow.uint16()) == "int"
+        assert pa_to_mssql_type(pyarrow.uint32()) == "bigint"
+        assert pa_to_mssql_type(pyarrow.uint64()) == "bigint"
 
     def test_snowflake_variant_to_map(self):
         """Test that Snowflake VARIANT/OBJECT types convert to ValueType.MAP."""
@@ -766,6 +837,10 @@ class TestDecimalDdlTypes:
 
     def test_pa_to_athena_value_type_decimal(self):
         assert pa_to_athena_value_type(pyarrow.decimal128(10, 2)) == "decimal(10,2)"
+
+    def test_pa_to_mssql_type_decimal(self):
+        assert pa_to_mssql_type(pyarrow.decimal128(10, 2)) == "decimal(10,2)"
+        assert pa_to_mssql_type(pyarrow.decimal128(38, 37)) == "decimal(38,37)"
 
 
 class TestRedshiftDynamoDBMapSupport:

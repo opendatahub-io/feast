@@ -723,6 +723,22 @@ PYTHON_SCALAR_VALUE_TYPE_TO_PROTO_VALUE: Dict[
 }
 
 
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _datetime_to_unix_seconds(value: datetime) -> int:
+    """Whole seconds since the epoch, floored like numpy's datetime64[s] cast.
+
+    A naive datetime is UTC, as everywhere else in Feast; datetime.timestamp()
+    would read it in the machine's local timezone. int(value.timestamp()) would
+    also truncate toward zero, moving a pre-1970 datetime with a fractional
+    second one second later (23:59:59.5 becomes 00:00:00).
+    """
+    if value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return (value - _UNIX_EPOCH) // timedelta(seconds=1)
+
+
 def _python_datetime_to_int_timestamp(
     values: Sequence[Any],
 ) -> Sequence[Union[int, np.int_]]:
@@ -735,11 +751,7 @@ def _python_datetime_to_int_timestamp(
     int_timestamps = []
     for value in values:
         if isinstance(value, datetime):
-            # A naive datetime is UTC, as everywhere else in Feast. Without this,
-            # datetime.timestamp() would read it in the machine's local timezone.
-            if value.utcoffset() is None:
-                value = value.replace(tzinfo=timezone.utc)
-            int_timestamps.append(int(value.timestamp()))
+            int_timestamps.append(_datetime_to_unix_seconds(value))
         elif isinstance(value, Timestamp):
             int_timestamps.append(int(value.ToSeconds()))
         elif isinstance(value, np.datetime64):
@@ -1156,7 +1168,7 @@ def _convert_scalar_values_to_proto(
                 out.append(
                     ProtoValue(
                         zoned_timestamp_val=ZonedTimestamp(
-                            unix_timestamp=int(dt.timestamp()),
+                            unix_timestamp=_datetime_to_unix_seconds(dt),
                             zone=_zone_name(value.tzinfo),
                         )
                     )  # type: ignore
@@ -1498,8 +1510,7 @@ def _python_value_to_map_key_proto(key: Any) -> MapKey:
     if isinstance(key, bytes):
         return MapKey(bytes_key=key)
     if isinstance(key, (datetime, pd.Timestamp)):
-        ts = int(pd.Timestamp(key).timestamp())
-        return MapKey(unix_timestamp_key=ts)
+        return MapKey(unix_timestamp_key=_datetime_to_unix_seconds(key))
     raise TypeError(
         f"Unsupported key type for SCALAR_MAP: {type(key).__name__}. "
         "Supported non-string key types: int, float, bool, uuid.UUID, "
@@ -1721,11 +1732,13 @@ def mssql_to_feast_value_type(mssql_type_as_str: str) -> ValueType:
         "date": ValueType.UNIX_TIMESTAMP,
         "datetime": ValueType.UNIX_TIMESTAMP,
         "datetimeoffset": ValueType.UNIX_TIMESTAMP,
+        "decimal": ValueType.DECIMAL,
         "float": ValueType.DOUBLE,
         "int": ValueType.INT32,
         "nchar": ValueType.STRING,
         "nvarchar": ValueType.STRING,
         "nvarchar(max)": ValueType.STRING,
+        "numeric": ValueType.DECIMAL,
         "json": ValueType.JSON,
         "real": ValueType.FLOAT,
         "smallint": ValueType.INT32,
@@ -1809,7 +1822,9 @@ def pa_to_mssql_type(pa_type: "pyarrow.DataType") -> str:
         return "date"
 
     if pa_type_as_str.startswith("decimal"):
-        return pa_type_as_str
+        # str() of a PyArrow decimal is "decimal128(p, s)", which is not an MSSQL
+        # type, so build "decimal(p,s)" from the precision and scale.
+        return f"decimal({pa_type.precision},{pa_type.scale})"
 
     if pa_type_as_str.startswith("map<"):
         return "nvarchar(max)"
@@ -1828,9 +1843,14 @@ def pa_to_mssql_type(pa_type: "pyarrow.DataType") -> str:
         "int16": "smallint",
         "int32": "int",
         "int64": "bigint",
+        # MSSQL integer types are signed, except tinyint (unsigned 0..255),
+        # so uint16/uint32 must widen to the next larger signed type to avoid
+        # overflow in the generated DDL. This mirrors the widening already done
+        # in the Athena and Postgres mappers; uint64 uses bigint, the largest
+        # MSSQL integer type.
         "uint8": "tinyint",
-        "uint16": "smallint",
-        "uint32": "int",
+        "uint16": "int",
+        "uint32": "bigint",
         "uint64": "bigint",
         "float": "float",
         "double": "real",
@@ -2065,10 +2085,16 @@ def arrow_to_pg_type(t_str: str) -> str:
             return "jsonb"
         if t_str.startswith("struct<") or t_str.startswith("struct{"):
             return "jsonb"
+        if t_str.startswith("decimal"):
+            return "numeric"
+        if t_str.startswith("date"):
+            return "date"
         return {
-            "null": "null",
+            # Postgres has no "null" type; an all-null column still needs one.
+            "null": "text",
             "bool": "boolean",
-            "int8": "tinyint",
+            # Postgres has no 1-byte integer type.
+            "int8": "smallint",
             "int16": "smallint",
             "int32": "int",
             "int64": "bigint",
@@ -2083,7 +2109,8 @@ def arrow_to_pg_type(t_str: str) -> str:
             "uint64": "bigint",
             "float": "float",
             "double": "double precision",
-            "binary": "binary",
+            "binary": "bytea",
+            "large_binary": "bytea",
             "string": "text",
         }[t_str]
     except KeyError:
