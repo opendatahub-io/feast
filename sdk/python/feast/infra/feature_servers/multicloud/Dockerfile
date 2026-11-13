@@ -21,10 +21,11 @@ RUN chmod +x /prebuild-power-base.sh
 ENV UV_CACHE_DIR=/tmp/uv-cache
 COPY sdk/python/feast/infra/feature_servers/multicloud/requirements.txt requirements.txt
 
-# Power (ppc64le) only: pin pyarrow, re2, and grpcio via IBM wheels
+# Power (ppc64le) only: pin pyarrow and re2 via IBM wheels; build grpcio from source
 RUN set -eux; \
     if [ "$(uname -m)" = "ppc64le" ]; then \
         echo "Power architecture detected. Installing pinned pyarrow and re2 version..."; \
+        microdnf install -y openssl-devel && microdnf clean all; \
         /prebuild-power-base.sh; \
     else \
         echo "Non-Power architecture detected; skipping Power-specific pyarrow installation."; \
