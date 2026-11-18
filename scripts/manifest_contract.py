@@ -35,7 +35,7 @@ def _containers(document):
         return
     spec = document.get("spec") or {}
     if kind == "CronJob":
-        spec = ((spec.get("jobTemplate") or {}).get("spec") or {})
+        spec = (spec.get("jobTemplate") or {}).get("spec") or {}
     template = spec.get("template") or {}
     pod_spec = template.get("spec") or {}
     for container in pod_spec.get("containers") or []:
@@ -66,10 +66,14 @@ def manager_flags(paths):
     for _, document in load_documents(paths):
         if document.get("kind") != "Deployment":
             continue
-        if "controller-manager" not in str(document.get("metadata", {}).get("name", "")):
+        if "controller-manager" not in str(
+            document.get("metadata", {}).get("name", "")
+        ):
             continue
         for _, container in _containers(document):
-            argv = list(container.get("command") or []) + list(container.get("args") or [])
+            argv = list(container.get("command") or []) + list(
+                container.get("args") or []
+            )
             for token in argv:
                 if isinstance(token, str) and token.startswith("--"):
                     flags.add(token.split("=", 1)[0])
