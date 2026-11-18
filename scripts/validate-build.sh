@@ -718,12 +718,25 @@ spec:
 MANIFEST
   pass "FeatureStore/konflux-sim created"
 
+  # `kubectl wait --all` fails with "no matching resources found" when the set is
+  # empty, which is the state right after the CR is applied, so wait for the
+  # operator to create something first.
+  local deadline=$((SECONDS + 600))
+  while [ -z "$(kubectl -n "$OPERAND_NAMESPACE" get deployment -o name 2>/dev/null)" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      err "the operator created no operand deployments within 10 minutes"
+      return 1
+    fi
+    sleep 5
+  done
+  pass "the operator created operand deployments"
+
   # The operand deployments are what the operator renders from the CR. If the
   # operator cannot reconcile, or renders an image that is not the one built
   # here, this never becomes Available.
   if ! kubectl -n "$OPERAND_NAMESPACE" wait \
     --for=condition=Available deployment --all --timeout=10m; then
-    err "the operand deployments did not become Available; the operator did not reconcile"
+    err "the operand deployments did not become Available"
     return 1
   fi
   pass "every operand deployment is Available"
