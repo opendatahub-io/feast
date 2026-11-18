@@ -326,8 +326,27 @@ validate_manifests() {
 
   local file
   for file in "${out_dir}"/*.yaml; do
-    "$KUBECONFORM_BIN" -strict -ignore-missing-schemas \
-      -kubernetes-version "$KUBERNETES_VERSION" -output json "$file" > "${file}.json" || true
+    local status=0
+    # -verbose is what makes -output json emit statusSkipped records; without
+    # it the built-in-kind guard below never sees a skipped resource.
+    "$KUBECONFORM_BIN" -strict -ignore-missing-schemas -verbose \
+      -kubernetes-version "$KUBERNETES_VERSION" -output json "$file" > "${file}.json" || status=$?
+
+    local violations=""
+    if [ -s "${file}.json" ]; then
+      violations="$(jq -r '
+        .resources[] | select(.status == "statusInvalid" or .status == "statusError")
+        | "  \(.kind) \(.name) (\(.version)): \(.msg)"' "${file}.json")" || {
+        err "could not parse the kubeconform report for $(basename "$file")"
+        exit 1
+      }
+    fi
+
+    if [ -n "$violations" ] || [ "$status" -ne 0 ]; then
+      err "kubeconform rejected $(basename "$file") (exit ${status}):"
+      printf '%s\n' "${violations:-  (no per-resource detail was reported)}"
+      exit 1
+    fi
 
     local bad
     bad="$(jq -r '
@@ -411,6 +430,7 @@ validate_hermetic_python() (
 
   local pyver="${HERMETIC_PYTHON_VERSION:-3.12}"
   local platform="${HERMETIC_PYTHON_PLATFORM:-x86_64-manylinux_2_34}"
+  local lock="${tmp}/lock.txt"
 
   # pip cannot resolve this graph ("resolution-too-deep"), which is why the
   # image installs with uv. Resolve with the same tool and pin the whole
@@ -420,21 +440,30 @@ validate_hermetic_python() (
     --python-version "$pyver" \
     --python-platform "$platform" \
     --quiet \
-    --output-file "${tmp}/lock.txt"
-  pass "dependency closure resolves ($(grep -c '==' "${tmp}/lock.txt") pinned distributions)"
+    --output-file "$lock"
+  pass "dependency closure resolves ($(grep -c '==' "$lock") pinned distributions)"
 
   if [ "$(uname -s)" != "Linux" ]; then
-    warn "Skipping the offline install on $(uname -s); the install phase is only meaningful on the Linux target"
+    warn "Skipping the offline install on $(uname -s); only the ${platform} resolution was checked"
+    return
+  fi
+
+  # An offline install only proves the resolved closure when the interpreter
+  # matches the platform the lock was resolved for. A native-only run is
+  # reported as such instead of claiming target-platform coverage.
+  local target_arch="${platform%%-*}"
+  if [ "$(uname -m)" != "$target_arch" ]; then
+    warn "Skipping the offline install on $(uname -m); the lock targets ${target_arch} (${platform})"
     return
   fi
 
   export UV_CACHE_DIR="${tmp}/uv-cache"
 
-  info "Populating the prefetch cache..."
+  info "Populating the prefetch cache from the resolved ${platform} lock..."
   uv venv "${tmp}/v1" --python "$pyver" --quiet
-  uv pip install --python "${tmp}/v1/bin/python" --requirement "$FEATURE_SERVER_REQUIREMENTS" --quiet
+  uv pip install --python "${tmp}/v1/bin/python" --requirement "$lock" --quiet
 
-  info "Installing with --offline from that cache only..."
+  info "Installing requirements.txt with --offline from that cache only..."
   rm -rf "${tmp}/v1"
   uv venv "${tmp}/v2" --python "$pyver" --quiet
   uv pip install --offline --python "${tmp}/v2/bin/python" --requirement "$FEATURE_SERVER_REQUIREMENTS" --quiet
@@ -450,13 +479,22 @@ validate_hermetic_python() (
 )
 
 validate_hermetic_go() {
-  info "Proving the operator builds with GOPROXY=off..."
   require_cmd go
 
+  local goos goarch
+  goos="${PLATFORM%%/*}"
+  goarch="${PLATFORM##*/}"
+  case "$goarch" in
+    x86_64) goarch=amd64 ;;
+    aarch64) goarch=arm64 ;;
+  esac
+  info "Proving the operator builds with GOPROXY=off for ${goos}/${goarch}..."
+
   ( cd "$OPERATOR_DIR" && go mod download )
-  ( cd "$OPERATOR_DIR" && GOPROXY=off GOFLAGS=-mod=readonly CGO_ENABLED=0 go build ./... )
+  ( cd "$OPERATOR_DIR" && GOPROXY=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build ./... )
+  ( cd "$OPERATOR_DIR" && GOPROXY=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go vet ./... )
   ( cd "$OPERATOR_DIR" && go mod verify )
-  pass "infra/feast-operator builds with no module proxy"
+  pass "infra/feast-operator builds and vets with no module proxy for ${goos}/${goarch}"
 }
 
 validate_image() {

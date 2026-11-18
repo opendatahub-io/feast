@@ -19,9 +19,10 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 ### Hermetic Build Preflight
 
 - Resolves the feature-server dependency closure with `uv pip compile` for the Konflux target platform (`x86_64-manylinux_2_34`, Python 3.12). `pip` alone cannot resolve this graph — it fails with `resolution-too-deep`, which is why the image installs with `uv`.
-- Populates an isolated `UV_CACHE_DIR`, deletes the venv, and installs again with `uv pip install --offline` against that cache only. That is the Python equivalent of a Hermeto prefetch: a dependency missing from the prefetched set fails here instead of in a hermetic build. The install phase runs on Linux only; other hosts get the resolution check.
+- Populates an isolated `UV_CACHE_DIR` from that resolved lock, deletes the venv, and then runs the image's own command (`uv pip install --offline -r requirements.txt`) against that cache only. That is the Python equivalent of a Hermeto prefetch: a dependency missing from the prefetched set fails here instead of in a hermetic build.
+- The install phase runs only on Linux hosts whose architecture matches the lock's target (`x86_64`). Anywhere else it reports a resolution-only run instead of claiming target-platform coverage; the `arm64` and `ppc64le` images are not install-tested here.
 - Copies `sdk/python/feast` over the installed package exactly as the Dockerfile does, then imports `feast.feature_server`, `feast.feature_store`, `feast.infra.registry`, and `feast.repo_config`. A syntax error or a missing module in the checkout is caught without waiting for an image build.
-- Populates the Go module cache for `infra/feast-operator`, then compiles with `GOPROXY=off` and `CGO_ENABLED=0`, mirroring the operator Dockerfile's build.
+- Populates the Go module cache for `infra/feast-operator`, then compiles and vets it for the Konflux target (`linux/amd64`) with `GOPROXY=off` and `CGO_ENABLED=0`, so a host-architecture build cannot stand in for the shipped one.
 - Runs `go mod verify` for the operator module.
 
 ### Static Validation Checks
@@ -43,7 +44,7 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 
 - Renders `config/default`, `config/overlays/{odh,rhoai,openshift}`, and `config/samples` with kustomize.
 - Rejects a Deployment that declares the same env var name twice. The API server keeps only the last value, so the rendered overlay and the effective configuration silently disagree — the mechanism behind RHOAIENG-57579, where `RELATED_IMAGE_CRON_JOB` was duplicated on the controller-manager Deployment.
-- Runs kubeconform in strict mode and fails when a Kubernetes built-in kind is skipped for a missing schema, which catches `Deploymnet`-style typos that `-ignore-missing-schemas` would otherwise hide.
+- Runs kubeconform in strict mode and fails on `statusInvalid` / `statusError` records, so a manifest with an unknown field or a wrong type cannot pass, and on skipped Kubernetes built-in kinds, which catches `Deploymnet`-style typos that `-ignore-missing-schemas` would otherwise hide. The report is requested with `-verbose` because `-output json` omits skipped resources without it.
 - No existing workflow builds these overlays, so a broken `resources:` entry currently only fails when the operator is installed.
 
 ### Check the operator flag contract
