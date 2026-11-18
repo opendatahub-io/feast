@@ -288,7 +288,6 @@ jobs:
             exit 0
           fi
 
-
           echo "| Check | Result |"
           echo "|-------|--------|"
           echo "| Hermetic Preflight | ${HERMETIC} |"
