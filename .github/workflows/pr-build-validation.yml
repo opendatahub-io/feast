@@ -106,7 +106,9 @@ jobs:
     permissions:
       contents: read
     needs: check-skip
-    if: needs.check-skip.outputs.should-skip != 'true'
+    if: |
+      needs.check-skip.outputs.should-skip != 'true' &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,7 +127,9 @@ jobs:
     permissions:
       contents: read
     needs: check-skip
-    if: needs.check-skip.outputs.should-skip != 'true'
+    if: |
+      needs.check-skip.outputs.should-skip != 'true' &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,7 +160,9 @@ jobs:
     permissions:
       contents: read
     needs: check-skip
-    if: needs.check-skip.outputs.should-skip != 'true'
+    if: |
+      needs.check-skip.outputs.should-skip != 'true' &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,7 +193,9 @@ jobs:
     permissions:
       contents: read
     needs: check-skip
-    if: needs.check-skip.outputs.should-skip != 'true'
+    if: |
+      needs.check-skip.outputs.should-skip != 'true' &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,7 +223,9 @@ jobs:
     permissions:
       contents: read
     needs: check-skip
-    if: needs.check-skip.outputs.should-skip != 'true'
+    if: |
+      needs.check-skip.outputs.should-skip != 'true' &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -273,6 +283,7 @@ jobs:
           IMAGE: ${{ needs.feature-server-image.result }}
           MANIFESTS: ${{ needs.manifest-validation.result }}
           OPERATOR: ${{ needs.operator-contract.result }}
+          DESCRIPTION_ONLY_EDIT: ${{ github.event.action == 'edited' && github.event.changes.title == null }}
         run: |
           set -euo pipefail
           echo "## Konflux Build Simulation Results"
@@ -285,6 +296,11 @@ jobs:
 
           if [ "$SKIP" = "true" ]; then
             echo "✅ Validation not required: ${REASON:-explicit skip}"
+            exit 0
+          fi
+
+          if [ "$DESCRIPTION_ONLY_EDIT" = "true" ]; then
+            echo "✅ Description-only edit: the jobs are unchanged and were not re-run."
             exit 0
           fi
 
