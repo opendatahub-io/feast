@@ -139,6 +139,15 @@ def test_connection_ref_openapi_schema(sql_repo_config, monkeypatch):
         openapi["paths"]["/v1/{project}/search"]["get"]["operationId"]
         == "searchDataRegistry"
     )
+    connection_assets = openapi["paths"][
+        "/v1/{project}/connections/{source}/{connection_id}/assets"
+    ]["get"]
+    assert connection_assets["operationId"] == "listConnectionAssets"
+    parameters = {
+        parameter["name"]: parameter for parameter in connection_assets["parameters"]
+    }
+    assert parameters["source"]["schema"]["const"] == "dch"
+    assert parameters["connection_id"]["schema"]["format"] == "uuid"
     assert "Catalog stores" not in schemas["DchConnectionRef"]["description"]
     assert "Catalog stores" not in schemas["RhaiConnectionRef"]["description"]
     assert dch["type"]["const"] == "dch"
