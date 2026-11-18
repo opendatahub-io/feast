@@ -10,11 +10,13 @@ set -euo pipefail
 #   odh-feast-operator   infra/feast-operator/Dockerfile
 #   odh-feast-mcp        sdk/python/feast/mcp/docker/Dockerfile
 #
-# This script validates the inputs Konflux consumes rather than repeating the
-# Kind/operator coverage that operator-e2e-integration-tests.yml already runs.
+# Most modes validate the inputs Konflux consumes. The `operator-e2e` mode goes
+# further and deploys the images built here into a Kind cluster, because
+# operator-e2e-integration-tests.yml builds the operator from source and never
+# exercises the image this PipelineRun produces.
 #
 # Usage:
-#   scripts/validate-build.sh <static|hermetic|manifests|operator|image|all>
+#   scripts/validate-build.sh <static|hermetic|manifests|operator|image|operator-e2e|all>
 #
 # Environment:
 #   FEATURE_SERVER_IMAGE  Local tag for the feature-server image
@@ -43,6 +45,9 @@ FEATURE_SERVER_PORT="${FEATURE_SERVER_PORT:-16566}"
 KUBECONFORM_BIN="${KUBECONFORM_BIN:-kubeconform}"
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.31.0}"
 MANIFEST_CONTRACT="${MANIFEST_CONTRACT:-scripts/manifest_contract.py}"
+OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-feast-operator-system}"
+OPERATOR_DEPLOYMENT="${OPERATOR_DEPLOYMENT:-feast-operator-controller-manager}"
+OPERAND_NAMESPACE="${OPERAND_NAMESPACE:-feast-sim-operand}"
 
 info() { printf 'ℹ️  %s\n' "$*"; }
 pass() { printf '✅ %s\n' "$*"; }
@@ -577,12 +582,153 @@ validate_image() {
   pass "MCP wrapper builds on the PR image and its entrypoint runs"
 }
 
+dump_operator_debug() {
+  echo "--- operator pods ---" >&2
+  kubectl -n "$OPERATOR_NAMESPACE" get pods -o wide >&2 || true
+  echo "--- operator logs (tail) ---" >&2
+  kubectl -n "$OPERATOR_NAMESPACE" logs -l control-plane=controller-manager --tail=80 >&2 || true
+  echo "--- operand pods ---" >&2
+  kubectl -n "$OPERAND_NAMESPACE" get pods -o wide >&2 || true
+  echo "--- operand events ---" >&2
+  kubectl -n "$OPERAND_NAMESPACE" get events --sort-by=.lastTimestamp >&2 | tail -30 || true
+}
+
+# validate_operator_e2e proves the Konflux-built operator image actually runs and
+# reconciles, and that the operand it renders is the Konflux-built feature server.
+#
+# The repository e2e suite does deploy an operator, but it builds that operator
+# from source (`DeployOperatorFromCode`), so a container-level break in the image
+# this PipelineRun publishes is invisible to it.
+#
+# The cluster teardown is explicit: a RETURN trap here would also fire when the
+# helper called by this function returns, and delete the cluster mid-run.
+validate_operator_e2e() {
+  local cluster="feast-sim-$$"
+  local rc=0
+
+  run_operator_e2e "$cluster" || rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    dump_operator_debug
+  fi
+
+  kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+
+  return "$rc"
+}
+
+run_operator_e2e() {
+  local cluster="$1"
+
+  info "Deploying the Konflux operator image and reconciling a FeatureStore..."
+  require_cmd docker
+  require_cmd kind
+  require_cmd kubectl
+
+  info "Building the Konflux operator image from $OPERATOR_DIR/Dockerfile..."
+  docker build --platform "$PLATFORM" \
+    --file "$OPERATOR_DIR/Dockerfile" \
+    --tag "$OPERATOR_IMAGE" \
+    "$OPERATOR_DIR"
+  pass "operator image built: $OPERATOR_IMAGE"
+
+  info "Building the Konflux feature-server image..."
+  docker build --platform "$PLATFORM" \
+    --file "$FEATURE_SERVER_DOCKERFILE" \
+    --tag "$FEATURE_SERVER_IMAGE" \
+    .
+  pass "feature-server image built: $FEATURE_SERVER_IMAGE"
+
+  info "Creating a Kind cluster..."
+  kind create cluster --name "$cluster" --wait 5m >/dev/null
+  pass "kind cluster $cluster is ready"
+
+  kind load docker-image "$OPERATOR_IMAGE" --name "$cluster" >/dev/null
+  kind load docker-image "$FEATURE_SERVER_IMAGE" --name "$cluster" >/dev/null
+  pass "both images are loaded into the cluster"
+
+  info "Installing the CRDs and deploying the operator with the PR images..."
+  ( cd "$OPERATOR_DIR" && make install >/dev/null )
+  ( cd "$OPERATOR_DIR" && make deploy IMG="$OPERATOR_IMAGE" FS_IMG="$FEATURE_SERVER_IMAGE" >/dev/null )
+
+  # A crash-looping container still satisfies "created", so wait on availability
+  # rather than on the object existing.
+  if ! kubectl -n "$OPERATOR_NAMESPACE" wait \
+    --for=condition=Available "deployment/$OPERATOR_DEPLOYMENT" --timeout=6m; then
+    err "the operator deployment did not become Available; the image does not run"
+    return 1
+  fi
+  pass "operator deployment is Available"
+
+  local deployed_operator_image
+  deployed_operator_image="$(kubectl -n "$OPERATOR_NAMESPACE" get deployment "$OPERATOR_DEPLOYMENT" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  if [ "$deployed_operator_image" != "$OPERATOR_IMAGE" ]; then
+    err "the running operator is '$deployed_operator_image', not '$OPERATOR_IMAGE'"
+    return 1
+  fi
+  pass "the running operator is the image built here"
+
+  info "Creating a FeatureStore so the operator has to reconcile..."
+  kubectl create namespace "$OPERAND_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -n "$OPERAND_NAMESPACE" -f - >/dev/null <<'MANIFEST'
+apiVersion: feast.dev/v1
+kind: FeatureStore
+metadata:
+  name: konflux-sim
+spec:
+  feastProject: konflux_sim
+  services:
+    offlineStore:
+      server: {}
+    registry:
+      local:
+        server: {}
+MANIFEST
+  pass "FeatureStore/konflux-sim created"
+
+  # The operand deployments are what the operator renders from the CR. If the
+  # operator cannot reconcile, or renders an image that is not the one built
+  # here, this never becomes Available.
+  if ! kubectl -n "$OPERAND_NAMESPACE" wait \
+    --for=condition=Available deployment --all --timeout=10m; then
+    err "the operand deployments did not become Available; the operator did not reconcile"
+    return 1
+  fi
+  pass "every operand deployment is Available"
+
+  local images
+  images="$(kubectl -n "$OPERAND_NAMESPACE" get pods \
+    -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}')"
+
+  if ! printf '%s\n' "$images" | grep -qx "$FEATURE_SERVER_IMAGE"; then
+    err "no operand pod runs the feature-server image built here ($FEATURE_SERVER_IMAGE):"
+    printf '%s\n' "$images" | sed 's/^/   /'
+    return 1
+  fi
+  pass "the operand runs the feature-server image built here"
+
+  local restarts
+  restarts="$(kubectl -n "$OPERAND_NAMESPACE" get pods \
+    -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.restartCount}{"\n"}{end}{end}' \
+    | awk '{sum += $1} END {print sum + 0}')"
+  if [ "$restarts" -gt 2 ]; then
+    err "operand containers restarted $restarts times; the image is not stable"
+    return 1
+  fi
+  pass "operand containers are stable ($restarts restarts)"
+
+  pass "the Konflux operator image reconciles and ships the Konflux feature server"
+  return 0
+}
+
 case "$MODE" in
   static)    validate_static ;;
   hermetic)  validate_hermetic_python; validate_hermetic_go ;;
   manifests) validate_manifests ;;
   operator)  validate_operator_contract ;;
   image)     validate_image ;;
+  operator-e2e) validate_operator_e2e ;;
   all)       validate_static; validate_hermetic_python; validate_hermetic_go; validate_manifests; validate_operator_contract; validate_image ;;
   *)
     err "Unknown mode: $MODE"

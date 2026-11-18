@@ -40,6 +40,38 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 - Imports `feast` and `feast.feature_server` inside the running container, proving the checkout overlay is importable in the shipped image.
 - Builds the MCP wrapper (`sdk/python/feast/mcp/docker/Dockerfile`) on top of the freshly built feature-server image, with `BASE_IMAGE`/`BASE_TAG` pointed at it, and runs its `feast mcp --help` entrypoint. Konflux builds the MCP image against the published base tag, so this is where a broken wrapper or a missing `feast mcp` entrypoint shows up first.
 
+### Deploy the Konflux Operator Image to Kind
+
+The repository already has an operator e2e suite, but it calls
+`DeployOperatorFromCode`, which builds the operator from the checkout. A defect
+that only exists in the published image — a broken entrypoint, a missing
+binary, a bad environment contract — is invisible to it.
+
+This job closes that gap:
+
+- Builds the operator from `infra/feast-operator/Dockerfile` and the feature
+  server from the Konflux feature-server Dockerfile, the same inputs each
+  PipelineRun consumes.
+- Creates a Kind cluster and loads both images into it, so nothing is pulled
+  from a registry.
+- Deploys the operator with `IMG` and `FS_IMG` pointed at those images, then
+  waits for `deployment/feast-operator-controller-manager` to become Available.
+  A crash-looping container satisfies "created" but not "Available".
+- Asserts the running operator deployment references the image that was built
+  here, not a stale tag or a default.
+- Creates a `FeatureStore` and waits for every operand deployment to become
+  Available, then asserts an operand pod runs the feature-server image built
+  here. That proves the operator reconciled and rendered the PR image rather
+  than an unrelated default.
+
+On failure it dumps operator logs, operand pods, and operand events before
+deleting the cluster.
+
+The existing `operator-e2e-integration-tests.yml` runs the full e2e suite. It no
+longer waits for an `ok-to-test`/`approved`/`lgtm` label: it triggers on any PR
+that touches `infra/**` or the feature-server sources, because it is the only
+suite that exercises the operator against a live cluster.
+
 ### Validate Manifests
 
 - Renders `config/default`, `config/overlays/{odh,rhoai,openshift}`, and `config/samples` with kustomize.
@@ -69,6 +101,7 @@ Prerequisites: Docker, Go 1.26+, `uv`, Python 3.12, `curl`, and `jq`. `manifests
 ./scripts/validate-build.sh manifests
 ./scripts/validate-build.sh operator
 ./scripts/validate-build.sh image
+./scripts/validate-build.sh operator-e2e   # needs docker, kind and kubectl
 ```
 
 `static` and `manifests` finish in seconds. `manifests` needs `PyYAML`. `hermetic` takes about a minute to resolve the closure and warm the prefetch cache. `operator` and `image` need a Docker daemon; `operator` builds only the operator image, `image` builds the full feature-server image plus the MCP wrapper.
