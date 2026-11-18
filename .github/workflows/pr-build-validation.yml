@@ -29,13 +29,12 @@ permissions:
   contents: read
 
 concurrency:
-  # New commits supersede an in-flight validation: synchronize runs share one
-  # group per PR and cancel what is running. Metadata edits (body only) are
-  # queued in a separate group so they cannot displace pending validation --
-  # GitHub cancels any *pending* run when another run joins its group, even
-  # with cancel-in-progress set to false. Title and base edits stay in the
-  # validation group because they change the skip decision or the diff base.
-  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'edited' && github.event.changes.title == null && github.event.changes.base == null && 'metadata' || 'validation' }}
+  # One group per PR: a new commit cancels the run in flight, so two image
+  # builds for the same PR never race. Metadata edits do not cancel anything
+  # because cancel-in-progress is synchronize-only, and every run executes the
+  # full validator set, so a queued edit can only replace pending work with the
+  # same validation of the same revision.
+  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 env:

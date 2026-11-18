@@ -332,15 +332,18 @@ validate_manifests() {
     "$KUBECONFORM_BIN" -strict -ignore-missing-schemas -verbose \
       -kubernetes-version "$KUBERNETES_VERSION" -output json "$file" > "${file}.json" || status=$?
 
-    local violations=""
-    if [ -s "${file}.json" ]; then
-      violations="$(jq -r '
-        .resources[] | select(.status == "statusInvalid" or .status == "statusError")
-        | "  \(.kind) \(.name) (\(.version)): \(.msg)"' "${file}.json")" || {
-        err "could not parse the kubeconform report for $(basename "$file")"
-        exit 1
-      }
+    if [ ! -s "${file}.json" ]; then
+      err "kubeconform produced no report for $(basename "$file") (exit ${status}); refusing to pass without schema results"
+      exit 1
     fi
+
+    local violations
+    violations="$(jq -r '
+      .resources[] | select(.status == "statusInvalid" or .status == "statusError")
+      | "  \(.kind) \(.name) (\(.version)): \(.msg)"' "${file}.json")" || {
+      err "could not parse the kubeconform report for $(basename "$file")"
+      exit 1
+    }
 
     if [ -n "$violations" ] || [ "$status" -ne 0 ]; then
       err "kubeconform rejected $(basename "$file") (exit ${status}):"
@@ -349,16 +352,17 @@ validate_manifests() {
     fi
 
     local bad
-    # kubeconform ships no schema for CustomResourceDefinition itself, so a
-    # CRD is always reported as skipped. Everything else in a built-in group
-    # that gets skipped is a typo until proven otherwise.
+    # kubeconform ships no schema for CustomResourceDefinition itself, so the
+    # current API version is always reported as skipped. Everything else in a
+    # built-in group that gets skipped is a typo or an API version that no
+    # longer exists.
     bad="$(jq -r '
       .resources[] | select(.status == "statusSkipped")
       | . as $r
       | (if ($r.version | contains("/")) then ($r.version | split("/")[0]) else "" end) as $g
       | select(
           ($g == "" or ($g | endswith(".k8s.io")) or ($g | IN("apps", "batch", "policy", "autoscaling", "extensions")))
-          and (($g != "apiextensions.k8s.io") or ($r.kind != "CustomResourceDefinition"))
+          and (($r.version != "apiextensions.k8s.io/v1") or ($r.kind != "CustomResourceDefinition"))
         )
       | "  \($r.kind) (\($r.version))"' "${file}.json")"
 
@@ -465,14 +469,19 @@ validate_hermetic_python() (
 
   export UV_CACHE_DIR="${tmp}/uv-cache"
 
+  # --python-platform keeps wheel selection at the image's glibc level
+  # (UBI 9 is manylinux_2_34); without it a newer-glibc runner can prefer a
+  # wheel the image cannot use and the cache would miss the one it needs.
   info "Populating the prefetch cache from the resolved ${platform} lock..."
   uv venv "${tmp}/v1" --python "$pyver" --quiet
-  uv pip install --python "${tmp}/v1/bin/python" --requirement "$lock" --quiet
+  uv pip install --python "${tmp}/v1/bin/python" --python-platform "$platform" \
+    --requirement "$lock" --quiet
 
   info "Installing requirements.txt with --offline from that cache only..."
   rm -rf "${tmp}/v1"
   uv venv "${tmp}/v2" --python "$pyver" --quiet
-  uv pip install --offline --python "${tmp}/v2/bin/python" --requirement "$FEATURE_SERVER_REQUIREMENTS" --quiet
+  uv pip install --offline --python "${tmp}/v2/bin/python" --python-platform "$platform" \
+    --requirement "$FEATURE_SERVER_REQUIREMENTS" --quiet
   pass "requirements.txt installs with no network"
 
   # Mirror the Dockerfile overlay: the checkout must be importable on top of
@@ -489,16 +498,24 @@ validate_hermetic_go() {
 
   local goos goarch
   goos="${PLATFORM%%/*}"
-  goarch="${PLATFORM##*/}"
+  goarch="${PLATFORM#*/}"
+  goarch="${goarch%%/*}"
+  if [ "$goarch" = "$PLATFORM" ]; then
+    err "PLATFORM must be os/arch (got ${PLATFORM})"
+    exit 1
+  fi
   case "$goarch" in
     x86_64) goarch=amd64 ;;
     aarch64) goarch=arm64 ;;
   esac
   info "Proving the operator builds with GOPROXY=off for ${goos}/${goarch}..."
 
+  # GONOPROXY=none removes the direct-VCS fallback: with only GOPROXY=off a
+  # module matching GONOPROXY/GOPRIVATE could still be fetched over the network
+  # and the preflight would pass without the module being in the cache.
   ( cd "$OPERATOR_DIR" && go mod download )
-  ( cd "$OPERATOR_DIR" && GOPROXY=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build ./... )
-  ( cd "$OPERATOR_DIR" && GOPROXY=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go vet ./... )
+  ( cd "$OPERATOR_DIR" && GOPROXY=off GONOPROXY=none GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build ./... )
+  ( cd "$OPERATOR_DIR" && GOPROXY=off GONOPROXY=none GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go vet ./... )
   ( cd "$OPERATOR_DIR" && go mod verify )
   pass "infra/feast-operator builds and vets with no module proxy for ${goos}/${goarch}"
 }
