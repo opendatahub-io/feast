@@ -29,16 +29,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}
-  # Label/title edits must re-evaluate the skip decision, but they must not
-  # cancel an in-flight build. Only new commits supersede a running validation.
+  # New commits supersede an in-flight validation: synchronize runs share one
+  # group per PR and cancel what is running. Metadata edits (body only) are
+  # queued in a separate group so they cannot displace pending validation --
+  # GitHub cancels any *pending* run when another run joins its group, even
+  # with cancel-in-progress set to false. Title and base edits stay in the
+  # validation group because they change the skip decision or the diff base.
+  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}-${{ github.event.action == 'edited' && github.event.changes.title == null && github.event.changes.base == null && 'metadata' || 'validation' }}
   cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 env:
   GO_VERSION: '1.26.0'
   UV_VERSION: '0.13.4'
   KUSTOMIZE_VERSION: '5.7.1'
+  # Digests published with the kustomize_v5.7.1_linux_amd64.tar.gz release asset.
+  KUSTOMIZE_SHA256: 'ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8'
   KUBECONFORM_VERSION: '0.7.0'
+  # Digest published in the kubeconform-linux-amd64.tar.gz release CHECKSUMS.
+  KUBECONFORM_SHA256: 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3'
   KUBERNETES_VERSION: '1.31.0'
   PLATFORM: linux/amd64
   FEATURE_SERVER_IMAGE: quay.io/opendatahub/feature-server:pr-${{ github.sha }}
@@ -139,10 +147,10 @@ jobs:
           cache: false
 
       - name: Install uv
-        run: |
-          set -euo pipefail
-          curl -LsSf https://astral.sh/uv/install.sh | env UV_VERSION="${UV_VERSION}" sh
-          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
 
       - name: Prove prefetched inputs are sufficient
         run: |
@@ -227,11 +235,13 @@ jobs:
           set -euo pipefail
           curl -fsSL -o /tmp/kustomize.tar.gz \
             "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$KUSTOMIZE_SHA256" /tmp/kustomize.tar.gz | sha256sum --check --strict
           tar -xzf /tmp/kustomize.tar.gz -C /tmp
           sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
 
           curl -fsSL -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          printf '%s  %s\n' "$KUBECONFORM_SHA256" /tmp/kubeconform.tar.gz | sha256sum --check --strict
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp
           sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
 
