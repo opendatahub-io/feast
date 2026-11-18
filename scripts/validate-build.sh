@@ -349,11 +349,17 @@ validate_manifests() {
     fi
 
     local bad
+    # kubeconform ships no schema for CustomResourceDefinition itself, so a
+    # CRD is always reported as skipped. Everything else in a built-in group
+    # that gets skipped is a typo until proven otherwise.
     bad="$(jq -r '
       .resources[] | select(.status == "statusSkipped")
       | . as $r
       | (if ($r.version | contains("/")) then ($r.version | split("/")[0]) else "" end) as $g
-      | select($g == "" or ($g | endswith(".k8s.io")) or ($g | IN("apps", "batch", "policy", "autoscaling", "extensions")))
+      | select(
+          ($g == "" or ($g | endswith(".k8s.io")) or ($g | IN("apps", "batch", "policy", "autoscaling", "extensions")))
+          and (($g != "apiextensions.k8s.io") or ($r.kind != "CustomResourceDefinition"))
+        )
       | "  \($r.kind) (\($r.version))"' "${file}.json")"
 
     if [ -n "$bad" ]; then
