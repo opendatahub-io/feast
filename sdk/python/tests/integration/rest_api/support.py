@@ -1,8 +1,11 @@
 import json
 import shlex
+import socket
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
+from typing import Iterator
 
 from kubernetes import client
 
@@ -116,6 +119,53 @@ def run_oc_command(args):
         print(f"Error running oc command: {' '.join(args)}")
         print(e.stderr)
         return None
+
+
+@contextmanager
+def port_forward_service(namespace: str, service_name: str) -> Iterator[str]:
+    """Expose an OpenShift HTTPS service locally for the duration of a test fixture."""
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        local_port = listener.getsockname()[1]
+
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            "--address=127.0.0.1",
+            f"service/{service_name}",
+            f"{local_port}:443",
+            "-n",
+            namespace,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(50):
+            if process.poll() is not None:
+                error = process.stderr.read().strip() if process.stderr else ""
+                raise RuntimeError(f"kubectl port-forward exited: {error}")
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=0.2):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            raise RuntimeError("kubectl port-forward did not start within 10 seconds")
+
+        yield f"https://127.0.0.1:{local_port}"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        if process.stderr:
+            process.stderr.close()
 
 
 def validate_feature_store_cr_status(
