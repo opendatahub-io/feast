@@ -445,7 +445,7 @@ validate_hermetic_python() (
   local site
   site="$("${tmp}/v2/bin/python" -c 'import os, feast; print(os.path.dirname(feast.__file__))')"
   cp -R sdk/python/feast/. "$site/"
-  "${tmp}/v2/bin/python" -c 'import feast.feature_server, feast.registry, feast.repo_config; print("overlay imports OK")'
+  "${tmp}/v2/bin/python" -c 'import feast.feature_server, feast.feature_store, feast.infra.registry, feast.repo_config; print("overlay imports OK")'
   pass "sdk/python/feast overlays cleanly onto the resolved environment"
 )
 

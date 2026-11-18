@@ -20,7 +20,7 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 
 - Resolves the feature-server dependency closure with `uv pip compile` for the Konflux target platform (`x86_64-manylinux_2_34`, Python 3.12). `pip` alone cannot resolve this graph — it fails with `resolution-too-deep`, which is why the image installs with `uv`.
 - Populates an isolated `UV_CACHE_DIR`, deletes the venv, and installs again with `uv pip install --offline` against that cache only. That is the Python equivalent of a Hermeto prefetch: a dependency missing from the prefetched set fails here instead of in a hermetic build. The install phase runs on Linux only; other hosts get the resolution check.
-- Copies `sdk/python/feast` over the installed package exactly as the Dockerfile does, then imports `feast.feature_server`, `feast.registry`, and `feast.repo_config`. A syntax error or a missing module in the checkout is caught without waiting for an image build.
+- Copies `sdk/python/feast` over the installed package exactly as the Dockerfile does, then imports `feast.feature_server`, `feast.feature_store`, `feast.infra.registry`, and `feast.repo_config`. A syntax error or a missing module in the checkout is caught without waiting for an image build.
 - Populates the Go module cache for `infra/feast-operator`, then compiles with `GOPROXY=off` and `CGO_ENABLED=0`, mirroring the operator Dockerfile's build.
 - Runs `go mod verify` for the operator module.
 
