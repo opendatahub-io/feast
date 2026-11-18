@@ -42,8 +42,15 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 ### Validate Manifests
 
 - Renders `config/default`, `config/overlays/{odh,rhoai,openshift}`, and `config/samples` with kustomize.
+- Rejects a Deployment that declares the same env var name twice. The API server keeps only the last value, so the rendered overlay and the effective configuration silently disagree — the mechanism behind RHOAIENG-57579, where `RELATED_IMAGE_CRON_JOB` was duplicated on the controller-manager Deployment.
 - Runs kubeconform in strict mode and fails when a Kubernetes built-in kind is skipped for a missing schema, which catches `Deploymnet`-style typos that `-ignore-missing-schemas` would otherwise hide.
 - No existing workflow builds these overlays, so a broken `resources:` entry currently only fails when the operator is installed.
+
+### Check the operator flag contract
+
+- Extracts the flags the `controller-manager` Deployment passes in the `odh` and `rhoai` overlays.
+- Builds `infra/feast-operator/Dockerfile`, runs the resulting binary with `--help`, and fails if the overlay passes a flag the binary does not define.
+- This is the mechanism behind RHOAIENG-100779: the overlay passed `--metrics-cert-path`, the operand image did not define it, and the container exited during flag parsing instead of reconciling. Nothing else in either repository compares the rendered manifest against the binary it starts.
 
 ## What this does not cover
 
@@ -59,7 +66,8 @@ Prerequisites: Docker, Go 1.26+, `uv`, Python 3.12, `curl`, and `jq`. `manifests
 ./scripts/validate-build.sh static
 ./scripts/validate-build.sh hermetic
 ./scripts/validate-build.sh manifests
+./scripts/validate-build.sh operator
 ./scripts/validate-build.sh image
 ```
 
-`static` and `manifests` finish in seconds. `hermetic` takes about a minute to resolve the closure and warm the prefetch cache. `image` needs a Docker daemon and builds the full feature-server image.
+`static` and `manifests` finish in seconds. `manifests` needs `PyYAML`. `hermetic` takes about a minute to resolve the closure and warm the prefetch cache. `operator` and `image` need a Docker daemon; `operator` builds only the operator image, `image` builds the full feature-server image plus the MCP wrapper.
