@@ -43,10 +43,10 @@ env:
   UV_VERSION: '0.13.4'
   KUSTOMIZE_VERSION: '5.7.1'
   # Digests published with the kustomize_v5.7.1_linux_amd64.tar.gz release asset.
-  KUSTOMIZE_SHA256: 'ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8'
+  KUSTOMIZE_SHA256: 'ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8'  # pragma: allowlist secret
   KUBECONFORM_VERSION: '0.7.0'
   # Digest published in the kubeconform-linux-amd64.tar.gz release CHECKSUMS.
-  KUBECONFORM_SHA256: 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3'
+  KUBECONFORM_SHA256: 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3'  # pragma: allowlist secret
   KUBERNETES_VERSION: '1.31.0'
   PLATFORM: linux/amd64
   FEATURE_SERVER_IMAGE: quay.io/opendatahub/feature-server:pr-${{ github.sha }}
