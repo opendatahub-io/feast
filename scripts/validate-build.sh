@@ -14,7 +14,7 @@ set -euo pipefail
 # Kind/operator coverage that operator-e2e-integration-tests.yml already runs.
 #
 # Usage:
-#   scripts/validate-build.sh <static|hermetic|manifests|image|all>
+#   scripts/validate-build.sh <static|hermetic|manifests|operator|image|all>
 #
 # Environment:
 #   FEATURE_SERVER_IMAGE  Local tag for the feature-server image
@@ -25,6 +25,7 @@ set -euo pipefail
 #   KUBECONFORM_BIN       kubeconform binary (default kubeconform)
 #   KUBERNETES_VERSION    Kubernetes schema version for kubeconform
 #   SKIP_MCP=1            Skip the MCP wrapper build
+#   SKIP_OPERATOR=1       Skip the operator flag-contract check
 
 MODE="${1:-all}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,10 +37,12 @@ OPERATOR_DIR="${OPERATOR_DIR:-infra/feast-operator}"
 MCP_DOCKERFILE="${MCP_DOCKERFILE:-sdk/python/feast/mcp/docker/Dockerfile}"
 FEATURE_SERVER_IMAGE="${FEATURE_SERVER_IMAGE:-quay.io/opendatahub/feature-server:pr-validation}"
 MCP_IMAGE="${MCP_IMAGE:-quay.io/opendatahub/odh-feast-mcp:pr-validation}"
+OPERATOR_IMAGE="${OPERATOR_IMAGE:-quay.io/opendatahub/feast-operator:pr-validation}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 FEATURE_SERVER_PORT="${FEATURE_SERVER_PORT:-16566}"
 KUBECONFORM_BIN="${KUBECONFORM_BIN:-kubeconform}"
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.31.0}"
+MANIFEST_CONTRACT="${MANIFEST_CONTRACT:-scripts/manifest_contract.py}"
 
 info() { printf 'ℹ️  %s\n' "$*"; }
 pass() { printf '✅ %s\n' "$*"; }
@@ -305,6 +308,17 @@ validate_manifests() {
     fi
   done
 
+  info "Checking rendered manifests for duplicate env var names..."
+  if python3 -c 'import yaml' >/dev/null 2>&1; then
+    if ! python3 "$MANIFEST_CONTRACT" duplicate-env "${out_dir}"/*.yaml; then
+      err "duplicate env var names in rendered manifests — the API server keeps only the last value"
+      exit 1
+    fi
+    pass "no duplicate env var names in rendered manifests"
+  else
+    warn "PyYAML not installed; skipping duplicate env var check"
+  fi
+
   if ! command -v "$KUBECONFORM_BIN" >/dev/null 2>&1; then
     warn "kubeconform not installed; skipping schema validation"
     return
@@ -331,6 +345,60 @@ validate_manifests() {
   done
 
   pass "kubeconform schema validation passed"
+}
+
+validate_operator_contract() {
+  info "Checking that the operator overlay only passes flags the binary defines..."
+  require_cmd docker
+
+  if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+    warn "PyYAML not installed; skipping operator flag-contract check"
+    return
+  fi
+
+  local out_dir
+  out_dir="$(mktemp -d)"
+
+  if (cd "$OPERATOR_DIR" && run_kustomize config/overlays/rhoai) > "${out_dir}/rhoai.yaml" &&
+     (cd "$OPERATOR_DIR" && run_kustomize config/overlays/odh) > "${out_dir}/odh.yaml"; then
+    pass "rendered operator overlays for flag extraction"
+  else
+    err "kustomize build failed while rendering the operator overlays"
+    exit 1
+  fi
+
+  python3 "$MANIFEST_CONTRACT" manager-flags "${out_dir}/rhoai.yaml" "${out_dir}/odh.yaml"     | sort -u > "${out_dir}/used.txt"
+
+  if [ ! -s "${out_dir}/used.txt" ]; then
+    warn "no flags found on the controller-manager container; nothing to compare"
+    return
+  fi
+
+  info "Building the operator image to read its flag set..."
+  docker build --platform "$PLATFORM" \
+    --file "$OPERATOR_DIR/Dockerfile" \
+    --tag "$OPERATOR_IMAGE" \
+    "$OPERATOR_DIR"
+
+  docker run --rm --platform "$PLATFORM" "$OPERATOR_IMAGE" --help     > "${out_dir}/help.txt" 2>&1 || true
+
+  if [ ! -s "${out_dir}/help.txt" ]; then
+    err "operator binary produced no --help output; cannot verify the flag contract"
+    exit 1
+  fi
+
+  python3 "$MANIFEST_CONTRACT" help-flags "${out_dir}/help.txt" | sort -u > "${out_dir}/known.txt"
+
+  local missing
+  missing="$(comm -23 "${out_dir}/used.txt" "${out_dir}/known.txt")"
+  if [ -n "$missing" ]; then
+    err "operator overlay passes flag(s) the binary does not define:"
+    printf '%s\n' "$missing"
+    err "the container would exit during flag parsing (see RHOAIENG-100779)"
+    exit 1
+  fi
+
+  pass "every flag passed by the operator overlays is defined by the binary"
 }
 
 validate_hermetic_python() (
@@ -452,11 +520,12 @@ case "$MODE" in
   static)    validate_static ;;
   hermetic)  validate_hermetic_python; validate_hermetic_go ;;
   manifests) validate_manifests ;;
+  operator)  validate_operator_contract ;;
   image)     validate_image ;;
-  all)       validate_static; validate_hermetic_python; validate_hermetic_go; validate_manifests; validate_image ;;
+  all)       validate_static; validate_hermetic_python; validate_hermetic_go; validate_manifests; validate_operator_contract; validate_image ;;
   *)
     err "Unknown mode: $MODE"
-    echo "Usage: $0 <static|hermetic|manifests|image|all>" >&2
+    echo "Usage: $0 <static|hermetic|manifests|operator|image|all>" >&2
     exit 2
     ;;
 esac

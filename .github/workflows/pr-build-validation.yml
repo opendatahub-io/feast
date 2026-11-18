@@ -11,7 +11,8 @@ name: PR Build Validation
 # operator-e2e-integration-tests runs the Kind e2e for infra/** changes. This
 # workflow covers what neither of them does: the dependency inputs a hermetic
 # build must prefetch, the operator overlays that are never kustomize-built,
-# and the rest of sdk/python/feast/** that the image overlays at build time.
+# the rest of sdk/python/feast/** that the image overlays at build time, and
+# the flag contract between the operator overlay and the operator binary.
 #
 # Skip with "[skip konflux-sim]" in the PR title or the "skip-konflux-sim" label.
 
@@ -68,7 +69,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          RELEVANT='^(sdk/python/|infra/|Dockerfiles/|\.tekton/|Makefile|pyproject\.toml|pixi\.lock|uv\.lock|go\.(mod|sum)|scripts/validate-build\.sh|\.github/workflows/(pr-build-validation|docker_smoke_tests|publish_images|operator-e2e-integration-tests)\.yml)'
+          RELEVANT='^(sdk/python/|infra/|Dockerfiles/|\.tekton/|Makefile|pyproject\.toml|pixi\.lock|uv\.lock|go\.(mod|sum)|scripts/(validate-build\.sh|manifest_contract\.py)|\.github/workflows/(pr-build-validation|docker_smoke_tests|publish_images|operator-e2e-integration-tests)\.yml)'
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -148,6 +149,37 @@ jobs:
           set -euo pipefail
           ./scripts/validate-build.sh hermetic
 
+  operator-contract:
+    name: Check operator overlay flags against the operator binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --user pyyaml \
+            || sudo apt-get install -y python3-yaml
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build the operator and verify its flag contract
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh operator
+
   feature-server-image:
     name: Build and run the Konflux feature-server image
     runs-on: ubuntu-latest
@@ -206,6 +238,12 @@ jobs:
           kustomize version
           kubeconform -v
 
+      - name: Install PyYAML
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --user pyyaml \
+            || sudo apt-get install -y python3-yaml
+
       - name: Validate kustomize builds and schemas
         run: |
           set -euo pipefail
@@ -222,6 +260,7 @@ jobs:
       - static-validation
       - feature-server-image
       - manifest-validation
+      - operator-contract
     if: always()
     steps:
       - name: Check results
@@ -233,6 +272,7 @@ jobs:
           STATIC: ${{ needs.static-validation.result }}
           IMAGE: ${{ needs.feature-server-image.result }}
           MANIFESTS: ${{ needs.manifest-validation.result }}
+          OPERATOR: ${{ needs.operator-contract.result }}
         run: |
           set -euo pipefail
           echo "## Konflux Build Simulation Results"
@@ -254,10 +294,11 @@ jobs:
           echo "| Static Validation | ${STATIC} |"
           echo "| Feature Server Image | ${IMAGE} |"
           echo "| Manifests | ${MANIFESTS} |"
+          echo "| Operator Flag Contract | ${OPERATOR} |"
           echo ""
 
           failed=false
-          for result in "$HERMETIC" "$STATIC" "$IMAGE" "$MANIFESTS"; do
+          for result in "$HERMETIC" "$STATIC" "$IMAGE" "$MANIFESTS" "$OPERATOR"; do
             if [ "$result" != "success" ]; then
               failed=true
             fi
