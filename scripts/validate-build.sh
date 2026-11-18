@@ -245,6 +245,36 @@ check_dockerfile_hygiene() {
   fi
 }
 
+check_makefile_env_shadowing() {
+  info "Checking that workflow env vars cannot shadow a Makefile variable..."
+  local workflow=".github/workflows/pr-build-validation.yml"
+
+  if [ ! -f "$workflow" ]; then
+    warn "$workflow not found; cannot check for env shadowing"
+    return
+  fi
+
+  # Keys two spaces deep under a top-level `env:` block.
+  local keys
+  keys="$(awk '/^env:/{inside=1; next} /^[^ #]/{inside=0} inside && /^  [A-Z0-9_]+:/{sub(/:.*/, ""); sub(/^  /, ""); print}' "$workflow")"
+
+  local key shadows=""
+  for key in $keys; do
+    if grep -rEq "^${key}[[:space:]]*[:?+]*=" --include=Makefile . 2>/dev/null; then
+      shadows="$shadows $key"
+    fi
+  done
+
+  if [ -n "$shadows" ]; then
+    err "workflow-level env var(s) are also defined in a Makefile:$shadows"
+    err "  An exported value beats 'VAR ?=', so make silently uses the workflow value"
+    err "  instead of the Makefile default. Prefix simulator variables with SIM_."
+    exit 1
+  fi
+
+  pass "no workflow env var shadows a Makefile variable"
+}
+
 check_workflow_trigger_coverage() {
   info "Checking whether existing workflows build the image for sdk/python/feast changes..."
   local smoke=".github/workflows/docker_smoke_tests.yml"
@@ -272,6 +302,7 @@ validate_static() {
   require_cmd awk
 
   check_konflux_targets
+  check_makefile_env_shadowing
   check_python_inputs
   check_go_inputs
   check_dockerfile_hygiene

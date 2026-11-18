@@ -32,6 +32,7 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 - Checks `go.mod` / `go.sum` for both modules, warns about `replace` directives that a prefetch would need to resolve.
 - Verifies every `COPY` source in the feature-server Dockerfile exists in the build context, that the image still overlays `sdk/python/feast` from the checkout, and that `.dockerignore` does not exclude it.
 - Warns about FIPS release blockers (operator built without `-tags strictfipsruntime`), about `curl | sh` at build time (which a hermetic build cannot run), and about workflow trigger gaps in the existing smoke/e2e workflows.
+- Fails if a workflow-level `env:` var is also defined in a `Makefile`. An exported value beats `VAR ?=`, so `KUSTOMIZE_VERSION: '5.7.1'` in this workflow overrode the operator Makefile's `v5.4.3` and made `make deploy` fail with `invalid version: unknown revision 5.7.1`. Simulator variables are therefore prefixed `SIM_`.
 
 ### Build and Validate the Feature Server Image
 

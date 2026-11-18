@@ -40,10 +40,14 @@ concurrency:
 env:
   GO_VERSION: '1.26.0'
   UV_VERSION: '0.13.4'
-  KUSTOMIZE_VERSION: '5.7.1'
+  # Prefixed so it cannot shadow a Makefile variable. `infra/feast-operator`
+  # sets `KUSTOMIZE_VERSION ?= v5.4.3`, and an exported value beats `?=`, so a
+  # plain KUSTOMIZE_VERSION here broke `make deploy` with
+  # `invalid version: unknown revision 5.7.1`.
+  SIM_KUSTOMIZE_VERSION: '5.7.1'
   # Digests published with the kustomize_v5.7.1_linux_amd64.tar.gz release asset.
   KUSTOMIZE_SHA256: 'ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8'  # pragma: allowlist secret
-  KUBECONFORM_VERSION: '0.7.0'
+  SIM_KUBECONFORM_VERSION: '0.7.0'
   # Digest published in the kubeconform-linux-amd64.tar.gz release CHECKSUMS.
   KUBECONFORM_SHA256: 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3'  # pragma: allowlist secret
   KUBERNETES_VERSION: '1.31.0'
@@ -262,13 +266,13 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/kustomize.tar.gz \
-            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${SIM_KUSTOMIZE_VERSION}/kustomize_v${SIM_KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
           printf '%s  %s\n' "$KUSTOMIZE_SHA256" /tmp/kustomize.tar.gz | sha256sum --check --strict
           tar -xzf /tmp/kustomize.tar.gz -C /tmp
           sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
 
           curl -fsSL -o /tmp/kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+            "https://github.com/yannh/kubeconform/releases/download/v${SIM_KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           printf '%s  %s\n' "$KUBECONFORM_SHA256" /tmp/kubeconform.tar.gz | sha256sum --check --strict
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp
           sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
