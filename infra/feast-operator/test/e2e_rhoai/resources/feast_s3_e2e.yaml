@@ -1,0 +1,47 @@
+# Standalone S3 registry e2e (not the upgrade suite).
+# Placeholders substituted at test time:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, AWS_S3_BUCKET
+kind: Secret
+apiVersion: v1
+metadata:
+  name: s3-credentials-secret
+  namespace: test-ns-feast-s3
+stringData:
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+  dynamodb: |
+    type: dynamodb
+    region: ${AWS_DEFAULT_REGION}
+    table_name_template: "midstream-e2e.{project}.{table_name}"
+---
+apiVersion: feast.dev/v1
+kind: FeatureStore
+metadata:
+  name: test-s3
+  namespace: test-ns-feast-s3
+  labels:
+    feature-store-ui: enabled
+spec:
+  feastProject: driver_ranking
+  services:
+    onlineStore:
+      persistence:
+        store:
+          type: dynamodb
+          secretRef:
+            name: s3-credentials-secret
+      server:
+        envFrom:
+          - secretRef:
+              name: s3-credentials-secret
+    registry:
+      local:
+        persistence:
+          file:
+            path: s3://${AWS_S3_BUCKET}/feast-test/midstream-e2e/registry.pb
+        server:
+          envFrom:
+          - secretRef:
+              name: s3-credentials-secret
+          restAPI: true
