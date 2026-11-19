@@ -65,6 +65,45 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 	return nil
 }
 
+// dumpDeploymentDiagnostics prints what the cluster knows about a deployment
+// that failed to become available.
+//
+// This has to run inside the test, before the failure returns: every spec
+// deletes its namespaces in DeferCleanup, so anything the workflow prints
+// afterwards sees an empty cluster. That is how the remote-registry timeout
+// produced a debug dump containing no Feast pods and no operator logs.
+func dumpDeploymentDiagnostics(namespace string, deploymentName string) {
+	fmt.Printf("\n=== diagnostics: deployment %s/%s ===\n", namespace, deploymentName)
+
+	runKubectl := func(args ...string) {
+		cmd := exec.Command("kubectl", args...)
+		out, err := cmd.CombinedOutput()
+		fmt.Printf("\n--- kubectl %s\n%s", strings.Join(args, " "), out)
+		if err != nil {
+			fmt.Printf("(command failed: %v)\n", err)
+		}
+	}
+
+	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
+	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
+
+	podsCmd := exec.Command("kubectl", "get", "pods", "-n", namespace, "-o", "name")
+	podList, _ := podsCmd.Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(podList)), "\n") {
+		pod := strings.TrimPrefix(strings.TrimSpace(line), "pod/")
+		if pod == "" {
+			continue
+		}
+		runKubectl("describe", "pod", pod, "-n", namespace)
+		runKubectl("logs", pod, "-n", namespace, "--all-containers", "--tail=100")
+	}
+
+	runKubectl("get", "networkpolicies", "-n", namespace, "-o", "yaml")
+	runKubectl("get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+	runKubectl("logs", "-n", FeastControllerNamespace,
+		"deploy/"+ControllerDeploymentName, "--tail=200")
+}
+
 // CheckIfDeploymentExistsAndAvailable - validates if a deployment exists and also in the availability state as True.
 func CheckIfDeploymentExistsAndAvailable(namespace string, deploymentName string, timeout time.Duration) error {
 	var output, errOutput bytes.Buffer
@@ -306,6 +345,8 @@ func validateTheFeatureStoreCustomResource(namespace string, featureStoreName st
 		By(fmt.Sprintf("validate the feast deployment: %s is up and in availability state.", deploymentName))
 		err = CheckIfDeploymentExistsAndAvailable(namespace, deploymentName, timeout)
 		if err != nil {
+			// Capture pod state, logs and events while the namespace still exists.
+			dumpDeploymentDiagnostics(namespace, deploymentName)
 			if reconcileErr := checkFeatureStoreReconcileError(namespace, featureStoreName); reconcileErr != nil {
 				Fail(fmt.Sprintf(
 					"Deployment %s not available due to FeatureStore reconciliation error: %v",
