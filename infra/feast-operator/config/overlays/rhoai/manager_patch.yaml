@@ -12,12 +12,15 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --metrics-bind-address=:8443
-          - --metrics-cert-path=/etc/metrics-certs
         securityContext:
           readOnlyRootFilesystem: true
         volumeMounts:
           - name: metrics-cert
-            mountPath: /etc/metrics-certs
+            # controller-runtime's default certificate directory. Mounting the
+            # service-ca secret here needs no flag, so the overlay works with
+            # every released operand image and not only the ones built with
+            # --metrics-cert-path support.
+            mountPath: /tmp/k8s-metrics-server/serving-certs
             readOnly: true
       volumes:
         - name: metrics-cert
