@@ -631,21 +631,45 @@ dump_operator_debug() {
 # from source (`DeployOperatorFromCode`), so a container-level break in the image
 # this PipelineRun publishes is invisible to it.
 #
-# The cluster teardown is explicit: a RETURN trap here would also fire when the
-# helper called by this function returns, and delete the cluster mid-run.
-validate_operator_e2e() {
-  local cluster="feast-sim-$$"
-  local rc=0
+# Teardown runs from an EXIT trap in `validate_operator_e2e`.
+OPERATOR_E2E_CLUSTER=""
 
-  run_operator_e2e "$cluster" || rc=$?
+cleanup_operator_e2e() {
+  local rc=$?
+
+  trap - EXIT
 
   if [ "$rc" -ne 0 ]; then
     dump_operator_debug
   fi
 
-  kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  if [ -n "$OPERATOR_E2E_CLUSTER" ]; then
+    kind delete cluster --name "$OPERATOR_E2E_CLUSTER" >/dev/null 2>&1 || true
+  fi
 
-  return "$rc"
+  rm -f "${KUBECONFIG:-}"
+
+  exit "$rc"
+}
+
+validate_operator_e2e() {
+  OPERATOR_E2E_CLUSTER="feast-sim-$$"
+
+  # A throwaway kubeconfig. If `kind create cluster` fails, `make install` and
+  # `make deploy` must not fall through to whatever context the caller has.
+  KUBECONFIG="$(mktemp)"
+  export KUBECONFIG
+
+  # Cleanup via EXIT, not RETURN: a RETURN trap also fires when a helper called
+  # from this function returns, which would delete the cluster mid-run. EXIT also
+  # covers SIGINT/SIGTERM, which would otherwise leak the cluster.
+  trap cleanup_operator_e2e EXIT
+
+  # Called directly, never as the left side of `||`. Bash disables errexit for
+  # the whole body of a function evaluated in that position, so a failed image
+  # build would be ignored and a stale image with the same tag could be loaded
+  # and pass.
+  run_operator_e2e "$OPERATOR_E2E_CLUSTER"
 }
 
 run_operator_e2e() {
@@ -718,25 +742,27 @@ spec:
 MANIFEST
   pass "FeatureStore/konflux-sim created"
 
-  # `kubectl wait --all` fails with "no matching resources found" when the set is
-  # empty, which is the state right after the CR is applied, so wait for the
-  # operator to create something first.
+  # Wait on the operator's own overall signal rather than on a set of Deployments
+  # that may be incomplete. `kubectl wait --all` fails with "no matching
+  # resources found" on an empty set, and it only covers what exists when it
+  # starts, so a workload created a moment later is never waited on. Phase
+  # `Ready` means the operator has rendered and reconciled everything the CR
+  # asks for.
   local deadline=$((SECONDS + 600))
-  while [ -z "$(kubectl -n "$OPERAND_NAMESPACE" get deployment -o name 2>/dev/null)" ]; do
+  until [ "$(kubectl -n "$OPERAND_NAMESPACE" get featurestore konflux-sim \
+    -o jsonpath='{.status.phase}' 2>/dev/null)" = "Ready" ]; do
     if [ "$SECONDS" -ge "$deadline" ]; then
-      err "the operator created no operand deployments within 10 minutes"
+      err "FeatureStore/konflux-sim did not reach phase Ready within 10 minutes"
+      kubectl -n "$OPERAND_NAMESPACE" get featurestore konflux-sim -o yaml >&2 || true
       return 1
     fi
     sleep 5
   done
-  pass "the operator created operand deployments"
+  pass "FeatureStore/konflux-sim reached phase Ready"
 
-  # The operand deployments are what the operator renders from the CR. If the
-  # operator cannot reconcile, or renders an image that is not the one built
-  # here, this never becomes Available.
   if ! kubectl -n "$OPERAND_NAMESPACE" wait \
-    --for=condition=Available deployment --all --timeout=10m; then
-    err "the operand deployments did not become Available"
+    --for=condition=Available deployment --all --timeout=5m; then
+    err "an operand deployment is not Available even though the CR reports Ready"
     return 1
   fi
   pass "every operand deployment is Available"

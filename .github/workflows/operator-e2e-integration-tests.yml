@@ -27,6 +27,10 @@ jobs:
     # feature-server it renders.
     if: github.repository == 'feast-dev/feast' || github.repository == 'opendatahub-io/feast'
     runs-on: ubuntu-latest
+    # Unlabelled PRs now reach this job, so keep its token read-only instead of
+    # inheriting the repository default.
+    permissions:
+      contents: read
 
     services:
       kind:
