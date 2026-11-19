@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +66,21 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 	return nil
 }
 
+const diagnosticCommandTimeout = 30 * time.Second
+
+func kubectlWithTimeout(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), diagnosticCommandTimeout)
+	defer cancel()
+
+	// CombinedOutput keeps whatever the command wrote before the deadline
+	// fired, so a timed-out dump still prints the partial state.
+	out, err := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s", diagnosticCommandTimeout)
+	}
+	return out, err
+}
+
 // dumpDeploymentDiagnostics prints what the cluster knows about a deployment
 // that failed to become available.
 //
@@ -72,12 +88,15 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 // deletes its namespaces in DeferCleanup, so anything the workflow prints
 // afterwards sees an empty cluster. That is how the remote-registry timeout
 // produced a debug dump containing no Feast pods and no operator logs.
+//
+// Every call is bounded. Without a deadline one kubectl that never returns
+// blocks this helper, the ginkgo teardown queued behind it and the whole run,
+// whose only outer bound is the suite-wide go test timeout.
 func dumpDeploymentDiagnostics(namespace string, deploymentName string) {
 	fmt.Printf("\n=== diagnostics: deployment %s/%s ===\n", namespace, deploymentName)
 
 	runKubectl := func(args ...string) {
-		cmd := exec.Command("kubectl", args...)
-		out, err := cmd.CombinedOutput()
+		out, err := kubectlWithTimeout(args...)
 		fmt.Printf("\n--- kubectl %s\n%s", strings.Join(args, " "), out)
 		if err != nil {
 			fmt.Printf("(command failed: %v)\n", err)
@@ -87,8 +106,7 @@ func dumpDeploymentDiagnostics(namespace string, deploymentName string) {
 	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
 	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
 
-	podsCmd := exec.Command("kubectl", "get", "pods", "-n", namespace, "-o", "name")
-	podList, _ := podsCmd.Output()
+	podList, _ := kubectlWithTimeout("get", "pods", "-n", namespace, "-o", "name")
 	for _, line := range strings.Split(strings.TrimSpace(string(podList)), "\n") {
 		pod := strings.TrimPrefix(strings.TrimSpace(line), "pod/")
 		if pod == "" {
