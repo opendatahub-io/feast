@@ -116,11 +116,11 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 	ctx, cancel := context.WithTimeout(context.Background(), diagnosticBudget)
 	defer cancel()
 
-	runKubectl := func(args ...string) ([]byte, error) {
+	runKubectl := func(args ...string) []byte {
 		if ctx.Err() != nil {
 			fmt.Printf("\n--- kubectl %s\n(skipped: diagnostic budget exhausted after %s)\n",
 				strings.Join(args, " "), diagnosticBudget)
-			return nil, ctx.Err()
+			return nil
 		}
 
 		stdout, stderr, err := kubectlWithTimeout(ctx, args...)
@@ -139,16 +139,17 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 		}
 		if err != nil {
 			fmt.Printf("(command failed: %v)\n", err)
+			return nil
 		}
-		return stdout, err
+		return stdout
 	}
 
 	runKubectl("get", FeatureStoreResourceName, featureStoreName, "-n", namespace, "-o", "yaml")
 	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
 	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
 
-	podListJSON, err := runKubectl("get", "pods", "-n", namespace, "-o", "json")
-	if err == nil {
+	podListJSON := runKubectl("get", "pods", "-n", namespace, "-o", "json")
+	if podListJSON != nil {
 		var podList corev1.PodList
 		if parseErr := json.Unmarshal(podListJSON, &podList); parseErr != nil {
 			fmt.Printf("(failed to parse pod list: %v)\n", parseErr)
