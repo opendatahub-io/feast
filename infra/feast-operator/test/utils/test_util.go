@@ -2,18 +2,21 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/feast-dev/feast/infra/feast-operator/api/feastversion"
 	feastdevv1 "github.com/feast-dev/feast/infra/feast-operator/api/v1"
@@ -63,6 +66,140 @@ func checkIfFeatureStoreCustomResourceConditionsInReady(featureStoreName, namesp
 	}
 
 	return nil
+}
+
+const (
+	diagnosticBudget         = 90 * time.Second
+	diagnosticCommandTimeout = 15 * time.Second
+)
+
+func kubectlWithTimeout(ctx context.Context, args ...string) ([]byte, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("diagnostic budget exhausted: %w", err)
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, diagnosticCommandTimeout)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(commandCtx, "kubectl", args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	// Keep whatever each stream wrote before the deadline fired, so a
+	// timed-out dump still prints the partial state.
+	if ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("diagnostic budget exhausted after %s", diagnosticBudget)
+	} else if commandCtx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("timed out after %s", diagnosticCommandTimeout)
+	}
+	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+// dumpDeploymentDiagnostics prints what the cluster knows about a deployment
+// that failed to become available.
+//
+// This has to run inside the test, before Ginkgo/AfterAll teardown. The base
+// namespace is deleted in AfterAll, while the remote-registry namespace uses
+// DeferCleanup, so anything the workflow prints afterwards sees an empty
+// cluster. That is how the remote-registry timeout produced a debug dump
+// containing no Feast pods and no operator logs.
+//
+// All commands share one diagnostic budget, and each command has a shorter
+// deadline. Without those bounds one kubectl that never returns, or several
+// slow calls in a pod-heavy namespace, blocks the ginkgo teardown queued
+// behind this helper and the whole run.
+func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploymentName string) {
+	fmt.Printf("\n=== diagnostics: deployment %s/%s ===\n", namespace, deploymentName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), diagnosticBudget)
+	defer cancel()
+
+	runKubectl := func(args ...string) []byte {
+		if ctx.Err() != nil {
+			fmt.Printf("\n--- kubectl %s\n(skipped: diagnostic budget exhausted after %s)\n",
+				strings.Join(args, " "), diagnosticBudget)
+			return nil
+		}
+
+		stdout, stderr, err := kubectlWithTimeout(ctx, args...)
+		fmt.Printf("\n--- kubectl %s\n", strings.Join(args, " "))
+		if len(stdout) > 0 {
+			fmt.Printf("%s", stdout)
+			if stdout[len(stdout)-1] != '\n' {
+				fmt.Println()
+			}
+		}
+		if len(stderr) > 0 {
+			fmt.Printf("[stderr]\n%s", stderr)
+			if stderr[len(stderr)-1] != '\n' {
+				fmt.Println()
+			}
+		}
+		if err != nil {
+			fmt.Printf("(command failed: %v)\n", err)
+			return nil
+		}
+		return stdout
+	}
+
+	runKubectl("get", FeatureStoreResourceName, featureStoreName, "-n", namespace, "-o", "yaml")
+	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
+	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
+
+	podListJSON := runKubectl("get", "pods", "-n", namespace, "-o", "json")
+	if podListJSON != nil {
+		var podList corev1.PodList
+		if parseErr := json.Unmarshal(podListJSON, &podList); parseErr != nil {
+			fmt.Printf("(failed to parse pod list: %v)\n", parseErr)
+		} else {
+			for i := range podList.Items {
+				if ctx.Err() != nil {
+					fmt.Printf("\n(skipping remaining pod diagnostics: diagnostic budget exhausted after %s)\n",
+						diagnosticBudget)
+					break
+				}
+				pod := podList.Items[i]
+				runKubectl("describe", "pod", pod.Name, "-n", namespace)
+				runKubectl("logs", pod.Name, "-n", namespace,
+					"--all-containers", "--tail=100", "--ignore-errors", "--prefix")
+				for _, container := range containersWithPreviousLogs(pod) {
+					runKubectl("logs", pod.Name, "-n", namespace, "--container", container,
+						"--tail=100", "--ignore-errors", "--prefix", "--previous")
+				}
+			}
+		}
+	} else {
+		fmt.Println("(skipping pod details because the pod list failed)")
+	}
+
+	runKubectl("get", "networkpolicies", "-n", namespace, "-o", "yaml")
+	runKubectl("get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+	runKubectl("logs", "-n", FeastControllerNamespace,
+		"deploy/"+ControllerDeploymentName, "--tail=200")
+}
+
+func containersWithPreviousLogs(pod corev1.Pod) []string {
+	containers := make(map[string]struct{})
+	addRestartedContainers := func(statuses []corev1.ContainerStatus) {
+		for _, status := range statuses {
+			if status.RestartCount > 0 || status.LastTerminationState.Terminated != nil {
+				containers[status.Name] = struct{}{}
+			}
+		}
+	}
+
+	addRestartedContainers(pod.Status.InitContainerStatuses)
+	addRestartedContainers(pod.Status.ContainerStatuses)
+	addRestartedContainers(pod.Status.EphemeralContainerStatuses)
+
+	names := make([]string, 0, len(containers))
+	for name := range containers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // CheckIfDeploymentExistsAndAvailable - validates if a deployment exists and also in the availability state as True.
@@ -306,6 +443,8 @@ func validateTheFeatureStoreCustomResource(namespace string, featureStoreName st
 		By(fmt.Sprintf("validate the feast deployment: %s is up and in availability state.", deploymentName))
 		err = CheckIfDeploymentExistsAndAvailable(namespace, deploymentName, timeout)
 		if err != nil {
+			// Capture pod state, logs and events while the namespace still exists.
+			dumpDeploymentDiagnostics(namespace, featureStoreName, deploymentName)
 			if reconcileErr := checkFeatureStoreReconcileError(namespace, featureStoreName); reconcileErr != nil {
 				Fail(fmt.Sprintf(
 					"Deployment %s not available due to FeatureStore reconciliation error: %v",
