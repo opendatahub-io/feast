@@ -27,10 +27,11 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 
 ### Static Validation Checks
 
-- Parses every Konflux pull-request PipelineRun and verifies that its `path-context` / `dockerfile` pair points at a real file, so a renamed or moved Dockerfile fails the PR that renames it.
+- Requires exactly the three image-build PipelineRuns, rejects unexpected pull-request pipelines, and verifies that each `path-context` / `dockerfile` pair points at a real file.
+- Requires every image build to declare exactly `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`; a missing or additional platform fails the check.
 - Requires every feature-server requirement to be pinned with `==`, and keeps the `feast[...] == X` pin on line 2 because release CI rewrites that line.
 - Checks `go.mod` / `go.sum` for both modules, warns about `replace` directives that a prefetch would need to resolve.
-- Verifies every `COPY` source in the feature-server Dockerfile exists in the build context, that the image still overlays `sdk/python/feast` from the checkout, and that `.dockerignore` does not exclude it.
+- Verifies every `COPY` source in the feature-server Dockerfile exists in the build context, that the image still overlays `sdk/python/feast` from the checkout, and that `.dockerignore` does not exclude it. A `.dockerignore`-only PR is treated as validation-relevant.
 - Warns about FIPS release blockers (operator built without `-tags strictfipsruntime`), about `curl | sh` at build time (which a hermetic build cannot run), and about workflow trigger gaps in the existing smoke/e2e workflows.
 - Fails if a workflow-level `env:` var is also defined in a `Makefile`. An exported value beats `VAR ?=`, so `KUSTOMIZE_VERSION: '5.7.1'` in this workflow overrode the operator Makefile's `v5.4.3` and made `make deploy` fail with `invalid version: unknown revision 5.7.1`. Simulator variables are therefore prefixed `SIM_`.
 
@@ -39,7 +40,7 @@ All three build for `linux/x86_64`, `linux/arm64`, and `linux/ppc64le`.
 - Builds the exact Konflux Dockerfile for `linux/amd64`.
 - Starts the image with `infra/scripts/feature_server_docker_smoke.py` and waits for `GET /health`.
 - Imports `feast` and `feast.feature_server` inside the running container, proving the checkout overlay is importable in the shipped image.
-- Builds the MCP wrapper (`sdk/python/feast/mcp/docker/Dockerfile`) on top of the freshly built feature-server image, with `BASE_IMAGE`/`BASE_TAG` pointed at it, and runs its `feast mcp --help` entrypoint. Konflux builds the MCP image against the published base tag, so this is where a broken wrapper or a missing `feast mcp` entrypoint shows up first.
+- Builds the MCP wrapper (`sdk/python/feast/mcp/docker/Dockerfile`) on top of the freshly built feature-server image, with `BASE_IMAGE`/`BASE_TAG` pointed at it and the same `PLATFORM`, then runs its `feast mcp --help` entrypoint. Konflux builds the MCP image against the published base tag, so this is where a broken wrapper or a missing `feast mcp` entrypoint shows up first.
 
 ### Deploy the Konflux Operator Image to Kind
 
@@ -68,10 +69,10 @@ This job closes that gap:
 On failure it dumps operator logs, operand pods, and operand events before
 deleting the cluster.
 
-The existing `operator-e2e-integration-tests.yml` runs the full e2e suite. It no
-longer waits for an `ok-to-test`/`approved`/`lgtm` label: it triggers on any PR
-that touches `infra/**` or the feature-server sources, because it is the only
-suite that exercises the operator against a live cluster.
+The existing `operator-e2e-integration-tests.yml` remains label-gated and
+scoped to `infra/**`. This PR does not change that workflow or its timeout; the
+simulator job above is independent and runs for every Konflux-relevant PR
+unless the explicit skip marker or label is used.
 
 ### Validate Manifests
 
@@ -84,7 +85,19 @@ suite that exercises the operator against a live cluster.
 
 - Extracts the flags the `controller-manager` Deployment passes in the `odh` and `rhoai` overlays.
 - Builds `infra/feast-operator/Dockerfile`, runs the resulting binary with `--help`, and fails if the overlay passes a flag the binary does not define.
-- This is the mechanism behind RHOAIENG-100779: the overlay passed `--metrics-cert-path`, the operand image did not define it, and the container exited during flag parsing instead of reconciling. Nothing else in either repository compares the rendered manifest against the binary it starts.
+- This compares the rendered overlays with the binary built from the
+  current checkout. It detects overlay/source drift in this repository, but it
+  does **not** compare against the released image selected by `params.env`.
+  RHOAIENG-100779 was version skew between the overlay and the pinned image
+  (`--metrics-cert-path` existed in source but not in the shipped operator), so
+  this check alone does not catch that failure mode.
+
+### Required-check status
+
+`Build Validation Summary` is the workflow's aggregate status check. It is
+currently advisory: the repository does not have branch protection or Tide
+configured to require that exact check. Maintainers must add it to the branch
+protection/Tide rules before it can block a merge by itself.
 
 ## What this does not cover
 
@@ -94,7 +107,7 @@ suite that exercises the operator against a live cluster.
 
 ## Running locally
 
-Prerequisites: Docker, Go 1.26+, `uv`, Python 3.12, `curl`, and `jq`. `manifests` needs kustomize (or `kubectl`) and optionally kubeconform.
+Prerequisites: Docker, Go 1.26+, `uv`, Python 3.12, `curl`, and `jq`. `manifests` needs either kustomize or `kubectl`, plus optionally kubeconform. `operator` needs Docker unless `SKIP_OPERATOR=1` is set for a local run.
 
 ```bash
 ./scripts/validate-build.sh static
@@ -105,4 +118,4 @@ Prerequisites: Docker, Go 1.26+, `uv`, Python 3.12, `curl`, and `jq`. `manifests
 ./scripts/validate-build.sh operator-e2e   # needs docker, kind and kubectl
 ```
 
-`static` and `manifests` finish in seconds. `manifests` needs `PyYAML`. `hermetic` takes about a minute to resolve the closure and warm the prefetch cache. `operator` and `image` need a Docker daemon; `operator` builds only the operator image, `image` builds the full feature-server image plus the MCP wrapper.
+`static` and `manifests` finish in seconds. `manifests` needs `PyYAML` for the duplicate-env check. `hermetic` takes about a minute to resolve the closure and warm the prefetch cache. `operator` and `image` need a Docker daemon; `operator` builds only the operator image, and `image` builds the full feature-server image plus the MCP wrapper.

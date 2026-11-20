@@ -22,7 +22,7 @@ on:
       - main
       - master
       - 'release-*'
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -81,7 +81,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          RELEVANT='^(sdk/python/|infra/|Dockerfiles/|\.tekton/|Makefile|pyproject\.toml|pixi\.lock|uv\.lock|go\.(mod|sum)|scripts/(validate-build\.sh|manifest_contract\.py)|\.github/workflows/(pr-build-validation|docker_smoke_tests|publish_images|operator-e2e-integration-tests)\.yml)'
+          RELEVANT='^(sdk/python/|infra/|Dockerfiles/|\.dockerignore|\.tekton/|Makefile|pyproject\.toml|pixi\.lock|uv\.lock|go\.(mod|sum)|scripts/(validate-build\.sh|manifest_contract\.py)|\.github/workflows/(pr-build-validation|docker_smoke_tests|publish_images|operator-e2e-integration-tests)\.yml)'
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
