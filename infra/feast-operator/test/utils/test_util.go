@@ -21,10 +21,7 @@ import (
 
 const (
 	FeastControllerNamespace = "feast-operator-system"
-	// Image pulls on a cold cluster dominate the wait, and the suite now runs
-	// on every pull request rather than behind a label, so keep headroom for a
-	// slow registry without letting a genuine failure hang much longer.
-	Timeout                  = 5 * time.Minute
+	Timeout                  = 3 * time.Minute
 	ControllerDeploymentName = "feast-operator-controller-manager"
 	FeastPrefix              = "feast-"
 	FeatureStoreName         = "simple-feast-setup"

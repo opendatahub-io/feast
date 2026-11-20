@@ -27,7 +27,7 @@ set -euo pipefail
 #   KUBECONFORM_BIN       kubeconform binary (default kubeconform)
 #   KUBERNETES_VERSION    Kubernetes schema version for kubeconform
 #   SKIP_MCP=1            Skip the MCP wrapper build
-#   SKIP_OPERATOR=1       Skip the operator flag-contract check
+#   SKIP_OPERATOR=1       Skip the operator flag-contract check (local runs only)
 
 MODE="${1:-all}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,21 +77,49 @@ param_value() {
   ' "$1"
 }
 
+param_list_values() {
+  awk -v key="$2" '
+    $0 ~ "^[[:space:]]*- name: " key "$" { found = 1; in_value = 0; next }
+    found && /^[[:space:]]*- name:/ { exit }
+    found && /^[[:space:]]*value:/ { in_value = 1; next }
+    found && in_value && /^[[:space:]]*-[[:space:]]*/ {
+      sub(/^[[:space:]]*-[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      next
+    }
+    found && in_value && /^[[:space:]]*[^[:space:]-]/ { exit }
+  ' "$1"
+}
+
 check_konflux_targets() {
   info "Checking Konflux PipelineRun build targets..."
-  local found=0
-  local pr base context dockerfile
+  local expected=(
+    odh-feature-server-pull-request.yaml
+    odh-feast-operator-pull-request.yaml
+    odh-feast-mcp-pull-request.yaml
+  )
+  local expected_names=" ${expected[*]} "
+  local matches=(.tekton/*pull-request.yaml)
+  local pr base context dockerfile platform platforms platform_count platform_count_valid
 
-  for pr in .tekton/*pull-request.yaml; do
-    [ -e "$pr" ] || continue
+  if [ ! -e "${matches[0]}" ]; then
+    static_error "No Konflux pull-request PipelineRuns were found"
+    return
+  fi
+
+  if [ "${#matches[@]}" -ne "${#expected[@]}" ]; then
+    static_error "Expected exactly ${#expected[@]} Konflux pull-request PipelineRuns, found ${#matches[@]}"
+  fi
+
+  for pr in "${matches[@]}"; do
     base="$(basename "$pr")"
 
-    # Early-gate and group-test pipelines are CI harnesses, not image builds.
-    case "$base" in
-      early-gate*|*group-test*|*nightly*) continue ;;
+    case "$expected_names" in
+      *" $base "*) ;;
+      *) static_error "$pr: unexpected Konflux pull-request PipelineRun" ;;
     esac
 
-    found=$((found + 1))
     context="$(param_value "$pr" path-context)"
     dockerfile="$(param_value "$pr" dockerfile)"
 
@@ -101,22 +129,36 @@ check_konflux_targets() {
     fi
 
     context="${context:-.}"
-
     if [ ! -f "${context%/}/${dockerfile}" ]; then
       static_error "$pr: Dockerfile ${context%/}/${dockerfile} does not exist"
       continue
     fi
 
-    if ! grep -q 'build-platforms' "$pr"; then
-      warn "$pr: no build-platforms parameter; Konflux falls back to linux/x86_64 only"
+    platforms="$(param_list_values "$pr" build-platforms)"
+    platform_count="$(printf '%s\n' "$platforms" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+    platform_count_valid=true
+    if [ "$platform_count" -ne 3 ]; then
+      static_error "$pr: expected exactly 3 build platforms, found ${platform_count}"
+      platform_count_valid=false
+    fi
+    for platform in linux/x86_64 linux/arm64 linux/ppc64le; do
+      if ! grep -Fxq "$platform" <<< "$platforms"; then
+        static_error "$pr: missing build platform $platform"
+        platform_count_valid=false
+      fi
+    done
+    if [ "$platform_count_valid" = "true" ]; then
+      pass "$pr: builds linux/x86_64, linux/arm64, and linux/ppc64le"
     fi
 
     pass "$pr -> ${context%/}/${dockerfile}"
   done
 
-  if [ "$found" -eq 0 ]; then
-    static_error "No Konflux pull-request PipelineRuns with an image build were found"
-  fi
+  for base in "${expected[@]}"; do
+    if [ ! -f ".tekton/$base" ]; then
+      static_error "Missing Konflux pull-request PipelineRun: .tekton/$base"
+    fi
+  done
 }
 
 check_python_inputs() {
@@ -275,25 +317,46 @@ check_makefile_env_shadowing() {
   pass "no workflow env var shadows a Makefile variable"
 }
 
+workflow_paths() {
+  awk '
+    /^[[:space:]]*paths:[[:space:]]*$/ { in_paths = 1; next }
+    in_paths && /^[[:space:]]*[^#[:space:]-]/ { exit }
+    in_paths && /^[[:space:]]*-[[:space:]]*/ {
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      gsub(/^"|"$/, "", line)
+      print line
+    }
+  ' "$1"
+}
+
+workflow_has_path() {
+  local paths
+  paths="$(workflow_paths "$1")"
+  grep -Fxq "$2" <<< "$paths"
+}
+
 check_workflow_trigger_coverage() {
   info "Checking whether existing workflows build the image for sdk/python/feast changes..."
   local smoke=".github/workflows/docker_smoke_tests.yml"
+  local operator_e2e=".github/workflows/operator-e2e-integration-tests.yml"
 
   if [ ! -f "$smoke" ]; then
     warn "$smoke not found; cannot compare trigger coverage"
     return
   fi
 
-  if grep -q '"sdk/python/feast/\*\*"' "$smoke"; then
+  if workflow_has_path "$smoke" "sdk/python/feast/**"; then
     pass "docker-smoke-tests covers sdk/python/feast/**"
   else
     warn "docker-smoke-tests only triggers on a narrow path set; changes elsewhere under sdk/python/feast/** are not built by it (this workflow covers them)"
   fi
 
-  if grep -q "sdk/python/feast" .github/workflows/operator-e2e-integration-tests.yml 2>/dev/null; then
+  if workflow_has_path "$operator_e2e" "sdk/python/feast/**"; then
     pass "operator e2e triggers on sdk/python/feast changes"
   else
-    warn "operator e2e only triggers on infra/**; feature-server changes are not exercised through the operator there"
+    warn "operator e2e remains label-gated and triggers on infra/** only; feature-server changes are covered here, not through the operator e2e"
   fi
 }
 
@@ -327,7 +390,11 @@ run_kustomize() {
 
 validate_manifests() {
   info "Validating operator kustomize overlays..."
-  require_cmd kubectl
+  if ! command -v "${KUSTOMIZE_BIN:-kustomize}" >/dev/null 2>&1 &&
+     ! command -v kubectl >/dev/null 2>&1; then
+    err "manifests requires either kustomize or kubectl"
+    exit 1
+  fi
 
   local out_dir
   out_dir="$(mktemp -d)"
@@ -414,6 +481,12 @@ validate_manifests() {
 
 validate_operator_contract() {
   info "Checking that the operator overlay only passes flags the binary defines..."
+
+  if [ "${SKIP_OPERATOR:-0}" = "1" ]; then
+    warn "SKIP_OPERATOR=1; not checking the operator flag contract"
+    return
+  fi
+
   require_cmd docker
 
   if ! python3 -c 'import yaml' >/dev/null 2>&1; then
@@ -432,7 +505,8 @@ validate_operator_contract() {
     exit 1
   fi
 
-  python3 "$MANIFEST_CONTRACT" manager-flags "${out_dir}/rhoai.yaml" "${out_dir}/odh.yaml"     | sort -u > "${out_dir}/used.txt"
+  python3 "$MANIFEST_CONTRACT" manager-flags "${out_dir}/rhoai.yaml" "${out_dir}/odh.yaml" \
+    | sort -u > "${out_dir}/used.txt"
 
   if [ ! -s "${out_dir}/used.txt" ]; then
     warn "no flags found on the controller-manager container; nothing to compare"
@@ -445,7 +519,15 @@ validate_operator_contract() {
     --tag "$OPERATOR_IMAGE" \
     "$OPERATOR_DIR"
 
-  docker run --rm --platform "$PLATFORM" "$OPERATOR_IMAGE" --help     > "${out_dir}/help.txt" 2>&1 || true
+  local help_status=0
+  docker run --rm --platform "$PLATFORM" "$OPERATOR_IMAGE" --help \
+    > "${out_dir}/help.txt" 2>&1 || help_status=$?
+
+  if [ "$help_status" -ne 0 ]; then
+    err "operator binary --help failed (exit ${help_status}):"
+    sed -n '1,80p' "${out_dir}/help.txt" >&2
+    exit 1
+  fi
 
   if [ ! -s "${out_dir}/help.txt" ]; then
     err "operator binary produced no --help output; cannot verify the flag contract"
@@ -556,17 +638,17 @@ validate_hermetic_go() {
   pass "infra/feast-operator builds and vets with no module proxy for ${goos}/${goarch}"
 }
 
-validate_image() {
+validate_image() (
   info "Building the Konflux feature-server image..."
   require_cmd docker
 
   docker build --platform "$PLATFORM" \
     --file "$FEATURE_SERVER_DOCKERFILE" \
     --tag "$FEATURE_SERVER_IMAGE" \
-    . 
+    .
 
   local container="feast-sim-$$"
-  trap 'docker rm -f "${container:-}" >/dev/null 2>&1 || true' RETURN
+  trap 'docker rm -f "${container:-}" >/dev/null 2>&1 || true' EXIT
 
   info "Starting the feature server..."
   docker run -d --rm --name "$container" \
@@ -575,8 +657,8 @@ validate_image() {
     -v "${REPO_ROOT}/infra/scripts/feature_server_docker_smoke.py:/smoke.py:ro" \
     "$FEATURE_SERVER_IMAGE" python /smoke.py >/dev/null
 
-  local ready=false i
-  for i in $(seq 1 60); do
+  local ready=false
+  for _ in $(seq 1 60); do
     if curl -fsS "http://localhost:${FEATURE_SERVER_PORT}/health" >/dev/null 2>&1; then
       ready=true
       break
@@ -595,6 +677,7 @@ validate_image() {
   pass "image imports the overlaid feast package"
 
   docker rm -f "$container" >/dev/null 2>&1 || true
+  trap - EXIT
 
   if [ "${SKIP_MCP:-0}" = "1" ]; then
     warn "SKIP_MCP=1; not building the MCP wrapper"
@@ -602,16 +685,16 @@ validate_image() {
   fi
 
   info "Building the MCP wrapper on top of the PR feature-server image..."
-  docker build \
+  docker build --platform "$PLATFORM" \
     --file "$MCP_DOCKERFILE" \
     --build-arg "BASE_IMAGE=${FEATURE_SERVER_IMAGE%:*}" \
     --build-arg "BASE_TAG=${FEATURE_SERVER_IMAGE##*:}" \
     --tag "$MCP_IMAGE" \
     .
 
-  docker run --rm "$MCP_IMAGE" --help >/dev/null
+  docker run --rm --platform "$PLATFORM" "$MCP_IMAGE" --help >/dev/null
   pass "MCP wrapper builds on the PR image and its entrypoint runs"
-}
+)
 
 dump_operator_debug() {
   echo "--- operator pods ---" >&2
@@ -802,7 +885,7 @@ case "$MODE" in
   all)       validate_static; validate_hermetic_python; validate_hermetic_go; validate_manifests; validate_operator_contract; validate_image ;;
   *)
     err "Unknown mode: $MODE"
-    echo "Usage: $0 <static|hermetic|manifests|operator|image|all>" >&2
+    echo "Usage: $0 <static|hermetic|manifests|operator|image|operator-e2e|all>" >&2
     exit 2
     ;;
 esac
