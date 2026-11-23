@@ -63,6 +63,30 @@ class UpdateNamespacePropertiesResponse(BaseModel):
     missing: list[str]
 
 
+class RenameNamespaceRequest(BaseModel):
+    """Rename one collection. ``newNamespace`` matches CreateNamespaceRequest."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    new_namespace: list[str] = Field(
+        alias="newNamespace",
+        min_length=1,
+        max_length=1,
+    )
+
+
+class MoveAssetRequest(BaseModel):
+    """Move one asset to an existing collection. The asset's display name is kept."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    destination_namespace: list[str] = Field(
+        alias="destinationNamespace",
+        min_length=1,
+        max_length=1,
+    )
+
+
 class TableIdentifier(BaseModel):
     namespace: list[str]
     name: str

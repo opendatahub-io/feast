@@ -70,6 +70,13 @@ class NoSuchVolumeException(IcebergRESTException):
     error_type = "NoSuchVolumeException"
 
 
+class NoSuchAssetException(IcebergRESTException):
+    """Catalog asset (table or volume) is not in the source collection."""
+
+    http_status = 404
+    error_type = "NoSuchAssetException"
+
+
 class NoSuchLabelException(IcebergRESTException):
     http_status = 404
     error_type = "NoSuchLabelException"

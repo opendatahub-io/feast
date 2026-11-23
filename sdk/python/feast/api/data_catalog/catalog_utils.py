@@ -39,13 +39,19 @@ from typing import Any, Callable
 from fastapi import Request
 
 from feast.api.data_catalog.errors import (
+    AlreadyExistsException,
     BadRequestException,
     NamespaceAlreadyExistsException,
     NamespaceNotEmptyException,
+    NoSuchAssetException,
     NoSuchNamespaceException,
     ServiceFailureException,
 )
-from feast.errors import ConcurrentVersionConflict, ProjectObjectNotFoundException
+from feast.errors import (
+    ConcurrentVersionConflict,
+    ProjectObjectNotFoundException,
+    SavedDatasetNotFound,
+)
 from feast.infra.registry.base_registry import BaseRegistry
 from feast.project import Project
 from feast.saved_dataset import SavedDataset
@@ -516,6 +522,364 @@ def delete_namespace_meta(
         _mutate_catalog_project(registry, mutator, create_if_missing=False)
     except ProjectObjectNotFoundException as exc:
         raise NoSuchNamespaceException(f"Namespace does not exist: {col}") from exc
+
+
+def _properties_from_tag_value(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def _is_catalog_managed_dataset(dataset: SavedDataset) -> bool:
+    return (dataset.tags or {}).get(CATALOG_MANAGED_TAG) == CATALOG_MANAGED_VALUE
+
+
+def _dataset_from_proto_bytes(raw: Any) -> SavedDataset:
+    from feast.protos.feast.core.SavedDataset_pb2 import (
+        SavedDataset as SavedDatasetProto,
+    )
+
+    return SavedDataset.from_proto(SavedDatasetProto.FromString(bytes(raw)))
+
+
+def _copy_dataset(dataset: SavedDataset) -> SavedDataset:
+    """Identity copy. Storage is shared; callers only change name and collection."""
+    copied = SavedDataset(
+        name=dataset.name,
+        features=list(dataset.features),
+        join_keys=list(dataset.join_keys),
+        storage=dataset.storage,
+        full_feature_names=dataset.full_feature_names,
+        tags=dict(dataset.tags or {}),
+        feature_service_name=dataset.feature_service_name,
+        namespace=dataset.namespace,
+        collection=dataset.collection,
+        description=dataset.description,
+        columns=list(dataset.columns or []),
+    )
+    copied.created_timestamp = dataset.created_timestamp
+    copied.last_updated_timestamp = dataset.last_updated_timestamp
+    copied.min_event_timestamp = dataset.min_event_timestamp
+    copied.max_event_timestamp = dataset.max_event_timestamp
+    return copied
+
+
+def _reidentify_dataset(
+    dataset: SavedDataset, new_scoped: str, new_collection: str
+) -> SavedDataset:
+    """New identity. Tags, uuid, storage, schema, and created time stay."""
+    from feast.utils import _utc_now
+
+    copied = _copy_dataset(dataset)
+    copied.name = new_scoped
+    copied.collection = new_collection
+    copied.last_updated_timestamp = _utc_now()
+    return copied
+
+
+def _saved_dataset_name_exists(registry: BaseRegistry, conn: Any, scoped: str) -> bool:
+    """True if any saved_datasets row, managed or not, uses this primary key."""
+    if conn is None:
+        try:
+            registry.get_saved_dataset(scoped, CATALOG_PROJECT, allow_cache=False)
+        except SavedDatasetNotFound:
+            return False
+        return True
+    from sqlalchemy import select as sa_select
+
+    from feast.infra.registry.sql import saved_datasets
+
+    row = conn.execute(
+        sa_select(saved_datasets.c.saved_dataset_name).where(
+            saved_datasets.c.project_id == CATALOG_PROJECT,
+            saved_datasets.c.saved_dataset_name == scoped,
+        )
+    ).first()
+    return row is not None
+
+
+def _load_saved_dataset_by_name(
+    registry: BaseRegistry, conn: Any, scoped: str
+) -> SavedDataset | None:
+    if conn is None:
+        try:
+            return registry.get_saved_dataset(
+                scoped, CATALOG_PROJECT, allow_cache=False
+            )
+        except SavedDatasetNotFound:
+            return None
+    from sqlalchemy import select as sa_select
+
+    from feast.infra.registry.sql import saved_datasets
+
+    row = conn.execute(
+        sa_select(
+            saved_datasets.c.saved_dataset_name,
+            saved_datasets.c.saved_dataset_proto,
+        ).where(
+            saved_datasets.c.project_id == CATALOG_PROJECT,
+            saved_datasets.c.saved_dataset_name == scoped,
+        )
+    ).first()
+    if row is None:
+        return None
+    dataset = _dataset_from_proto_bytes(row._mapping["saved_dataset_proto"])
+    dataset.name = row._mapping["saved_dataset_name"]
+    return dataset
+
+
+def _managed_datasets_in_collection(
+    registry: BaseRegistry, conn: Any, rhai_ns: str, collection: str
+) -> list[SavedDataset]:
+    """Catalog-managed assets in one collection. Unmanaged rows are omitted."""
+    if conn is None:
+        return list(_catalog_saved_datasets(registry, rhai_ns, collection))
+    from sqlalchemy import select as sa_select
+
+    from feast.infra.registry.sql import saved_datasets
+
+    rows = conn.execute(
+        sa_select(
+            saved_datasets.c.saved_dataset_name,
+            saved_datasets.c.saved_dataset_proto,
+        ).where(
+            saved_datasets.c.project_id == CATALOG_PROJECT,
+            saved_datasets.c.namespace == rhai_ns,
+            saved_datasets.c.collection == collection,
+        )
+    )
+    found: list[SavedDataset] = []
+    for row in rows:
+        dataset = _dataset_from_proto_bytes(row._mapping["saved_dataset_proto"])
+        if not _is_catalog_managed_dataset(dataset):
+            continue
+        dataset.name = row._mapping["saved_dataset_name"]
+        found.append(dataset)
+    return found
+
+
+def _update_saved_dataset_row(
+    conn: Any, old_scoped: str, dataset: SavedDataset
+) -> None:
+    """Move one primary key inside the caller's transaction."""
+    from sqlalchemy import select as sa_select
+    from sqlalchemy import update as sa_update
+
+    from feast.infra.registry.sql import saved_datasets
+
+    if dataset.last_updated_timestamp is None:
+        raise ServiceFailureException(
+            f"Could not move asset {old_scoped}: missing update time"
+        )
+    payload = dataset.to_proto().SerializeToString()
+    result = conn.execute(
+        sa_update(saved_datasets)
+        .where(
+            saved_datasets.c.project_id == CATALOG_PROJECT,
+            saved_datasets.c.saved_dataset_name == old_scoped,
+        )
+        .values(
+            saved_dataset_name=dataset.name,
+            namespace=dataset.namespace or "",
+            collection=dataset.collection or "",
+            saved_dataset_proto=payload,
+            last_updated_timestamp=int(dataset.last_updated_timestamp.timestamp()),
+        )
+    )
+    if result.rowcount == 1:
+        return
+    if result.rowcount == -1:
+        moved = conn.execute(
+            sa_select(saved_datasets.c.saved_dataset_name).where(
+                saved_datasets.c.project_id == CATALOG_PROJECT,
+                saved_datasets.c.saved_dataset_name == dataset.name,
+            )
+        ).first()
+        stale = conn.execute(
+            sa_select(saved_datasets.c.saved_dataset_name).where(
+                saved_datasets.c.project_id == CATALOG_PROJECT,
+                saved_datasets.c.saved_dataset_name == old_scoped,
+            )
+        ).first()
+        if moved is not None and stale is None:
+            return
+    raise ServiceFailureException(
+        f"Could not move asset {old_scoped}: the row changed during the update"
+    )
+
+
+def _commit_saved_dataset_identity(
+    registry: BaseRegistry, conn: Any, old_scoped: str, dataset: SavedDataset
+) -> None:
+    """Persist a new scoped name.
+
+    SQL: one UPDATE on ``conn`` (the project transaction). File registries have
+    no shared transaction: write the new row, then delete the old one. If the
+    delete fails, delete the new row so the original asset remains the only copy.
+    """
+    if conn is not None:
+        _update_saved_dataset_row(conn, old_scoped, dataset)
+        return
+    registry.apply_saved_dataset(dataset, CATALOG_PROJECT)
+    try:
+        registry.delete_saved_dataset(old_scoped, CATALOG_PROJECT)
+    except Exception as exc:
+        try:
+            registry.delete_saved_dataset(dataset.name, CATALOG_PROJECT)
+        except Exception as cleanup_exc:
+            raise ServiceFailureException(
+                f"Move of {old_scoped} wrote {dataset.name} but could not remove "
+                f"the original row, and the new row could not be removed either: "
+                f"{cleanup_exc}"
+            ) from exc
+        raise
+
+
+def _plan_collection_asset_moves(
+    registry: BaseRegistry,
+    conn: Any,
+    rhai_ns: str,
+    old_collection: str,
+    new_collection: str,
+) -> list[tuple[str, SavedDataset]]:
+    """Validate every managed asset, then return (old primary key, new dataset)."""
+    planned: list[tuple[str, SavedDataset]] = []
+    for dataset in _managed_datasets_in_collection(
+        registry, conn, rhai_ns, old_collection
+    ):
+        try:
+            _namespace, _collection, display_name = parse_scoped_name(dataset.name)
+        except ValueError as exc:
+            raise ServiceFailureException(
+                f"Catalog asset {dataset.name!r} has an unreadable name and was not renamed"
+            ) from exc
+        try:
+            new_scoped = scoped_name(rhai_ns, new_collection, display_name)
+        except ValueError as exc:
+            raise BadRequestException(str(exc)) from exc
+        if _saved_dataset_name_exists(registry, conn, new_scoped):
+            raise NamespaceAlreadyExistsException(
+                f"Cannot rename to {new_collection}: a registry row already uses "
+                f"{new_collection}.{display_name}"
+            )
+        planned.append(
+            (dataset.name, _reidentify_dataset(dataset, new_scoped, new_collection))
+        )
+    return planned
+
+
+def rename_namespace_meta(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    old_collection: str,
+    new_collection: str,
+) -> dict[str, str]:
+    """Rename a collection and every catalog-managed asset inside it.
+
+    Runs in the project compare-and-swap transaction. Asset primary keys are
+    updated before the project tag is written. A validation failure raises
+    before those writes, and a later failure rolls the asset updates back with
+    the project row. Unmanaged SavedDataset rows are left where they are.
+    ``default`` cannot be renamed. The returned properties are the preserved
+    collection tag value (``{}`` when the source had no tag).
+    """
+    ns = _require_namespace(rhai_ns)
+    old = _require_part("collection", old_collection)
+    new = _require_part("collection", new_collection)
+    if old == DEFAULT_COLLECTION:
+        raise BadRequestException("Cannot rename the default collection")
+    if new == DEFAULT_COLLECTION:
+        raise BadRequestException("Cannot rename a collection to default")
+    if old == new:
+        raise BadRequestException("New collection name is the same as the current name")
+    old_key = ns_meta_key(ns, old)
+    new_key = ns_meta_key(ns, new)
+    preserved: dict[str, str] = {}
+
+    def mutator(project: Project, conn: Any) -> None:
+        nonlocal preserved
+        if not _collection_present_in_mutate(project, registry, conn, ns, old, old_key):
+            raise NoSuchNamespaceException(f"Namespace does not exist: {old}")
+        if new_key in project.tags or _saved_datasets_in_collection(
+            registry, conn, ns, new
+        ):
+            raise NamespaceAlreadyExistsException(f"Namespace already exists: {new}")
+        planned = _plan_collection_asset_moves(registry, conn, ns, old, new)
+        for old_scoped, moved in planned:
+            _commit_saved_dataset_identity(registry, conn, old_scoped, moved)
+        preserved = _properties_from_tag_value(project.tags.get(old_key))
+        if old_key in project.tags:
+            tags = dict(project.tags)
+            tags[new_key] = tags.pop(old_key)
+            project.tags = tags
+
+    try:
+        _mutate_catalog_project(registry, mutator, create_if_missing=False)
+    except ProjectObjectNotFoundException as exc:
+        raise NoSuchNamespaceException(f"Namespace does not exist: {old}") from exc
+    return preserved
+
+
+def move_catalog_asset(
+    registry: BaseRegistry,
+    rhai_ns: str,
+    source_collection: str,
+    display_name: str,
+    destination_collection: str,
+) -> SavedDataset:
+    """Move one catalog asset to another collection in the same project.
+
+    The display name, tags, uuid, storage, schema, and created time stay.
+    The destination collection must already exist. A name collision there is
+    409 and nothing is written. ``default`` is a valid source and destination.
+    """
+    from feast.api.data_catalog.catalog_assets import catalog_asset_response
+
+    ns = _require_namespace(rhai_ns)
+    source = _require_part("collection", source_collection)
+    dest = _require_part("collection", destination_collection)
+    asset_name = _require_part("name", display_name)
+    if source == dest:
+        raise BadRequestException("Asset is already in this collection")
+    old_scoped = scoped_name(ns, source, asset_name)
+    new_scoped = scoped_name(ns, dest, asset_name)
+    dest_key = ns_meta_key(ns, dest)
+    moved_dataset: dict[str, SavedDataset] = {}
+
+    def mutator(project: Project, conn: Any) -> None:
+        dataset = _load_saved_dataset_by_name(registry, conn, old_scoped)
+        if (
+            dataset is None
+            or not _is_catalog_managed_dataset(dataset)
+            or dataset.namespace != ns
+            or dataset.collection != source
+        ):
+            raise NoSuchAssetException(f"Asset does not exist: {source}.{asset_name}")
+        if not _collection_present_in_mutate(
+            project, registry, conn, ns, dest, dest_key
+        ):
+            raise NoSuchNamespaceException(f"Namespace does not exist: {dest}")
+        if _saved_dataset_name_exists(registry, conn, new_scoped):
+            raise AlreadyExistsException(f"Asset already exists: {dest}.{asset_name}")
+        reidentified = _reidentify_dataset(dataset, new_scoped, dest)
+        # Fail before the write when the row cannot be returned to the client.
+        catalog_asset_response(reidentified, dest)
+        _commit_saved_dataset_identity(registry, conn, old_scoped, reidentified)
+        moved_dataset["dataset"] = reidentified
+
+    try:
+        _mutate_catalog_project(registry, mutator, create_if_missing=False)
+    except ProjectObjectNotFoundException as exc:
+        raise NoSuchAssetException(
+            f"Asset does not exist: {source}.{asset_name}"
+        ) from exc
+    return moved_dataset["dataset"]
 
 
 def _get_catalog_project(registry: BaseRegistry) -> Project | None:
