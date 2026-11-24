@@ -310,6 +310,14 @@ rules:
   - create
   - update
 - apiGroups:
+  - services.platform.opendatahub.io
+  resources:
+  - auths
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - sparkoperator.k8s.io
   resources:
   - sparkapplications
