@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import socket
 import subprocess
@@ -128,24 +129,32 @@ def port_forward_service(namespace: str, service_name: str) -> Iterator[str]:
         listener.bind(("127.0.0.1", 0))
         local_port = listener.getsockname()[1]
 
+    # Named port matches `oc create route ... --port=https`. Write stderr to a
+    # temp file so a long-lived forward cannot fill a PIPE buffer and stall.
+    stderr_file = tempfile.NamedTemporaryFile(
+        mode="w+", prefix="kubectl-port-forward-", suffix=".log", delete=False
+    )
+    stderr_path = stderr_file.name
     process = subprocess.Popen(
         [
             "kubectl",
             "port-forward",
             "--address=127.0.0.1",
             f"service/{service_name}",
-            f"{local_port}:443",
+            f"{local_port}:https",
             "-n",
             namespace,
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=stderr_file,
         text=True,
     )
     try:
         for _ in range(50):
             if process.poll() is not None:
-                error = process.stderr.read().strip() if process.stderr else ""
+                stderr_file.flush()
+                with open(stderr_path, encoding="utf-8") as err:
+                    error = err.read().strip()
                 raise RuntimeError(f"kubectl port-forward exited: {error}")
             try:
                 with socket.create_connection(("127.0.0.1", local_port), timeout=0.2):
@@ -153,7 +162,13 @@ def port_forward_service(namespace: str, service_name: str) -> Iterator[str]:
             except OSError:
                 time.sleep(0.2)
         else:
-            raise RuntimeError("kubectl port-forward did not start within 10 seconds")
+            stderr_file.flush()
+            with open(stderr_path, encoding="utf-8") as err:
+                error = err.read().strip()
+            raise RuntimeError(
+                "kubectl port-forward did not start within 10 seconds"
+                + (f": {error}" if error else "")
+            )
 
         yield f"https://127.0.0.1:{local_port}"
     finally:
@@ -164,8 +179,11 @@ def port_forward_service(namespace: str, service_name: str) -> Iterator[str]:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        if process.stderr:
-            process.stderr.close()
+        stderr_file.close()
+        try:
+            os.unlink(stderr_path)
+        except OSError:
+            pass
 
 
 def validate_feature_store_cr_status(

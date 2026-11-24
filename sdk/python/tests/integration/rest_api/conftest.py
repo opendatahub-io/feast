@@ -117,9 +117,15 @@ def _wait_for_http_ready(
     verify_ssl: bool = False,
     headers: dict = None,
 ) -> None:
-    """Poll an HTTP endpoint until it returns a non-502 response."""
+    """Poll an HTTP endpoint until the server answers with a non-gateway status.
+
+    401/403 count as ready: the process is up and auth middleware is reachable.
+    Avoid probing auth-enabled registries with a privileged Bearer token here —
+    admin listing can hang while unauthenticated probes return quickly.
+    """
     health_url = f"{route_url}{health_path}"
     last_status = None
+    gateway_statuses = {502, 503, 504}
 
     if initial_delay > 0:
         print(f"\n Waiting {initial_delay}s for backend to start...")
@@ -136,7 +142,7 @@ def _wait_for_http_ready(
                 health_url, timeout=10, verify=verify_ssl, headers=headers or {}
             )
             last_status = resp.status_code
-            if resp.status_code != 502:
+            if resp.status_code not in gateway_statuses:
                 print(f" HTTP endpoint is ready (status={resp.status_code})")
                 return
             print(
@@ -375,10 +381,8 @@ def feast_auth_url(feast_extended_setup):
 @pytest.fixture(scope="session")
 def feast_auth_client(feast_auth_url, admin_token):
     """FeastRestClient for the auth-enabled Feast CR, using the admin SA token."""
-    _wait_for_http_ready(
-        feast_auth_url,
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
+    # Probe without a token so readiness does not hang on privileged /projects.
+    _wait_for_http_ready(feast_auth_url)
     return FeastRestClient(feast_auth_url, token=admin_token)
 
 

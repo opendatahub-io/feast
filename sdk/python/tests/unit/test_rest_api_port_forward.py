@@ -1,6 +1,5 @@
-import io
 from contextlib import nullcontext
-from unittest.mock import Mock
+from unittest.mock import Mock, mock_open, patch
 
 import pytest
 
@@ -12,8 +11,9 @@ def test_port_forward_service_uses_https_and_stops_on_teardown(
 ) -> None:
     process = Mock()
     process.poll.return_value = None
-    process.stderr = io.StringIO()
     commands = []
+    stderr_file = Mock()
+    stderr_file.name = "/tmp/kubectl-port-forward-test.log"
 
     def start(command: list[str], **kwargs: object) -> Mock:
         commands.append(command)
@@ -23,6 +23,12 @@ def test_port_forward_service_uses_https_and_stops_on_teardown(
     monkeypatch.setattr(
         support.socket, "create_connection", lambda *args, **kwargs: nullcontext()
     )
+    monkeypatch.setattr(
+        support.tempfile,
+        "NamedTemporaryFile",
+        lambda **kwargs: stderr_file,
+    )
+    monkeypatch.setattr(support.os, "unlink", lambda path: None)
 
     with support.port_forward_service("test-namespace", "registry-rest") as url:
         assert url.startswith("https://127.0.0.1:")
@@ -32,7 +38,7 @@ def test_port_forward_service_uses_https_and_stops_on_teardown(
                 "port-forward",
                 "--address=127.0.0.1",
                 "service/registry-rest",
-                f"{url.rsplit(':', 1)[1]}:443",
+                f"{url.rsplit(':', 1)[1]}:https",
                 "-n",
                 "test-namespace",
             ]
@@ -40,7 +46,7 @@ def test_port_forward_service_uses_https_and_stops_on_teardown(
 
     process.terminate.assert_called_once_with()
     process.wait.assert_called_once_with(timeout=5)
-    assert process.stderr.closed
+    stderr_file.close.assert_called()
 
 
 def test_port_forward_service_reports_startup_failure(
@@ -48,12 +54,25 @@ def test_port_forward_service_reports_startup_failure(
 ) -> None:
     process = Mock()
     process.poll.return_value = 1
-    process.stderr = io.StringIO("service unavailable")
-    monkeypatch.setattr(support.subprocess, "Popen", lambda *args, **kwargs: process)
+    stderr_file = Mock()
+    stderr_file.name = "/tmp/kubectl-port-forward-fail.log"
 
-    with pytest.raises(RuntimeError, match="service unavailable"):
+    monkeypatch.setattr(
+        support.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(
+        support.tempfile,
+        "NamedTemporaryFile",
+        lambda **kwargs: stderr_file,
+    )
+    monkeypatch.setattr(support.os, "unlink", lambda path: None)
+
+    with (
+        patch("builtins.open", mock_open(read_data="service unavailable")),
+        pytest.raises(RuntimeError, match="service unavailable"),
+    ):
         with support.port_forward_service("test-namespace", "registry-rest"):
             pass
 
     process.terminate.assert_not_called()
-    assert process.stderr.closed
+    stderr_file.close.assert_called()
