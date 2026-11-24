@@ -663,6 +663,8 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 // Aggregated ClusterRoles — viewer and admin permissions for data registry
 // ---------------------------------------------------------------------------
 
+const legacyDataRegistryEditorClusterRoleName = "feast-data-registry-editor"
+
 func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 	logger := log.FromContext(feast.Handler.Context)
 
@@ -723,7 +725,7 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		logger.Info("Successfully reconciled", "ClusterRole", adminCR.Name, "operation", op)
 	}
 
-	return nil
+	return feast.cleanupLegacyDataRegistryEditorRole()
 }
 
 func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.ClusterRole {
@@ -734,6 +736,30 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 	}
 	cr.SetGroupVersionKind(rbacv1.SchemeGroupVersion.WithKind("ClusterRole"))
 	return cr
+}
+
+// The retired editor role grants writes through OpenShift's aggregated edit
+// role even without a binding to the named editor role. Remove only a
+// Feast-managed copy for this Data Registry. Its UID may belong to an earlier
+// FeatureStore instance, so check the managed-by and name labels instead.
+func (feast *FeastServices) cleanupLegacyDataRegistryEditorRole() error {
+	role := &rbacv1.ClusterRole{}
+	if err := feast.Handler.Client.Get(
+		feast.Handler.Context,
+		types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName},
+		role,
+	); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if role.Labels[ManagedByLabelKey] != ManagedByLabelValue ||
+		role.Labels[NameLabelKey] != feast.Handler.FeatureStore.Name {
+		return nil
+	}
+	if err := feast.Handler.Client.Delete(feast.Handler.Context, role); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	log.FromContext(feast.Handler.Context).Info("Removed retired Data Registry editor ClusterRole", "ClusterRole", role.Name)
+	return nil
 }
 
 // CleanupDataRegistryClusterRoles removes the aggregated ClusterRoles.
@@ -763,7 +789,7 @@ func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
 			}
 		}
 	}
-	return nil
+	return feast.cleanupLegacyDataRegistryEditorRole()
 }
 
 // ---------------------------------------------------------------------------

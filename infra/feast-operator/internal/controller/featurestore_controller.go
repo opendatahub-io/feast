@@ -99,6 +99,7 @@ type FeatureStoreReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;create;update;watch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=update;delete,resourceNames=feast-data-registry-admin;feast-data-registry-viewer;feast-discover-namespaces;feast-oidc-token-review;feast-token-review-cluster-role
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=delete,resourceNames=feast-data-registry-editor
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create;get;list;watch;update;delete
 // bind on ClusterRole system:auth-delegator is listed in config/rbac/role.yaml (controller-gen
 // markers cannot express resourceNames containing ':').

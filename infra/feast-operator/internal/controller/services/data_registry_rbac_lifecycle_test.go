@@ -95,3 +95,74 @@ func TestDataRegistryRBACSurvivesSameNameRecreation(t *testing.T) {
 		t.Fatalf("old binding was not removed: %v", err)
 	}
 }
+
+func TestLegacyEditorRoleCleanup(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	if err := feastdevv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	feast := &FeastServices{Handler: handler.FeastHandler{
+		Client: cl, Context: ctx, Scheme: scheme,
+		FeatureStore: &feastdevv1.FeatureStore{ObjectMeta: metav1.ObjectMeta{
+			Name: "data-registry", Namespace: "rhoai-data-registry", UID: types.UID("current-instance"),
+		}},
+	}}
+	legacyRole := func(labels map[string]string) *rbacv1.ClusterRole {
+		return &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: legacyDataRegistryEditorClusterRoleName, Labels: labels,
+		}}
+	}
+	managedLabels := map[string]string{
+		ManagedByLabelKey:            ManagedByLabelValue,
+		NameLabelKey:                 "data-registry",
+		dataRegistryOwnerUIDLabelKey: "old-instance",
+	}
+
+	if err := cl.Create(ctx, legacyRole(managedLabels)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale Feast-managed editor role remains after reconciliation: %v", err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatalf("repeat reconciliation failed after editor role removal: %v", err)
+	}
+
+	foreignRole := legacyRole(map[string]string{
+		ManagedByLabelKey: "another-operator",
+		NameLabelKey:      "data-registry",
+	})
+	if err := cl.Create(ctx, foreignRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
+		t.Fatalf("unmanaged editor role was removed: %v", err)
+	}
+	if err := cl.Delete(ctx, foreignRole); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cl.Create(ctx, legacyRole(managedLabels)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale Feast-managed editor role remains after cleanup: %v", err)
+	}
+}

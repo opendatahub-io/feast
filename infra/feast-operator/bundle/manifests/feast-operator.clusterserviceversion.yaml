@@ -484,6 +484,14 @@ spec:
           - delete
           - update
         - apiGroups:
+          - rbac.authorization.k8s.io
+          resourceNames:
+          - feast-data-registry-editor
+          resources:
+          - clusterroles
+          verbs:
+          - delete
+        - apiGroups:
           - route.openshift.io
           resources:
           - routes
