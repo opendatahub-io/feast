@@ -62,11 +62,12 @@ var globalAuthGVK = schema.GroupVersionKind{
 // GlobalDataRegistryReconciler grants catalog access in the one manually
 // designated project. It does not own the Auth CR, the Namespace, or any
 // administrator-created curator binding.
-// +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=auths,verbs=get;list;watch
 type GlobalDataRegistryReconciler struct {
 	client.Client
 	APIReader client.Reader
 }
+
+// +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=auths,verbs=get;list;watch
 
 func (r *GlobalDataRegistryReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	result := ctrl.Result{RequeueAfter: time.Minute}
