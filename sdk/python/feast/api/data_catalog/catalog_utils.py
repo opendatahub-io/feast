@@ -92,7 +92,7 @@ def _require_namespace(namespace: str) -> str:
 def scoped_name(namespace: str, collection: str, name: str) -> str:
     """Build a unique SavedDataset.name for the shared catalog Feast project.
 
-    Format: ``{namespace}/{collection}/{display_name}``.
+    Format: ``{namespace}/{collection}/{resource_name}``.
     """
     parts = (
         _require_namespace(namespace),

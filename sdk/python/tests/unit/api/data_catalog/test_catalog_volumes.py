@@ -142,6 +142,49 @@ def test_create_get_head_delete(sqlite_registry):
     assert missing.json()["error"]["type"] == "NoSuchVolumeException"
 
 
+def test_display_name_is_independent_and_editable(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    display_name = "Réclamations – 東京 (2026)!"
+
+    created = _create_volume(client, display_name=display_name)
+    assert created.status_code == 200, created.text
+    assert created.json()["name"] == VOL
+    assert created.json()["display_name"] == display_name
+
+    updated = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"display_name": "Claims archive"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == VOL
+    assert updated.json()["display_name"] == "Claims archive"
+    assert client.get(f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Uppercase", "starts-", "-ends", "has spaces", "a" * 31],
+)
+def test_resource_name_validation(name, sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    response = _create_volume(client, name=name)
+    assert response.status_code == 400
+
+
+def test_display_name_max_length_and_null_update(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    assert _create_volume(client, display_name="a" * 251).status_code == 400
+    assert _create_volume(client).status_code == 200
+    response = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/volumes/{VOL}",
+        json={"display_name": None},
+    )
+    assert response.status_code == 400
+
+
 def test_create_in_default_without_namespace_post(sqlite_registry):
     client = _client(sqlite_registry)
     created = client.post(
@@ -335,6 +378,7 @@ def test_concurrent_create_same_volume_is_created_and_409():
                     registry,
                     rhai_ns=NS,
                     collection=COL,
+                    resource_name=VOL,
                     display_name=VOL,
                     location=location,
                     tags={

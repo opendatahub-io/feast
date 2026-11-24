@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class IcebergError(BaseModel):
@@ -137,11 +137,33 @@ LicenseType = Literal[
 MaturityType = Literal["experimental", "staging", "production", "deprecated"]
 PiiStatus = Literal["none", "contains-pii", "contains-sensitive", "anonymized"]
 
+ResourceName = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=30,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$",
+        description=(
+            "Immutable resource name. Must start and end with a lowercase letter "
+            "or number and may contain lowercase letters, numbers, and hyphens."
+        ),
+    ),
+]
+DisplayName = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=250,
+        description="Human-readable data asset name.",
+    ),
+]
+
 
 class CreateVolumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    name: str
+    name: ResourceName
+    display_name: DisplayName | None = None
     format: UnstructuredFormat
     storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
@@ -158,6 +180,7 @@ class CreateVolumeRequest(BaseModel):
 class UpdateVolumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    display_name: DisplayName | None = None
     description: str | None = None
     format: UnstructuredFormat | None = None
     storage_location: str | None = None
@@ -172,11 +195,19 @@ class UpdateVolumeRequest(BaseModel):
     remove_labels: list[str] | None = None
     remove_properties: list[str] | None = None
 
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def display_name_cannot_be_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("display_name cannot be null")
+        return value
+
 
 class CreateGenericTableRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    name: str
+    name: ResourceName
+    display_name: DisplayName | None = None
     format: StructuredFormat
     storage_location: str | None = None
     connection_ref: ConnectionRef | None = None
@@ -194,6 +225,7 @@ class CreateGenericTableRequest(BaseModel):
 class UpdateGenericTableRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    display_name: DisplayName | None = None
     description: str | None = None
     format: StructuredFormat | None = None
     storage_location: str | None = None
@@ -209,9 +241,17 @@ class UpdateGenericTableRequest(BaseModel):
     properties: dict[str, str] | None = None
     remove_properties: list[str] | None = None
 
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def display_name_cannot_be_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("display_name cannot be null")
+        return value
+
 
 class AssetResponse(BaseModel):
     name: str
+    display_name: str
     asset_type: str
     uuid: str
     format: str

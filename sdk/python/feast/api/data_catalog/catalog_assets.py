@@ -48,9 +48,11 @@ from feast.saved_dataset import SavedDataset, SavedDatasetColumn
 
 _PLACEHOLDER_FEATURES = ["fv:feature"]
 _PLACEHOLDER_JOIN_KEYS = ["entity_id"]
+DISPLAY_NAME_TAG = "_display_name"
 
 RESERVED_TAGS = {
     CATALOG_MANAGED_TAG,
+    DISPLAY_NAME_TAG,
     "asset_type",
     "format",
     "volume_type",
@@ -246,6 +248,7 @@ def insert_catalog_dataset(
     *,
     rhai_ns: str,
     collection: str,
+    resource_name: str,
     display_name: str,
     location: str,
     tags: dict[str, str],
@@ -258,18 +261,19 @@ def insert_catalog_dataset(
     Does not change Feast's default IntegrityError skip on ``feast apply``.
     """
     ensure_catalog_project(registry)
-    name = scoped_name(rhai_ns, collection, display_name)
+    name = scoped_name(rhai_ns, collection, resource_name)
     try:
         registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     except SavedDatasetNotFound:
         pass
     else:
         raise AlreadyExistsException(
-            f"Asset already exists: {collection}.{display_name}"
+            f"Asset already exists: {collection}.{resource_name}"
         )
     stamped = {
         **tags,
         CATALOG_MANAGED_TAG: CATALOG_MANAGED_VALUE,
+        DISPLAY_NAME_TAG: display_name,
         "uuid": str(uuid.uuid4()),
     }
     dataset = SavedDataset(
@@ -293,15 +297,15 @@ def insert_catalog_dataset(
         registry.apply_saved_dataset(dataset, CATALOG_PROJECT, **apply_kwargs)
     except SavedDatasetAlreadyExists as exc:
         raise AlreadyExistsException(
-            f"Asset already exists: {collection}.{display_name}"
+            f"Asset already exists: {collection}.{resource_name}"
         ) from exc
     return registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
 
 
 def get_catalog_dataset(
-    registry: BaseRegistry, rhai_ns: str, collection: str, display_name: str
+    registry: BaseRegistry, rhai_ns: str, collection: str, resource_name: str
 ) -> SavedDataset | None:
-    name = scoped_name(rhai_ns, collection, display_name)
+    name = scoped_name(rhai_ns, collection, resource_name)
     try:
         dataset = registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     except SavedDatasetNotFound:
@@ -346,9 +350,9 @@ def replace_catalog_dataset(
 
 
 def delete_catalog_dataset(
-    registry: BaseRegistry, rhai_ns: str, collection: str, display_name: str
+    registry: BaseRegistry, rhai_ns: str, collection: str, resource_name: str
 ) -> bool:
-    dataset = get_catalog_dataset(registry, rhai_ns, collection, display_name)
+    dataset = get_catalog_dataset(registry, rhai_ns, collection, resource_name)
     if dataset is None:
         return False
     registry.delete_saved_dataset(dataset.name, CATALOG_PROJECT)
@@ -424,6 +428,7 @@ def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetRespo
         raise ServiceFailureException("asset missing timestamps")
     return AssetResponse(
         name=unscoped_name(dataset.name),
+        display_name=tags.get(DISPLAY_NAME_TAG) or unscoped_name(dataset.name),
         asset_type=asset_type,
         uuid=uuid,
         format=format_value,

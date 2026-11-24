@@ -154,6 +154,43 @@ def test_create_parquet_201_no_invented_user(sqlite_registry):
     assert iceberg.json() == {"identifiers": []}
 
 
+def test_table_display_name_create_list_and_update(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    created = client.post(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables",
+        json={
+            "name": PARQUET,
+            "display_name": "Claims – São Paulo",
+            "format": "parquet",
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["name"] == PARQUET
+    assert created.json()["display_name"] == "Claims – São Paulo"
+
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
+    assert listed.json()["assets"][0]["display_name"] == "Claims – São Paulo"
+
+    updated = client.patch(
+        f"/v1/{NS}/namespaces/{COL}/generic-tables/{PARQUET}",
+        json={"display_name": "Claims (curated)"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == PARQUET
+    assert updated.json()["display_name"] == "Claims (curated)"
+
+
+def test_legacy_table_falls_back_to_resource_name(sqlite_registry):
+    client = _client(sqlite_registry)
+    _ensure_collection(client)
+    _seed_iceberg_table(sqlite_registry)
+    listed = client.get(f"/v1/{NS}/namespaces/{COL}/generic-tables")
+    assert listed.status_code == 200
+    assert listed.json()["assets"][0]["display_name"] == TABLE
+
+
 def test_owner_from_header_only(sqlite_registry):
     client = _client(sqlite_registry)
     _ensure_collection(client)
