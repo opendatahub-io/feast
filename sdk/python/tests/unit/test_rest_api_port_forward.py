@@ -57,9 +57,7 @@ def test_port_forward_service_reports_startup_failure(
     stderr_file = Mock()
     stderr_file.name = "/tmp/kubectl-port-forward-fail.log"
 
-    monkeypatch.setattr(
-        support.subprocess, "Popen", lambda *args, **kwargs: process
-    )
+    monkeypatch.setattr(support.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
         support.tempfile,
         "NamedTemporaryFile",
