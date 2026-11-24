@@ -129,7 +129,9 @@ def test_rename_moves_tag_and_assets_and_keeps_metadata(sqlite_registry):
             NS,
             COL,
             "risk_scores",
-            extra_tags={"_connection_ref": '{"type":"secret","secret_name":"s3"}'},
+            extra_tags={
+                "_connection_ref": '{"type":"secret","secret_name":"s3"}',  # pragma: allowlist secret
+            },
         ),
         CATALOG_PROJECT,
     )
