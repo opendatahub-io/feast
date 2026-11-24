@@ -521,7 +521,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
-	It("creates three ClusterRoles: viewer, editor, and admin with all pseudo-resources", func() {
+	It("creates viewer and admin ClusterRoles without an editor role", func() {
 		setAnnotation("true")
 
 		Expect(feast.deployDataRegistryClusterRoles()).To(Succeed())
@@ -540,15 +540,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(viewerCR.Rules[0].Resources).To(expectedResources)
 		Expect(viewerCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch"))
 
-		// Editor ClusterRole
-		editorCR := &rbacv1.ClusterRole{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("editor")}, editorCR)).To(Succeed())
-		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-edit", "true"))
-		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
-		Expect(editorCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
-		Expect(editorCR.Rules).To(HaveLen(1))
-		Expect(editorCR.Rules[0].Resources).To(expectedResources)
-		Expect(editorCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch", "create", "update", "patch", "delete"))
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: "feast-data-registry-editor"}, &rbacv1.ClusterRole{}))).To(BeTrue())
 
 		// Admin ClusterRole
 		adminCR := &rbacv1.ClusterRole{}
@@ -556,15 +548,13 @@ var _ = Describe("Data Registry", func() {
 		Expect(adminCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-edit"))
-		Expect(adminCR.Rules).To(HaveLen(2))
+		Expect(adminCR.Rules).To(HaveLen(1))
 		Expect(adminCR.Rules[0].Resources).To(expectedResources)
 		Expect(adminCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch", "create", "update", "patch", "delete"))
-		Expect(adminCR.Rules[1].Resources).To(ConsistOf("connections"))
-		Expect(adminCR.Rules[1].Verbs).To(ConsistOf("use"))
 
 		// Cleanup
 		Expect(feast.CleanupDataRegistryClusterRoles()).To(Succeed())
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, &rbacv1.ClusterRole{})
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		}
@@ -762,7 +752,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("endpoints:"))
 		Expect(cm.Data["auth.yaml"]).To(ContainSubstring("byQueryParameter:"))
 
-		// ClusterRoles: all three (viewer, editor, admin) exist with all pseudo-resources
+		// ClusterRoles: viewer and admin exist with all pseudo-resources.
 		expectedResources := ConsistOf("registries", "namespaces", "tables", "volumes", "generic-tables")
 
 		viewerCR := &rbacv1.ClusterRole{}
@@ -773,20 +763,15 @@ var _ = Describe("Data Registry", func() {
 		Expect(viewerCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch"))
 		Expect(viewerCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-view", "true"))
 
-		editorCR := &rbacv1.ClusterRole{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("editor")}, editorCR)).To(Succeed())
-		Expect(editorCR.Rules[0].Resources).To(expectedResources)
-		Expect(editorCR.Rules[0].Verbs).To(ContainElements("create", "update", "patch", "delete"))
-		Expect(editorCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-edit", "true"))
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: "feast-data-registry-editor"}, &rbacv1.ClusterRole{}))).To(BeTrue())
 
 		adminCR := &rbacv1.ClusterRole{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName("admin")}, adminCR)).To(Succeed())
 		Expect(adminCR.Labels).To(HaveKeyWithValue("rbac.authorization.k8s.io/aggregate-to-admin", "true"))
 		Expect(adminCR.Labels).NotTo(HaveKey("rbac.authorization.k8s.io/aggregate-to-view"))
-		Expect(adminCR.Rules).To(HaveLen(2))
+		Expect(adminCR.Rules).To(HaveLen(1))
 		Expect(adminCR.Rules[0].Resources).To(expectedResources)
-		Expect(adminCR.Rules[1].Resources).To(ConsistOf("connections"))
-		Expect(adminCR.Rules[1].Verbs).To(ConsistOf("use"))
+		Expect(adminCR.Rules[0].Verbs).To(ConsistOf("get", "list", "watch", "create", "update", "patch", "delete"))
 
 		// Auth-delegator ClusterRoleBinding exists
 		crbKey := types.NamespacedName{Name: feast.dataRegistryAuthDelegatorCRBName()}
@@ -837,7 +822,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.deployDataRegistryAuthDelegatorBinding()).To(Succeed())
 
 		// Verify they exist
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			cr := &rbacv1.ClusterRole{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, cr)).To(Succeed())
 		}
@@ -864,7 +849,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(stubFeast.CleanupDataRegistryAuthDelegatorBinding()).To(Succeed())
 
 		// All cluster-scoped resources must be gone
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, &rbacv1.ClusterRole{})
 			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "ClusterRole %s should be deleted", suffix)
 		}
@@ -878,11 +863,10 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.deployDataRegistryClusterRoles()).To(Succeed())
 
 		Expect(feast.dataRegistryClusterRoleName("viewer")).To(Equal(DataRegistryViewerClusterRoleName))
-		Expect(feast.dataRegistryClusterRoleName("editor")).To(Equal(DataRegistryEditorClusterRoleName))
 		Expect(feast.dataRegistryClusterRoleName("admin")).To(Equal(DataRegistryAdminClusterRoleName))
 
 		// Verify the ClusterRoles are created under the fixed names (not feast-<crName>-data-registry-*)
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			cr := &rbacv1.ClusterRole{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: feast.dataRegistryClusterRoleName(suffix)}, cr)).To(Succeed())
 			Expect(cr.Name).NotTo(ContainSubstring(featureStore.Name),
@@ -1250,7 +1234,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(feast.deployDataRegistry()).To(Succeed())
 
 		// Verify ClusterRoles were created.
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			cr := feast.initDataRegistryClusterRole(suffix)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name}, cr)).To(Succeed())
 		}
@@ -1265,7 +1249,7 @@ var _ = Describe("Data Registry", func() {
 		Expect(k8sClient.Update(ctx, feast.Handler.FeatureStore)).To(Succeed())
 
 		// Verify ClusterRoles are gone.
-		for _, suffix := range []string{"viewer", "editor", "admin"} {
+		for _, suffix := range []string{"viewer", "admin"} {
 			cr := feast.initDataRegistryClusterRole(suffix)
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name}, cr)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue(),

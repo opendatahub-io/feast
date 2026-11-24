@@ -84,7 +84,7 @@ func TestDataRegistryRBACSurvivesSameNameRecreation(t *testing.T) {
 	if err := old.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cl.Get(ctx, types.NamespacedName{Name: DataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
+	if err := cl.Get(ctx, types.NamespacedName{Name: DataRegistryAdminClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
 		t.Fatalf("new instance ClusterRole was removed: %v", err)
 	}
 	if err := cl.Get(ctx, types.NamespacedName{Name: newInstance.dataRegistryAuthDelegatorCRBName()}, &rbacv1.ClusterRoleBinding{}); err != nil {

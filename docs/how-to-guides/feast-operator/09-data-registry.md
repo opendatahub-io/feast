@@ -94,7 +94,6 @@ When enabled, the operator creates the following resources:
 | Route | `feast-{cr-name}-data-registry` (ReEncrypt) | Namespaced |
 | ServiceMonitor | `feast-{cr-name}-data-registry` | Namespaced |
 | ClusterRole (viewer) | `feast-data-registry-viewer` | Cluster |
-| ClusterRole (editor) | `feast-data-registry-editor` | Cluster |
 | ClusterRole (admin) | `feast-data-registry-admin` | Cluster |
 | ClusterRoleBinding | `feast-{cr-name}-data-registry-auth-delegator` | Cluster |
 
@@ -136,17 +135,20 @@ kube-rbac-proxy :8443 (HTTPS)  ──HTTP 127.0.0.1:6572──►  feast-server
 
 ## RBAC — aggregated ClusterRoles
 
-The operator creates three ClusterRoles with standard Kubernetes RBAC aggregation labels:
+The operator creates two ClusterRoles with standard Kubernetes RBAC aggregation labels:
 
 | ClusterRole | Aggregates into | Verbs |
 |-------------|----------------|-------|
 | `feast-data-registry-viewer` | view, edit, admin, cluster-reader | get, list, watch |
-| `feast-data-registry-editor` | edit, admin | + create, update, patch, delete |
-| `feast-data-registry-admin` | admin | editor verbs + `connections:use` |
+| `feast-data-registry-admin` | admin | get, list, watch, create, update, patch, delete |
 
 These operate on pseudo-resources in the `dataregistry.opendatahub.io` API group (registries,
 namespaces, tables, volumes, generic-tables). Users with the standard OpenShift `view` role
 automatically gain data-registry viewer access via aggregation.
+The standard OpenShift `edit` role also receives these read permissions, but no
+longer grants Data Registry writes. The `connections:use` pseudo-resource is no
+longer granted by the Data Registry admin role. Access to Kubernetes Secrets or
+Data Connect Hub data remains governed by their separate permissions.
 
 ---
 

@@ -660,7 +660,7 @@ func (feast *FeastServices) setDataRegistryAuthConfig(cm *corev1.ConfigMap) erro
 }
 
 // ---------------------------------------------------------------------------
-// Aggregated ClusterRoles — viewer and editor permissions for data registry
+// Aggregated ClusterRoles — viewer and admin permissions for data registry
 // ---------------------------------------------------------------------------
 
 func (feast *FeastServices) deployDataRegistryClusterRoles() error {
@@ -696,34 +696,6 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 		logger.Info("Successfully reconciled", "ClusterRole", viewerCR.Name, "operation", op)
 	}
 
-	editorCR := feast.initDataRegistryClusterRole("editor")
-	if op, err := controllerutil.CreateOrUpdate(
-		feast.Handler.Context,
-		feast.Handler.Client,
-		editorCR,
-		func() error {
-			editorCR.Labels = feast.dataRegistryRBACLabels()
-			for key, value := range map[string]string{
-				"rbac.authorization.k8s.io/aggregate-to-edit":  "true",
-				"rbac.authorization.k8s.io/aggregate-to-admin": "true",
-			} {
-				editorCR.Labels[key] = value
-			}
-			editorCR.Rules = []rbacv1.PolicyRule{
-				{
-					APIGroups: []string{dataRegistryAPIGroup},
-					Resources: dataRegistryPseudoResources,
-					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-				},
-			}
-			return nil
-		},
-	); err != nil {
-		return err
-	} else if op == controllerutil.OperationResultCreated || op == controllerutil.OperationResultUpdated {
-		logger.Info("Successfully reconciled", "ClusterRole", editorCR.Name, "operation", op)
-	}
-
 	adminCR := feast.initDataRegistryClusterRole("admin")
 	if op, err := controllerutil.CreateOrUpdate(
 		feast.Handler.Context,
@@ -741,11 +713,6 @@ func (feast *FeastServices) deployDataRegistryClusterRoles() error {
 					APIGroups: []string{dataRegistryAPIGroup},
 					Resources: dataRegistryPseudoResources,
 					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
-				},
-				{
-					APIGroups: []string{dataRegistryAPIGroup},
-					Resources: []string{"connections"},
-					Verbs:     []string{"use"},
 				},
 			}
 			return nil
@@ -777,7 +744,7 @@ func (feast *FeastServices) initDataRegistryClusterRole(suffix string) *rbacv1.C
 // to avoid a standard CR's reconcile deleting roles created by the
 // data-registry CR.
 func (feast *FeastServices) CleanupDataRegistryClusterRoles() error {
-	for _, suffix := range []string{"viewer", "editor", "admin"} {
+	for _, suffix := range []string{"viewer", "admin"} {
 		cr := &rbacv1.ClusterRole{}
 		name := feast.dataRegistryClusterRoleName(suffix)
 		if err := feast.Handler.Client.Get(
@@ -1034,8 +1001,6 @@ func (feast *FeastServices) dataRegistryClusterRoleName(suffix string) string {
 	switch suffix {
 	case "viewer":
 		return DataRegistryViewerClusterRoleName
-	case "editor":
-		return DataRegistryEditorClusterRoleName
 	case "admin":
 		return DataRegistryAdminClusterRoleName
 	default:

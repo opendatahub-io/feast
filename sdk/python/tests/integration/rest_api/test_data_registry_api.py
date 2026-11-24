@@ -127,6 +127,10 @@ class TestDataRegistryAPI:
                 "name": TEST_VOLUME_NAME,
                 "format": "documents",
                 "storage_location": "s3://test-bucket/integ-volumes/",
+                "connection_ref": {
+                    "type": "secret",
+                    "secret_name": "unresolved-integration-connection",  # pragma: allowlist secret
+                },
                 "properties": {"source": "integration-test"},
             },
         )
@@ -134,6 +138,13 @@ class TestDataRegistryAPI:
         data = response.json()
         assert data["name"] == TEST_VOLUME_NAME
         assert data["asset_type"] == "volume"
+        assert (
+            data["connection_ref"]
+            == {
+                "type": "secret",
+                "secret_name": "unresolved-integration-connection",  # pragma: allowlist secret
+            }
+        )
 
     def test_dr_09_volume_list(self, data_registry_client):
         """GET .../volumes returns a list including our test volume."""
@@ -154,6 +165,13 @@ class TestDataRegistryAPI:
         data = response.json()
         assert data["name"] == TEST_VOLUME_NAME
         assert data["asset_type"] == "volume"
+        assert (
+            data["connection_ref"]
+            == {
+                "type": "secret",
+                "secret_name": "unresolved-integration-connection",  # pragma: allowlist secret
+            }
+        )
 
     def test_dr_11_volume_head(self, data_registry_client):
         """HEAD .../volumes/{name} returns 204."""
@@ -265,6 +283,34 @@ class TestDataRegistryAPI:
     def test_dr_20_auth_unauthorized(self, data_registry_unauthorized_client):
         """GET /v1/{ns}/namespaces with a token lacking SAR bindings returns 403."""
         response = data_registry_unauthorized_client.get(f"/v1/{NAMESPACE}/namespaces")
+        assert response.status_code == 403
+
+    def test_dr_20b_viewer_cannot_create(self, data_registry_viewer_client):
+        """Named registry viewer can read but cannot create a collection."""
+        assert (
+            data_registry_viewer_client.get(f"/v1/{NAMESPACE}/namespaces").status_code
+            == 200
+        )
+        response = data_registry_viewer_client.post(
+            f"/v1/{NAMESPACE}/namespaces",
+            json={"namespace": ["viewer-must-not-create"]},
+        )
+        assert response.status_code == 403
+
+    def test_dr_20c_openshift_edit_cannot_create(
+        self, data_registry_openshift_editor_client
+    ):
+        """Standard OpenShift edit inherits registry reads, but not writes."""
+        assert (
+            data_registry_openshift_editor_client.get(
+                f"/v1/{NAMESPACE}/namespaces"
+            ).status_code
+            == 200
+        )
+        response = data_registry_openshift_editor_client.post(
+            f"/v1/{NAMESPACE}/namespaces",
+            json={"namespace": ["openshift-edit-must-not-create"]},
+        )
         assert response.status_code == 403
 
     # ------------------------------------------------------------------

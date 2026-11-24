@@ -134,12 +134,6 @@ rules:
 - apiGroups:
   - dataregistry.opendatahub.io
   resources:
-  - connections
-  verbs:
-  - use
-- apiGroups:
-  - dataregistry.opendatahub.io
-  resources:
   - generic-tables
   - namespaces
   - registries
@@ -280,7 +274,6 @@ rules:
   - rbac.authorization.k8s.io
   resourceNames:
   - feast-data-registry-admin
-  - feast-data-registry-editor
   - feast-data-registry-viewer
   - feast-discover-namespaces
   - feast-oidc-token-review

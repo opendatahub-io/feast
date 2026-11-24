@@ -350,6 +350,12 @@ def viewer_token(feast_extended_setup):
 
 
 @pytest.fixture(scope="session")
+def openshift_editor_token(feast_extended_setup):
+    """Bearer token for an SA granted the standard OpenShift edit role."""
+    return create_sa_token(NAMESPACE, "feast-test-openshift-editor")
+
+
+@pytest.fixture(scope="session")
 def unauthorized_token(feast_extended_setup):
     """Bearer token for the feast-test-unauthorized ServiceAccount (no RBAC bindings)."""
     return create_sa_token(NAMESPACE, "feast-test-unauthorized")
@@ -423,6 +429,20 @@ def data_registry_client(data_registry_route_url, admin_token):
         initial_delay=10,
     )
     return DataRegistryClient(data_registry_route_url, token=admin_token)
+
+
+@pytest.fixture(scope="session")
+def data_registry_viewer_client(data_registry_route_url, viewer_token):
+    """DataRegistryClient with the named registry viewer role."""
+    return DataRegistryClient(data_registry_route_url, token=viewer_token)
+
+
+@pytest.fixture(scope="session")
+def data_registry_openshift_editor_client(
+    data_registry_route_url, openshift_editor_token
+):
+    """DataRegistryClient with standard OpenShift edit, but no registry admin role."""
+    return DataRegistryClient(data_registry_route_url, token=openshift_editor_token)
 
 
 @pytest.fixture(scope="session")
