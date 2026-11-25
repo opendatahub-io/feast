@@ -12,6 +12,9 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --metrics-bind-address=:8443
+          # Defined by the downstream operator build pinned in params.env. Do
+          # not drop the flag or move the mount to the controller-runtime
+          # default directory to work around an image that lacks it.
           - --metrics-cert-path=/etc/metrics-certs
         securityContext:
           readOnlyRootFilesystem: true
