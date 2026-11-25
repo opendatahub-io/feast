@@ -755,7 +755,10 @@ func (feast *FeastServices) cleanupLegacyDataRegistryEditorRole() error {
 		role.Labels[NameLabelKey] != feast.Handler.FeatureStore.Name {
 		return nil
 	}
-	if err := feast.Handler.Client.Delete(feast.Handler.Context, role); err != nil {
+	if err := feast.Handler.Client.Delete(feast.Handler.Context, role, client.Preconditions{
+		UID:             &role.UID,
+		ResourceVersion: &role.ResourceVersion,
+	}); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 	log.FromContext(feast.Handler.Context).Info("Removed retired Data Registry editor ClusterRole", "ClusterRole", role.Name)

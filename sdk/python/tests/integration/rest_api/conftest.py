@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import requests
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from tests.integration.rest_api.support import (
     applyFeastProject,
@@ -274,10 +275,48 @@ def feast_extended_setup(feast_rest_client):
     resource_dir = Path(__file__).parent / "resource"
     api_instance = client.CoreV1Api()
 
-    # Apply RBAC ServiceAccounts + RoleBindings
-    run_kubectl_command(
-        ["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE]
-    )
+    # roleRef is immutable. A reused namespace can retain the old editor binding.
+    rbac_api = client.RbacAuthorizationV1Api()
+    try:
+        admin_binding = rbac_api.read_namespaced_role_binding(
+            "dr-admin-binding", NAMESPACE
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+    else:
+        role_ref = admin_binding.role_ref
+        if (
+            role_ref.kind != "ClusterRole"
+            or role_ref.name != "feast-data-registry-admin"
+            or role_ref.api_group != "rbac.authorization.k8s.io"
+        ):
+            rbac_api.delete_namespaced_role_binding(
+                "dr-admin-binding",
+                NAMESPACE,
+                body=client.V1DeleteOptions(
+                    preconditions=client.V1Preconditions(uid=admin_binding.metadata.uid)
+                ),
+            )
+            for _ in range(30):
+                try:
+                    rbac_api.read_namespaced_role_binding("dr-admin-binding", NAMESPACE)
+                except ApiException as exc:
+                    if exc.status == 404:
+                        break
+                    raise
+                time.sleep(1)
+            else:
+                raise TimeoutError("Old dr-admin-binding was not deleted")
+
+    # Apply RBAC ServiceAccounts + RoleBindings, failing if any apply fails.
+    if (
+        run_kubectl_command(
+            ["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE]
+        )
+        is None
+    ):
+        raise RuntimeError("Could not apply Data Registry RBAC test fixtures")
 
     # Deploy feast-auth CR
     create_feast_project(
