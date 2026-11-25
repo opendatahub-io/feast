@@ -1,11 +1,12 @@
 ---
 # Feast Power (ppc64le) Group Test Pipeline (Pipelines-as-Code)
 #
-# Same Feast operator + feature-server group e2e as /group-test, but provisions an
-# ephemeral HyperShift HostedCluster on IBM PowerVS (ppc64le workers) instead of AWS.
+# Same Feast operator + feature-server group e2e as /group-test, but runs against a
+# shared Power OpenShift cluster (tenant kubeconfig Secret) instead of provisioning
+# an ephemeral cluster.
 #
 # Triggers:
-#   - Comment: /feast-power-group-test on a pull request (manual only)
+#   - Comment: /feast-power-group-test on a pull request (manual only — no auto PR run)
 #
 # Pipeline definition:
 #   odh-konflux-central/integration-tests/feast/pr-power-group-testing-pipeline.yaml
@@ -13,7 +14,10 @@
 # Prerequisites:
 #   - PR images built for both odh-feast-operator-ci and odh-feature-server-ci
 #     (multi-arch including linux/ppc64le)
-#   - Konflux/OpenShift CI PowerVS cluster profile available (see pipeline params)
+#   - Tenant Secret feast-power-shared-kubeconfig (key: kubeconfig) in open-data-hub-tenant
+#       oc create secret generic feast-power-shared-kubeconfig \
+#         --from-file=kubeconfig=/path/to/power-shared.kubeconfig \
+#         -n open-data-hub-tenant
 #
 # Required template variables (supplied by Pipelines-as-Code):
 #   - revision, target_branch, pull_request_number, git_auth_secret
@@ -28,7 +32,7 @@ metadata:
     build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    # Manual Power e2e only — does not auto-run on group-test events.
+    # Manual Power e2e only — does not auto-run on PR open/update or group-test events.
     pipelinesascode.tekton.dev/on-comment: "^/feast-power-group-test"
   name: feast-power-group-test
   namespace: open-data-hub-tenant
@@ -40,13 +44,9 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-feast-operator-ci": "opendatahub/feast-operator", "odh-feature-server-ci": "opendatahub/feature-server" }'
-  # Override if Test Platform assigns a different PowerVS profile name.
-  - name: cluster-profile
-    value: powervs-konflux
-  - name: platform
-    value: powervs
-  - name: hypershift-node-count
-    value: "2"
+  # Tenant Secret with key "kubeconfig" for the shared Power OpenShift cluster.
+  - name: cluster-kubeconfig-secret
+    value: feast-power-shared-kubeconfig
   pipelineRef:
     resolver: git
     params:
