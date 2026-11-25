@@ -93,6 +93,13 @@ def test_config_endpoints_include_namespace_crud():
     assert "DELETE /v1/{prefix}/labels/{label}" in CATALOG_CONFIG_ENDPOINTS
 
 
+def test_config_endpoints_include_connection_assets():
+    assert (
+        "GET /v1/{prefix}/connections/{source}/{connection_id}/assets"
+        in CATALOG_CONFIG_ENDPOINTS
+    )
+
+
 def test_empty_warehouse_does_not_set_prefix():
     response = _client().get("/v1/config", params={"warehouse": ""})
     assert response.status_code == 200
