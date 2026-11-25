@@ -40,7 +40,14 @@ from feast.api.data_catalog.errors import (
     BadRequestException,
     ServiceFailureException,
 )
-from feast.api.data_catalog.models import AssetResponse, ConnectionRef, SchemaField
+from feast.api.data_catalog.models import (
+    ConnectionRef,
+    SchemaField,
+    StructuredAssetResponse,
+    StructuredFormat,
+    UnstructuredAssetResponse,
+    UnstructuredFormat,
+)
 from feast.errors import SavedDatasetAlreadyExists, SavedDatasetNotFound
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
 from feast.infra.registry.base_registry import BaseRegistry
@@ -372,27 +379,25 @@ def owner_from_identity(
     return ident
 
 
-def structured_format_from_tags(tags: dict[str, str]) -> str:
+def structured_format_from_tags(tags: dict[str, str]) -> StructuredFormat:
     fmt = tags.get("format")
     if not fmt or fmt not in STRUCTURED_FORMATS:
         raise BadRequestException("table asset has invalid or missing format")
-    return fmt
+    return fmt  # type: ignore[return-value]
 
 
-def unstructured_format_from_tags(tags: dict[str, str]) -> str:
+def unstructured_format_from_tags(tags: dict[str, str]) -> UnstructuredFormat:
     fmt = tags.get("format")
     if not fmt or fmt not in UNSTRUCTURED_FORMATS:
         raise BadRequestException("volume asset has invalid or missing format")
-    return fmt
+    return fmt  # type: ignore[return-value]
 
 
-def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetResponse:
+def catalog_asset_response(
+    dataset: SavedDataset, collection: str
+) -> StructuredAssetResponse | UnstructuredAssetResponse:
     tags = dataset.tags or {}
     asset_type = tags.get("asset_type") or "table"
-    if asset_type == "volume":
-        format_value = unstructured_format_from_tags(tags)
-    else:
-        format_value = structured_format_from_tags(tags)
     owner = (tags.get("owner") or "").strip()
     if not owner:
         raise BadRequestException("asset missing owner")
@@ -422,11 +427,9 @@ def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetRespo
     updated_at = isoformat_ts(dataset.last_updated_timestamp)
     if not created_at and not updated_at:
         raise ServiceFailureException("asset missing timestamps")
-    return AssetResponse(
+    shared = dict(
         name=unscoped_name(dataset.name),
-        asset_type=asset_type,
         uuid=uuid,
-        format=format_value,
         storage_location=storage_uri(dataset) or None,
         columns=columns,
         collection=collection,
@@ -437,6 +440,17 @@ def catalog_asset_response(dataset: SavedDataset, collection: str) -> AssetRespo
         properties=props or None,
         created_at=created_at or updated_at or "",
         updated_at=updated_at or created_at or "",
+    )
+    if asset_type == "volume":
+        return UnstructuredAssetResponse(
+            asset_type="volume",
+            format=unstructured_format_from_tags(tags),
+            **shared,
+        )
+    return StructuredAssetResponse(
+        asset_type="table",
+        format=structured_format_from_tags(tags),
+        **shared,
     )
 
 

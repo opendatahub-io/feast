@@ -210,11 +210,9 @@ class UpdateGenericTableRequest(BaseModel):
     remove_properties: list[str] | None = None
 
 
-class AssetResponse(BaseModel):
+class AssetResponseBase(BaseModel):
     name: str
-    asset_type: str
     uuid: str
-    format: str
     collection: str
     owner: str
     created_at: str
@@ -230,12 +228,22 @@ class AssetResponse(BaseModel):
     properties: dict[str, str] | None = None
 
 
+class StructuredAssetResponse(AssetResponseBase):
+    asset_type: Literal["table"] = "table"
+    format: StructuredFormat
+
+
+class UnstructuredAssetResponse(AssetResponseBase):
+    asset_type: Literal["volume"] = "volume"
+    format: UnstructuredFormat
+
+
 class AssetListResponse(BaseModel):
-    assets: list[AssetResponse]
+    assets: list[StructuredAssetResponse]
 
 
 class ListVolumesResponse(BaseModel):
-    volumes: list[AssetResponse]
+    volumes: list[UnstructuredAssetResponse]
 
 
 # ----- Labels -----

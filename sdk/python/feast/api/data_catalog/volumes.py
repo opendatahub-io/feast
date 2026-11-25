@@ -51,9 +51,9 @@ from feast.api.data_catalog.errors import (
     NoSuchVolumeException,
 )
 from feast.api.data_catalog.models import (
-    AssetResponse,
     CreateVolumeRequest,
     ListVolumesResponse,
+    UnstructuredAssetResponse,
     UpdateVolumeRequest,
 )
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
@@ -125,7 +125,7 @@ def get_volume_router() -> APIRouter:
 
     @router.post(
         "/v1/{project}/namespaces/{collection}/volumes",
-        response_model=AssetResponse,
+        response_model=UnstructuredAssetResponse,
         response_model_exclude_unset=True,
     )
     def create_volume(
@@ -136,7 +136,7 @@ def get_volume_router() -> APIRouter:
         x_remote_user: str | None = Header(default=None, alias="X-Remote-User"),
         x_user: str | None = Header(default=None, alias="X-User"),
         kubeflow_userid: str | None = Header(default=None, alias="kubeflow-userid"),
-    ) -> AssetResponse:
+    ) -> UnstructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
@@ -172,12 +172,12 @@ def get_volume_router() -> APIRouter:
 
     @router.get(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
-        response_model=AssetResponse,
+        response_model=UnstructuredAssetResponse,
         response_model_exclude_unset=True,
     )
     def get_volume(
         project: str, collection: str, volume: str, request: Request
-    ) -> AssetResponse:
+    ) -> UnstructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
@@ -201,7 +201,7 @@ def get_volume_router() -> APIRouter:
 
     @router.patch(
         "/v1/{project}/namespaces/{collection}/volumes/{volume}",
-        response_model=AssetResponse,
+        response_model=UnstructuredAssetResponse,
         response_model_exclude_unset=True,
     )
     def update_volume(
@@ -210,7 +210,7 @@ def get_volume_router() -> APIRouter:
         volume: str,
         body: UpdateVolumeRequest,
         request: Request,
-    ) -> AssetResponse:
+    ) -> UnstructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
