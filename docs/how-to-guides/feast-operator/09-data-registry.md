@@ -145,10 +145,17 @@ The operator creates two ClusterRoles with standard Kubernetes RBAC aggregation 
 These operate on pseudo-resources in the `dataregistry.opendatahub.io` API group (registries,
 namespaces, tables, volumes, generic-tables). Users with the standard OpenShift `view` role
 automatically gain data-registry viewer access via aggregation.
-The standard OpenShift `edit` role also receives these read permissions, but no
-longer grants Data Registry writes. The `connections:use` pseudo-resource is no
-longer granted by the Data Registry admin role. Access to Kubernetes Secrets or
-Data Connect Hub data remains governed by their separate permissions.
+The standard OpenShift `edit` role also receives these read permissions, but
+its aggregated rules no longer grant Data Registry writes directly. This does
+not make a project editor an effective read-only user: `edit` can run Pods as
+ServiceAccounts in the project. If one of those ServiceAccounts has Data Registry
+admin access, a project editor can use its token to write. Use `view` or a
+custom limited role when a read-only boundary is required, and keep Data Registry
+admin ServiceAccounts out of projects editable by those users.
+
+The `connections:use` pseudo-resource is no longer granted by the Data Registry
+admin role. Access to Kubernetes Secrets or Data Connect Hub data remains governed
+by their separate permissions.
 
 ---
 

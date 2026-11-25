@@ -300,7 +300,7 @@ class TestDataRegistryAPI:
     def test_dr_20c_openshift_edit_cannot_create(
         self, data_registry_openshift_editor_client
     ):
-        """Standard OpenShift edit inherits registry reads, but not writes."""
+        """OpenShift edit does not directly inherit registry write permission."""
         assert (
             data_registry_openshift_editor_client.get(
                 f"/v1/{NAMESPACE}/namespaces"
