@@ -403,6 +403,8 @@ var _ = Describe("Data Registry", func() {
 
 		// Catalog: path capture for Feast project (= K8s namespace).
 		Expect(authContent).To(ContainSubstring("path: /v1/{project}/namespaces"))
+		Expect(authContent).To(ContainSubstring("path: /v1/{project}/namespaces/{collection}/rename"))
+		Expect(authContent).To(ContainSubstring("path: /v1/{project}/namespaces/{collection}/assets/{asset}/move"))
 		Expect(authContent).To(ContainSubstring(`namespace: '{{ index .PathParams "project" }}'`))
 
 		// Legacy registry REST: ?project= and /api/v1 prefix.

@@ -67,6 +67,11 @@ def test_config_endpoints_include_namespace_crud():
         "POST /v1/{prefix}/namespaces/{namespace}/properties"
         in CATALOG_CONFIG_ENDPOINTS
     )
+    assert "POST /v1/{prefix}/namespaces/{namespace}/rename" in CATALOG_CONFIG_ENDPOINTS
+    assert (
+        "POST /v1/{prefix}/namespaces/{namespace}/assets/{asset}/move"
+        in CATALOG_CONFIG_ENDPOINTS
+    )
     assert "GET /v1/{prefix}/namespaces/{namespace}/tables" in CATALOG_CONFIG_ENDPOINTS
     assert (
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"

@@ -35,6 +35,8 @@ var dataRegistryAuthCatalogEndpointPaths = []string{
 	"/v1/{project}/namespaces",
 	"/v1/{project}/namespaces/{collection}",
 	"/v1/{project}/namespaces/{collection}/properties",
+	"/v1/{project}/namespaces/{collection}/rename",
+	"/v1/{project}/namespaces/{collection}/assets/{asset}/move",
 	"/v1/{project}/namespaces/{collection}/tables",
 	"/v1/{project}/namespaces/{collection}/tables/{table}",
 	"/v1/{project}/tables/rename",

@@ -33,6 +33,7 @@ from feast.api.data_catalog.catalog_utils import (
     get_namespace_properties,
     list_collections,
     merge_namespace_properties,
+    rename_namespace_meta,
     validate_namespace_exists,
 )
 from feast.api.data_catalog.errors import (
@@ -43,6 +44,7 @@ from feast.api.data_catalog.models import (
     CreateNamespaceRequest,
     ListNamespacesResponse,
     NamespaceResponse,
+    RenameNamespaceRequest,
     UpdateNamespacePropertiesRequest,
     UpdateNamespacePropertiesResponse,
 )
@@ -131,5 +133,22 @@ def get_namespace_router() -> APIRouter:
             removed=removed,
             missing=missing,
         )
+
+    @router.post(
+        "/v1/{project}/namespaces/{collection}/rename",
+        response_model=NamespaceResponse,
+    )
+    def rename_namespace(
+        project: str,
+        collection: str,
+        body: RenameNamespaceRequest,
+        request: Request,
+    ) -> NamespaceResponse:
+        rhai_ns, col = _project_and_collection(project, collection)
+        new_collection = _http_collection(body.new_namespace)
+        properties = rename_namespace_meta(
+            _registry(request), rhai_ns, col, new_collection
+        )
+        return NamespaceResponse(namespace=[new_collection], properties=properties)
 
     return router

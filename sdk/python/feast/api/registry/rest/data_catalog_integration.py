@@ -28,6 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from feast.api.data_catalog.assets import get_asset_router
 from feast.api.data_catalog.config import get_config_router
 from feast.api.data_catalog.errors import (
     BadRequestException,
@@ -144,6 +145,7 @@ def add_data_catalog_routes(app: FastAPI, registry) -> None:
     app.state.registry = registry
     app.include_router(get_config_router())
     app.include_router(get_namespace_router())
+    app.include_router(get_asset_router())
     app.include_router(get_table_router())
     app.include_router(get_volume_router())
     app.include_router(get_generic_table_router())
