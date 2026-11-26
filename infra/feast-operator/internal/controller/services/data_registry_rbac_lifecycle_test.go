@@ -27,7 +27,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestDataRegistryRBACSurvivesSameNameRecreation(t *testing.T) {
@@ -84,7 +86,7 @@ func TestDataRegistryRBACSurvivesSameNameRecreation(t *testing.T) {
 	if err := old.CleanupDataRegistryAuthDelegatorBinding(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cl.Get(ctx, types.NamespacedName{Name: DataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
+	if err := cl.Get(ctx, types.NamespacedName{Name: DataRegistryAdminClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
 		t.Fatalf("new instance ClusterRole was removed: %v", err)
 	}
 	if err := cl.Get(ctx, types.NamespacedName{Name: newInstance.dataRegistryAuthDelegatorCRBName()}, &rbacv1.ClusterRoleBinding{}); err != nil {
@@ -93,5 +95,138 @@ func TestDataRegistryRBACSurvivesSameNameRecreation(t *testing.T) {
 	err := cl.Get(ctx, types.NamespacedName{Name: old.dataRegistryAuthDelegatorCRBName()}, &rbacv1.ClusterRoleBinding{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("old binding was not removed: %v", err)
+	}
+}
+
+func TestLegacyEditorRoleCleanup(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	if err := feastdevv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	feast := &FeastServices{Handler: handler.FeastHandler{
+		Client: cl, Context: ctx, Scheme: scheme,
+		FeatureStore: &feastdevv1.FeatureStore{ObjectMeta: metav1.ObjectMeta{
+			Name: "data-registry", Namespace: "rhoai-data-registry", UID: types.UID("current-instance"),
+		}},
+	}}
+	legacyRole := func(labels map[string]string) *rbacv1.ClusterRole {
+		return &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: legacyDataRegistryEditorClusterRoleName, Labels: labels,
+		}}
+	}
+	managedLabels := map[string]string{
+		ManagedByLabelKey:            ManagedByLabelValue,
+		NameLabelKey:                 "data-registry",
+		dataRegistryOwnerUIDLabelKey: "old-instance",
+	}
+
+	if err := cl.Create(ctx, legacyRole(managedLabels)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale Feast-managed editor role remains after reconciliation: %v", err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatalf("repeat reconciliation failed after editor role removal: %v", err)
+	}
+
+	foreignRole := legacyRole(map[string]string{
+		ManagedByLabelKey: "another-operator",
+		NameLabelKey:      "data-registry",
+	})
+	if err := cl.Create(ctx, foreignRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.deployDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); err != nil {
+		t.Fatalf("unmanaged editor role was removed: %v", err)
+	}
+	if err := cl.Delete(ctx, foreignRole); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cl.Create(ctx, legacyRole(managedLabels)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feast.CleanupDataRegistryClusterRoles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: legacyDataRegistryEditorClusterRoleName}, &rbacv1.ClusterRole{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("stale Feast-managed editor role remains after cleanup: %v", err)
+	}
+}
+
+func TestLegacyEditorRoleCleanupRejectsChangedRole(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	if err := feastdevv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+		Name: legacyDataRegistryEditorClusterRoleName,
+		UID:  types.UID("legacy-role"),
+		Labels: map[string]string{
+			ManagedByLabelKey: ManagedByLabelValue,
+			NameLabelKey:      "data-registry",
+		},
+	}}
+	if err := base.Create(ctx, role); err != nil {
+		t.Fatal(err)
+	}
+	cl := interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, underlying client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() != legacyDataRegistryEditorClusterRoleName {
+				return underlying.Delete(ctx, obj, opts...)
+			}
+			deleteOptions := (&client.DeleteOptions{}).ApplyOptions(opts)
+			if deleteOptions.Preconditions == nil || deleteOptions.Preconditions.UID == nil ||
+				deleteOptions.Preconditions.ResourceVersion == nil ||
+				*deleteOptions.Preconditions.UID != obj.GetUID() ||
+				*deleteOptions.Preconditions.ResourceVersion != obj.GetResourceVersion() {
+				t.Error("legacy role delete did not use the inspected UID and resource version")
+			}
+			changed := &rbacv1.ClusterRole{}
+			if err := underlying.Get(ctx, client.ObjectKeyFromObject(obj), changed); err != nil {
+				return err
+			}
+			changed.Labels[ManagedByLabelKey] = "another-operator"
+			if err := underlying.Update(ctx, changed); err != nil {
+				return err
+			}
+			return underlying.Delete(ctx, obj, opts...)
+		},
+	})
+	feast := &FeastServices{Handler: handler.FeastHandler{
+		Client: cl, Context: ctx, Scheme: scheme,
+		FeatureStore: &feastdevv1.FeatureStore{ObjectMeta: metav1.ObjectMeta{
+			Name: "data-registry", Namespace: "rhoai-data-registry",
+		}},
+	}}
+	if err := feast.cleanupLegacyDataRegistryEditorRole(); !apierrors.IsConflict(err) {
+		t.Fatalf("expected conflict after ownership changed, got %v", err)
+	}
+	remaining := &rbacv1.ClusterRole{}
+	if err := base.Get(ctx, types.NamespacedName{Name: role.Name}, remaining); err != nil {
+		t.Fatalf("changed role was deleted: %v", err)
+	}
+	if remaining.Labels[ManagedByLabelKey] != "another-operator" {
+		t.Fatalf("expected changed ownership label, got %q", remaining.Labels[ManagedByLabelKey])
 	}
 }

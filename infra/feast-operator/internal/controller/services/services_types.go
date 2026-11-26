@@ -100,7 +100,6 @@ const (
 	// and prevents Forbidden errors when the OLM-installed operator tries to
 	// get/update/delete a ClusterRole whose name was not pre-listed.
 	DataRegistryViewerClusterRoleName = "feast-data-registry-viewer"
-	DataRegistryEditorClusterRoleName = "feast-data-registry-editor"
 	DataRegistryAdminClusterRoleName  = "feast-data-registry-admin"
 
 	// DataRegistryCRName is the only FeatureStore metadata.name allowed when

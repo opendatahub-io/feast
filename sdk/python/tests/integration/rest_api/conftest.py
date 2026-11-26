@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import requests
 from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from tests.integration.rest_api.support import (
     applyFeastProject,
@@ -283,10 +284,48 @@ def feast_extended_setup(feast_rest_client):
     resource_dir = Path(__file__).parent / "resource"
     api_instance = client.CoreV1Api()
 
-    # Apply RBAC ServiceAccounts + RoleBindings
-    run_kubectl_command(
-        ["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE]
-    )
+    # roleRef is immutable. A reused namespace can retain the old editor binding.
+    rbac_api = client.RbacAuthorizationV1Api()
+    try:
+        admin_binding = rbac_api.read_namespaced_role_binding(
+            "dr-admin-binding", NAMESPACE
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+    else:
+        role_ref = admin_binding.role_ref
+        if (
+            role_ref.kind != "ClusterRole"
+            or role_ref.name != "feast-data-registry-admin"
+            or role_ref.api_group != "rbac.authorization.k8s.io"
+        ):
+            rbac_api.delete_namespaced_role_binding(
+                "dr-admin-binding",
+                NAMESPACE,
+                body=client.V1DeleteOptions(
+                    preconditions=client.V1Preconditions(uid=admin_binding.metadata.uid)
+                ),
+            )
+            for _ in range(30):
+                try:
+                    rbac_api.read_namespaced_role_binding("dr-admin-binding", NAMESPACE)
+                except ApiException as exc:
+                    if exc.status == 404:
+                        break
+                    raise
+                time.sleep(1)
+            else:
+                raise TimeoutError("Old dr-admin-binding was not deleted")
+
+    # Apply RBAC ServiceAccounts + RoleBindings, failing if any apply fails.
+    if (
+        run_kubectl_command(
+            ["apply", "-f", str(resource_dir / "rbac_setup.yaml"), "-n", NAMESPACE]
+        )
+        is None
+    ):
+        raise RuntimeError("Could not apply Data Registry RBAC test fixtures")
 
     # Deploy feast-auth CR
     create_feast_project(
@@ -359,6 +398,12 @@ def viewer_token(feast_extended_setup):
 
 
 @pytest.fixture(scope="session")
+def openshift_editor_token(feast_extended_setup):
+    """Bearer token for an SA granted the standard OpenShift edit role."""
+    return create_sa_token(NAMESPACE, "feast-test-openshift-editor")
+
+
+@pytest.fixture(scope="session")
 def unauthorized_token(feast_extended_setup):
     """Bearer token for the feast-test-unauthorized ServiceAccount (no RBAC bindings)."""
     return create_sa_token(NAMESPACE, "feast-test-unauthorized")
@@ -428,6 +473,20 @@ def data_registry_client(data_registry_route_url, admin_token):
         initial_delay=10,
     )
     return DataRegistryClient(data_registry_route_url, token=admin_token)
+
+
+@pytest.fixture(scope="session")
+def data_registry_viewer_client(data_registry_route_url, viewer_token):
+    """DataRegistryClient with the named registry viewer role."""
+    return DataRegistryClient(data_registry_route_url, token=viewer_token)
+
+
+@pytest.fixture(scope="session")
+def data_registry_openshift_editor_client(
+    data_registry_route_url, openshift_editor_token
+):
+    """DataRegistryClient with standard OpenShift edit, but no registry admin role."""
+    return DataRegistryClient(data_registry_route_url, token=openshift_editor_token)
 
 
 @pytest.fixture(scope="session")
