@@ -1,0 +1,356 @@
+name: PR Build Validation
+
+# Simulates the Konflux build inputs for this repository:
+#   .tekton/odh-feature-server-pull-request.yaml
+#   .tekton/odh-feast-operator-pull-request.yaml
+#   .tekton/odh-feast-mcp-pull-request.yaml
+#
+# Intentional non-duplication: docker-smoke-tests already builds and runs the
+# feature-server image for changes under
+# sdk/python/feast/infra/feature_servers/multicloud/**, and
+# operator-e2e-integration-tests runs the Kind e2e for infra/** changes. This
+# workflow covers what neither of them does: the dependency inputs a hermetic
+# build must prefetch, the operator overlays that are never kustomize-built,
+# the rest of sdk/python/feast/** that the image overlays at build time, and
+# the flag contract between the operator overlay and the operator binary.
+#
+# Skip with "[skip konflux-sim]" in the PR title or the "skip-konflux-sim" label.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - 'release-*'
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per PR: a new commit cancels the run in flight, so two image
+  # builds for the same PR never race. Metadata edits do not cancel anything
+  # because cancel-in-progress is synchronize-only, and every run executes the
+  # full validator set, so a queued edit can only replace pending work with the
+  # same validation of the same revision.
+  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+env:
+  GO_VERSION: '1.26.10'
+  UV_VERSION: '0.13.4'
+  # Prefixed so it cannot shadow a Makefile variable. `infra/feast-operator`
+  # sets `KUSTOMIZE_VERSION ?= v5.4.3`, and an exported value beats `?=`, so a
+  # plain KUSTOMIZE_VERSION here broke `make deploy` with
+  # `invalid version: unknown revision 5.7.1`.
+  SIM_KUSTOMIZE_VERSION: '5.7.1'
+  # Digests published with the kustomize_v5.7.1_linux_amd64.tar.gz release asset.
+  KUSTOMIZE_SHA256: 'ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818d8'  # pragma: allowlist secret
+  SIM_KUBECONFORM_VERSION: '0.7.0'
+  # Digest published in the kubeconform-linux-amd64.tar.gz release CHECKSUMS.
+  KUBECONFORM_SHA256: 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3'  # pragma: allowlist secret
+  KUBERNETES_VERSION: '1.31.0'
+  PLATFORM: linux/amd64
+  FEATURE_SERVER_IMAGE: quay.io/opendatahub/feature-server:pr-${{ github.sha }}
+  MCP_IMAGE: quay.io/opendatahub/odh-feast-mcp:pr-${{ github.sha }}
+  OPERATOR_IMAGE: quay.io/opendatahub/feast-operator:pr-${{ github.sha }}
+
+jobs:
+  check-skip:
+    name: Check Skip Condition
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should-skip: ${{ steps.check.outputs.skip }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Evaluate skip condition
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          RELEVANT='^(sdk/python/|infra/|Dockerfiles/|\.dockerignore|\.tekton/|Makefile|pyproject\.toml|pixi\.lock|uv\.lock|go\.(mod|sum)|scripts/(validate-build\.sh|manifest_contract\.py)|\.github/workflows/(pr-build-validation|docker_smoke_tests|publish_images|operator-e2e-integration-tests)\.yml)'
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=manual dispatch" >> "$GITHUB_OUTPUT"
+            echo "✅ Manual dispatch: validation will run"
+          elif [[ "$PR_TITLE" == *"[skip konflux-sim]"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=PR title contains [skip konflux-sim]" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Validation skipped: PR title contains [skip konflux-sim]"
+          elif [[ ",${PR_LABELS}," == *",skip-konflux-sim,"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=skip-konflux-sim label present" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Validation skipped: skip-konflux-sim label present"
+          else
+            # Capture the file list first: in a pipeline `grep -q` exits on the
+            # first match, `git diff` then dies with SIGPIPE, and `!` turns that
+            # failure into "no relevant changes".
+            changed_files="$(git diff --no-renames --name-only "origin/${BASE_REF}...HEAD")" || exit 1
+            if grep -Eq "$RELEVANT" <<< "$changed_files"; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "reason=relevant changes detected" >> "$GITHUB_OUTPUT"
+              echo "✅ Validation will run"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "reason=no Konflux-relevant files changed" >> "$GITHUB_OUTPUT"
+              echo "ℹ️  Validation out of scope: no Konflux-relevant files changed"
+            fi
+          fi
+
+  static-validation:
+    name: Static Validation Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate build inputs
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh static
+
+  hermetic-preflight:
+    name: 'Hermetic Build Preflight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - name: Prove prefetched inputs are sufficient
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh hermetic
+
+  operator-contract:
+    name: Check operator overlay flags against the operator binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --user pyyaml \
+            || sudo apt-get install -y python3-yaml
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build the operator and verify its flag contract
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh operator
+
+  feature-server-image:
+    name: Build and run the Konflux feature-server image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build, run, and check the MCP wrapper
+        env:
+          FEATURE_SERVER_IMAGE: ${{ env.FEATURE_SERVER_IMAGE }}
+          MCP_IMAGE: ${{ env.MCP_IMAGE }}
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image
+
+  operator-image-e2e:
+    name: Deploy the Konflux operator image to Kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    needs: [check-skip, operator-contract, feature-server-image]
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Deploy the operator and reconcile a FeatureStore
+        env:
+          OPERATOR_IMAGE: ${{ env.OPERATOR_IMAGE }}
+          FEATURE_SERVER_IMAGE: ${{ env.FEATURE_SERVER_IMAGE }}
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh operator-e2e
+
+  manifest-validation:
+    name: Validate Manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install kustomize and kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${SIM_KUSTOMIZE_VERSION}/kustomize_v${SIM_KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$KUSTOMIZE_SHA256" /tmp/kustomize.tar.gz | sha256sum --check --strict
+          tar -xzf /tmp/kustomize.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+
+          curl -fsSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/v${SIM_KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          printf '%s  %s\n' "$KUBECONFORM_SHA256" /tmp/kubeconform.tar.gz | sha256sum --check --strict
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+
+          kustomize version
+          kubeconform -v
+
+      - name: Install PyYAML
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --user pyyaml \
+            || sudo apt-get install -y python3-yaml
+
+      - name: Validate kustomize builds and schemas
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh manifests
+
+  summary:
+    name: Build Validation Summary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs:
+      - check-skip
+      - hermetic-preflight
+      - static-validation
+      - feature-server-image
+      - manifest-validation
+      - operator-contract
+      - operator-image-e2e
+    if: always()
+    steps:
+      - name: Check results
+        env:
+          CHECK_SKIP: ${{ needs.check-skip.result }}
+          SKIP: ${{ needs.check-skip.outputs.should-skip }}
+          REASON: ${{ needs.check-skip.outputs.reason }}
+          HERMETIC: ${{ needs.hermetic-preflight.result }}
+          STATIC: ${{ needs.static-validation.result }}
+          IMAGE: ${{ needs.feature-server-image.result }}
+          MANIFESTS: ${{ needs.manifest-validation.result }}
+          OPERATOR: ${{ needs.operator-contract.result }}
+          OPERATOR_E2E: ${{ needs.operator-image-e2e.result }}
+        run: |
+          set -euo pipefail
+          echo "## Konflux Build Simulation Results"
+          echo ""
+
+          if [ "$CHECK_SKIP" != "success" ]; then
+            echo "❌ Skip evaluation failed (${CHECK_SKIP:-no result}); refusing to report success."
+            exit 1
+          fi
+
+          if [ "$SKIP" = "true" ]; then
+            echo "✅ Validation not required: ${REASON:-explicit skip}"
+            exit 0
+          fi
+
+          echo "| Check | Result |"
+          echo "|-------|--------|"
+          echo "| Hermetic Preflight | ${HERMETIC} |"
+          echo "| Static Validation | ${STATIC} |"
+          echo "| Feature Server Image | ${IMAGE} |"
+          echo "| Manifests | ${MANIFESTS} |"
+          echo "| Operator Flag Contract | ${OPERATOR} |"
+          echo "| Operator Image e2e | ${OPERATOR_E2E} |"
+          echo ""
+
+          failed=false
+          for result in "$HERMETIC" "$STATIC" "$IMAGE" "$MANIFESTS" "$OPERATOR" "$OPERATOR_E2E"; do
+            if [ "$result" != "success" ]; then
+              failed=true
+            fi
+          done
+
+          if [ "$failed" = "true" ]; then
+            echo "❌ Some validations failed. Check the individual job logs above."
+            exit 1
+          fi
+          echo "✅ All validations passed."
