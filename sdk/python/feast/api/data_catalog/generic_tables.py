@@ -24,6 +24,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, Query, Request, Response
 
 from feast.api.data_catalog.catalog_assets import (
+    DISPLAY_NAME_TAG,
     catalog_asset_response,
     connection_ref_to_tag,
     delete_catalog_dataset,
@@ -81,7 +82,7 @@ def _collection_name(collection: str) -> str:
         raise _as_bad_request(exc) from exc
 
 
-def _display_name(table: str) -> str:
+def _resource_name(table: str) -> str:
     try:
         return _require_part("name", table)
     except ValueError as exc:
@@ -151,7 +152,7 @@ def get_generic_table_router() -> APIRouter:
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
-        display = _display_name(body.name)
+        resource_name = _resource_name(body.name)
         try:
             label_tags = labels_to_tag(body.labels)
             ref_tags = connection_ref_to_tag(body.connection_ref)
@@ -174,7 +175,8 @@ def get_generic_table_router() -> APIRouter:
             registry,
             rhai_ns=rhai_ns,
             collection=col,
-            display_name=display,
+            resource_name=resource_name,
+            display_name=body.display_name or resource_name,
             location=(body.storage_location or "").strip(),
             tags=tags,
             description=body.description or "",
@@ -194,7 +196,7 @@ def get_generic_table_router() -> APIRouter:
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
-        dataset = _get_table(registry, rhai_ns, col, _display_name(table))
+        dataset = _get_table(registry, rhai_ns, col, _resource_name(table))
         return catalog_asset_response(dataset, col)
 
     @router.patch(
@@ -213,8 +215,10 @@ def get_generic_table_router() -> APIRouter:
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
-        dataset = _get_table(registry, rhai_ns, col, _display_name(table))
+        dataset = _get_table(registry, rhai_ns, col, _resource_name(table))
         tags = dict(dataset.tags or {})
+        if body.display_name is not None:
+            tags[DISPLAY_NAME_TAG] = body.display_name
         if body.format is not None:
             tags["format"] = body.format
         if "connection_ref" in body.model_fields_set:
@@ -268,9 +272,9 @@ def get_generic_table_router() -> APIRouter:
         col = _collection_name(collection)
         registry = _registry(request)
         _require_collection(registry, rhai_ns, col)
-        display = _display_name(table)
-        _get_table(registry, rhai_ns, col, display)
-        delete_catalog_dataset(registry, rhai_ns, col, display)
+        resource_name = _resource_name(table)
+        _get_table(registry, rhai_ns, col, resource_name)
+        delete_catalog_dataset(registry, rhai_ns, col, resource_name)
         return Response(status_code=204)
 
     return router

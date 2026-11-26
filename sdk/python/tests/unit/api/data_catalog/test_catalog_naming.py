@@ -192,7 +192,7 @@ def test_scoped_name_rejects_leading_trailing_vs_internal_whitespace():
         scoped_name("demo-user-1", "under writing", "risk_scores")
 
 
-def test_scoped_name_accepts_exact_display_name():
+def test_scoped_name_accepts_exact_resource_name():
     assert (
         scoped_name("demo-user-1", "raw", "auto-claims")
         == "demo-user-1/raw/auto-claims"

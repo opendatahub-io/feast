@@ -67,7 +67,7 @@ def _project_and_collection(project: str, collection: str) -> tuple[str, str]:
     return _http_namespace(project), _http_collection(collection)
 
 
-def _display_name(table: str) -> str:
+def _resource_name(table: str) -> str:
     return _http_part("name", table)
 
 
@@ -88,18 +88,22 @@ def _is_iceberg_table(dataset: SavedDataset) -> bool:
 def _get_iceberg_table(
     registry: BaseRegistry, rhai_ns: str, collection: str, table: str
 ) -> SavedDataset:
-    display = _display_name(table)
-    name = scoped_name(rhai_ns, collection, display)
+    resource_name = _resource_name(table)
+    name = scoped_name(rhai_ns, collection, resource_name)
     try:
         dataset = registry.get_saved_dataset(name, CATALOG_PROJECT, allow_cache=False)
     except SavedDatasetNotFound as exc:
         raise NoSuchTableException(
-            f"Table does not exist: {collection}.{display}"
+            f"Table does not exist: {collection}.{resource_name}"
         ) from exc
     if dataset.namespace != rhai_ns or dataset.collection != collection:
-        raise NoSuchTableException(f"Table does not exist: {collection}.{display}")
+        raise NoSuchTableException(
+            f"Table does not exist: {collection}.{resource_name}"
+        )
     if not _is_iceberg_table(dataset):
-        raise NoSuchTableException(f"Table does not exist: {collection}.{display}")
+        raise NoSuchTableException(
+            f"Table does not exist: {collection}.{resource_name}"
+        )
     return dataset
 
 
@@ -213,13 +217,13 @@ def get_table_router() -> APIRouter:
     @router.post("/v1/{project}/namespaces/{collection}/tables/{table}")
     def update_table(project: str, collection: str, table: str) -> Response:
         _project_and_collection(project, collection)
-        _display_name(table)
+        _resource_name(table)
         raise NotImplementedException(_TABLE_UNIMPLEMENTED)
 
     @router.delete("/v1/{project}/namespaces/{collection}/tables/{table}")
     def drop_table(project: str, collection: str, table: str) -> Response:
         _project_and_collection(project, collection)
-        _display_name(table)
+        _resource_name(table)
         raise NotImplementedException(_TABLE_UNIMPLEMENTED)
 
     @router.post("/v1/{project}/tables/rename")
