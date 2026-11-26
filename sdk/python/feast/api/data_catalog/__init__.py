@@ -38,6 +38,7 @@ from feast.api.data_catalog.catalog_utils import (
     validate_namespace_exists,
 )
 from feast.api.data_catalog.config import CATALOG_CONFIG_ENDPOINTS, get_config_router
+from feast.api.data_catalog.connection_assets import get_connection_assets_router
 from feast.api.data_catalog.errors import (
     AlreadyExistsException,
     BadRequestException,
@@ -96,6 +97,7 @@ __all__ = [
     "delete_namespace_meta",
     "ensure_catalog_project",
     "get_config_router",
+    "get_connection_assets_router",
     "get_generic_table_router",
     "get_namespace_properties",
     "get_namespace_router",

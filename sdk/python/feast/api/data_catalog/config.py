@@ -59,6 +59,7 @@ CATALOG_CONFIG_ENDPOINTS = [
     "POST /v1/{prefix}/labels",
     "DELETE /v1/{prefix}/labels/{label}",
     "GET /v1/{prefix}/search",
+    "GET /v1/{prefix}/connections/{source}/{connection_id}/assets",
 ]
 
 
