@@ -1,7 +1,11 @@
 name: Sync to Downstream Branch
 
 on:
-  pull_request:
+  # pull_request_target runs the workflow in the context of the base repo so
+  # repository secrets (SYNC_STABLE_PAT) are available even when the merged PR
+  # comes from a fork (RHOAIENG-103039). Checkout MUST stay pinned to the
+  # trusted merge SHA; never check out PR head code in this workflow.
+  pull_request_target:
     types:
       - closed
     branches:
@@ -62,6 +66,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          # Trusted merge commit on master; avoids checking out untrusted PR
+          # head code under pull_request_target.
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           token: ${{ secrets.SYNC_STABLE_PAT }}
           persist-credentials: false
