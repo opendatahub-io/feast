@@ -1,6 +1,6 @@
 ---
 # Feast Group Test Pipeline (Pipelines-as-Code)
-#
+# Testing feast group testing pipeline
 # This PipelineRun triggers integration tests across multiple Feast components
 # (feast-operator and feature-server) in a single run. It is used for
 # group testing when changes may affect more than one component.
