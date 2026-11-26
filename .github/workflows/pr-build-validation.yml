@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 env:
-  GO_VERSION: '1.26.0'
+  GO_VERSION: '1.26.10'
   UV_VERSION: '0.13.4'
   # Prefixed so it cannot shadow a Makefile variable. `infra/feast-operator`
   # sets `KUSTOMIZE_VERSION ?= v5.4.3`, and an exported value beats `?=`, so a
