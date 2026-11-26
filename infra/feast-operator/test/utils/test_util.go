@@ -97,6 +97,32 @@ func kubectlWithTimeout(ctx context.Context, args ...string) ([]byte, []byte, er
 	return stdout.Bytes(), stderr.Bytes(), err
 }
 
+// remoteRegistryNamespace returns the namespace of the FeatureStore named by
+// services.registry.remote.feastRef. The dependent FeatureStore's feast-apply
+// init container waits on that registry, so a stuck deployment needs the
+// registry namespace dumped as well. An empty string means the FeatureStore
+// uses a local registry or a hostname instead.
+func remoteRegistryNamespace(ctx context.Context, namespace string, featureStoreName string) string {
+	out, _, err := kubectlWithTimeout(ctx, "get", FeatureStoreResourceName, featureStoreName, "-n", namespace, "-o", "json")
+	if err != nil {
+		fmt.Printf("(failed to read the FeatureStore while looking for a remote registry: %v)\n", err)
+		return ""
+	}
+
+	var featureStore feastdevv1.FeatureStore
+	if err := json.Unmarshal(out, &featureStore); err != nil {
+		fmt.Printf("(failed to parse FeatureStore while looking for a remote registry: %v)\n", err)
+		return ""
+	}
+
+	services := featureStore.Spec.Services
+	if services == nil || services.Registry == nil || services.Registry.Remote == nil ||
+		services.Registry.Remote.FeastRef == nil {
+		return ""
+	}
+	return services.Registry.Remote.FeastRef.Namespace
+}
+
 // dumpDeploymentDiagnostics prints what the cluster knows about a deployment
 // that failed to become available.
 //
@@ -146,6 +172,22 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 
 	runKubectl("get", FeatureStoreResourceName, featureStoreName, "-n", namespace, "-o", "yaml")
 	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
+	dumpNamespaceDiagnostics(ctx, runKubectl, namespace)
+
+	// A FeatureStore that uses registry.remote.feastRef waits on a registry in
+	// another namespace, so dumping only the dependent namespace shows the
+	// waiting feast-apply container but not the registry it is waiting for.
+	if remoteNamespace := remoteRegistryNamespace(ctx, namespace, featureStoreName); remoteNamespace != "" && remoteNamespace != namespace {
+		fmt.Printf("\n=== diagnostics: remote registry namespace %s (referenced by %s/%s) ===\n",
+			remoteNamespace, namespace, featureStoreName)
+		dumpNamespaceDiagnostics(ctx, runKubectl, remoteNamespace)
+	}
+
+	runKubectl("logs", "-n", FeastControllerNamespace,
+		"deploy/"+ControllerDeploymentName, "--tail=200")
+}
+
+func dumpNamespaceDiagnostics(ctx context.Context, runKubectl func(args ...string) []byte, namespace string) {
 	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
 
 	podListJSON := runKubectl("get", "pods", "-n", namespace, "-o", "json")
@@ -176,8 +218,6 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 
 	runKubectl("get", "networkpolicies", "-n", namespace, "-o", "yaml")
 	runKubectl("get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-	runKubectl("logs", "-n", FeastControllerNamespace,
-		"deploy/"+ControllerDeploymentName, "--tail=200")
 }
 
 func containersWithPreviousLogs(pod corev1.Pod) []string {
