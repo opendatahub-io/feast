@@ -245,6 +245,35 @@ func ApplyFeastInfraManifestsAndVerify(namespace string, testDir string) {
 	CheckDeployment(namespace, "redis")
 }
 
+// SkipIfMissingFeastS3Env skips the current Ginkgo spec when AWS env vars required
+// by feast_s3*.yaml are unset, so credential-free runs still pass other specs.
+func SkipIfMissingFeastS3Env() {
+	missing := missingFeastS3EnvVars()
+	if len(missing) == 0 {
+		return
+	}
+	Skip(fmt.Sprintf(
+		"Skipping S3 registry e2e; missing env: %s",
+		strings.Join(missing, ", "),
+	))
+}
+
+func missingFeastS3EnvVars() []string {
+	required := []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_DEFAULT_REGION",
+		"AWS_S3_BUCKET",
+	}
+	var missing []string
+	for _, env := range required {
+		if strings.TrimSpace(os.Getenv(env)) == "" {
+			missing = append(missing, env)
+		}
+	}
+	return missing
+}
+
 // substituteFeastS3Credentials replaces ${AWS_ACCESS_KEY_ID}, ${AWS_S3_BUCKET}, etc. from process environment variables.
 // Returns an error if any required variable is unset or whitespace-only so the test fails before kubectl apply.
 func substituteFeastS3Credentials(content string) (string, error) {
@@ -378,7 +407,22 @@ func VerifyApplyFeatureStoreDefinitions(namespace string, feastCRName string, fe
 
 // VerifyApplyFeatureStoreDefinitionsS3 validates the apply/materialize CronJob for the S3 + driver_ranking FeatureStore.
 func VerifyApplyFeatureStoreDefinitionsS3(namespace string, feastCRName string, feastDeploymentName string) {
-	verifyApplyFeatureStoreCronJob(namespace, feastCRName, feastDeploymentName, "", []string{
+	VerifyApplyFeatureStoreDefinitionsS3Job(namespace, feastCRName, feastDeploymentName, "feast-test-apply")
+}
+
+// VerifyApplyFeatureStoreDefinitionsS3Job runs apply/materialize with an explicit Job name
+// (avoids colliding with other suites on shared clusters).
+func VerifyApplyFeatureStoreDefinitionsS3Job(namespace string, feastCRName string, feastDeploymentName string, jobName string) {
+	By("Verify CronJob commands in FeatureStore CR")
+	cmd := exec.Command("kubectl", "get", "-n", namespace, "feast/"+feastCRName, "-o", "jsonpath={.status.applied.cronJob.containerConfigs.commands}")
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Failed to fetch CronJob commands:\n%s", output))
+	commands := string(output)
+	logCronJobCommands(commands)
+	Expect(commands).To(ContainSubstring(`feast apply`))
+	Expect(commands).To(ContainSubstring(`feast materialize-incremental $(date -u +'%Y-%m-%dT%H:%M:%S')`))
+
+	CreateAndVerifyJobFromCron(namespace, feastDeploymentName, jobName, "", []string{
 		"Applying changes for project driver_ranking",
 		"Materializing",
 	})
@@ -398,16 +442,27 @@ func CreateAndVerifyJobFromCron(namespace, cronName, jobName, testDir string, ex
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 	fmt.Printf("Job %q completed successfully\n", jobName)
 
-	By("Checking logs of completed job")
-	cmd = exec.Command("kubectl", "logs", "job/"+jobName, "-n", namespace, "--all-containers=true")
+	By("Checking logs of succeeded job pod(s)")
+	// Prefer Succeeded pods: kubectl logs job/… can return a failed retry pod when
+	// backoffLimit > 0 (e.g. DynamoDB TagResource LimitExceeded then success).
+	cmd = exec.Command("kubectl", "get", "pods", "-n", namespace,
+		"-l", "job-name="+jobName,
+		"--field-selector=status.phase=Succeeded",
+		"-o", "jsonpath={.items[0].metadata.name}")
+	podNameOut, err := testutils.Run(cmd, testDir)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	podName := strings.TrimSpace(string(podNameOut))
+	ExpectWithOffset(1, podName).NotTo(BeEmpty(), "no Succeeded pod found for job %s", jobName)
+
+	cmd = exec.Command("kubectl", "logs", "pod/"+podName, "-n", namespace, "--all-containers=true")
 	output, err := testutils.Run(cmd, testDir)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 	outputStr := string(output)
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	outputStr = ansi.ReplaceAllString(outputStr, "")
-	fmt.Printf("----- begin logs: job/%s namespace/%s -----\n%s\n----- end logs: job/%s -----\n",
-		jobName, namespace, strings.TrimRight(outputStr, "\n"), jobName)
+	fmt.Printf("----- begin logs: pod/%s (job/%s) namespace/%s -----\n%s\n----- end logs -----\n",
+		podName, jobName, namespace, strings.TrimRight(outputStr, "\n"))
 
 	for _, expected := range expectedLogSubstrings {
 		ExpectWithOffset(1, outputStr).To(ContainSubstring(expected),
