@@ -54,8 +54,8 @@ from feast.api.data_catalog.errors import (
 )
 from feast.api.data_catalog.models import (
     AssetListResponse,
-    AssetResponse,
     CreateGenericTableRequest,
+    StructuredAssetResponse,
     UpdateGenericTableRequest,
 )
 from feast.infra.offline_stores.file_source import SavedDatasetFileStorage
@@ -134,7 +134,7 @@ def get_generic_table_router() -> APIRouter:
 
     @router.post(
         "/v1/{project}/namespaces/{collection}/generic-tables",
-        response_model=AssetResponse,
+        response_model=StructuredAssetResponse,
         response_model_exclude_unset=True,
         status_code=201,
     )
@@ -146,7 +146,7 @@ def get_generic_table_router() -> APIRouter:
         x_remote_user: str | None = Header(default=None, alias="X-Remote-User"),
         x_user: str | None = Header(default=None, alias="X-User"),
         kubeflow_userid: str | None = Header(default=None, alias="kubeflow-userid"),
-    ) -> AssetResponse:
+    ) -> StructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
@@ -184,12 +184,12 @@ def get_generic_table_router() -> APIRouter:
 
     @router.get(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
-        response_model=AssetResponse,
+        response_model=StructuredAssetResponse,
         response_model_exclude_unset=True,
     )
     def get_generic_table(
         project: str, collection: str, table: str, request: Request
-    ) -> AssetResponse:
+    ) -> StructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
@@ -199,7 +199,7 @@ def get_generic_table_router() -> APIRouter:
 
     @router.patch(
         "/v1/{project}/namespaces/{collection}/generic-tables/{table}",
-        response_model=AssetResponse,
+        response_model=StructuredAssetResponse,
         response_model_exclude_unset=True,
     )
     def update_generic_table(
@@ -208,7 +208,7 @@ def get_generic_table_router() -> APIRouter:
         table: str,
         body: UpdateGenericTableRequest,
         request: Request,
-    ) -> AssetResponse:
+    ) -> StructuredAssetResponse:
         rhai_ns = _rhai_ns(project)
         col = _collection_name(collection)
         registry = _registry(request)
