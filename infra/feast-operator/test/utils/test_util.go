@@ -136,13 +136,16 @@ func remoteRegistryNamespace(ctx context.Context, namespace string, featureStore
 // deadline. Without those bounds one kubectl that never returns, or several
 // slow calls in a pod-heavy namespace, blocks the ginkgo teardown queued
 // behind this helper and the whole run.
+//
+// Object dumps are limited to status. FeatureStore and pod specs can carry
+// literal env values, which must not be written to CI logs.
 func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploymentName string) {
 	fmt.Printf("\n=== diagnostics: deployment %s/%s ===\n", namespace, deploymentName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), diagnosticBudget)
 	defer cancel()
 
-	runKubectl := func(args ...string) []byte {
+	runKubectlWithOutput := func(printOutput bool, args ...string) []byte {
 		if ctx.Err() != nil {
 			fmt.Printf("\n--- kubectl %s\n(skipped: diagnostic budget exhausted after %s)\n",
 				strings.Join(args, " "), diagnosticBudget)
@@ -151,11 +154,15 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 
 		stdout, stderr, err := kubectlWithTimeout(ctx, args...)
 		fmt.Printf("\n--- kubectl %s\n", strings.Join(args, " "))
-		if len(stdout) > 0 {
-			fmt.Printf("%s", stdout)
-			if stdout[len(stdout)-1] != '\n' {
-				fmt.Println()
+		if printOutput {
+			if len(stdout) > 0 {
+				fmt.Printf("%s", stdout)
+				if stdout[len(stdout)-1] != '\n' {
+					fmt.Println()
+				}
 			}
+		} else {
+			fmt.Println("(output parsed but not printed)")
 		}
 		if len(stderr) > 0 {
 			fmt.Printf("[stderr]\n%s", stderr)
@@ -170,9 +177,13 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 		return stdout
 	}
 
-	runKubectl("get", FeatureStoreResourceName, featureStoreName, "-n", namespace, "-o", "yaml")
-	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "yaml")
-	dumpNamespaceDiagnostics(ctx, runKubectl, namespace)
+	runKubectl := func(args ...string) []byte { return runKubectlWithOutput(true, args...) }
+	runKubectlQuiet := func(args ...string) []byte { return runKubectlWithOutput(false, args...) }
+
+	runKubectl("get", FeatureStoreResourceName, featureStoreName, "-n", namespace,
+		"-o", "jsonpath={.status.conditions}")
+	runKubectl("get", "deployment", deploymentName, "-n", namespace, "-o", "jsonpath={.status}")
+	dumpNamespaceDiagnostics(ctx, runKubectl, runKubectlQuiet, namespace)
 
 	// A FeatureStore that uses registry.remote.feastRef waits on a registry in
 	// another namespace, so dumping only the dependent namespace shows the
@@ -180,17 +191,17 @@ func dumpDeploymentDiagnostics(namespace string, featureStoreName string, deploy
 	if remoteNamespace := remoteRegistryNamespace(ctx, namespace, featureStoreName); remoteNamespace != "" && remoteNamespace != namespace {
 		fmt.Printf("\n=== diagnostics: remote registry namespace %s (referenced by %s/%s) ===\n",
 			remoteNamespace, namespace, featureStoreName)
-		dumpNamespaceDiagnostics(ctx, runKubectl, remoteNamespace)
+		dumpNamespaceDiagnostics(ctx, runKubectl, runKubectlQuiet, remoteNamespace)
 	}
 
 	runKubectl("logs", "-n", FeastControllerNamespace,
 		"deploy/"+ControllerDeploymentName, "--tail=200")
 }
 
-func dumpNamespaceDiagnostics(ctx context.Context, runKubectl func(args ...string) []byte, namespace string) {
+func dumpNamespaceDiagnostics(ctx context.Context, runKubectl func(args ...string) []byte, runKubectlQuiet func(args ...string) []byte, namespace string) {
 	runKubectl("get", "pods", "-n", namespace, "-o", "wide")
 
-	podListJSON := runKubectl("get", "pods", "-n", namespace, "-o", "json")
+	podListJSON := runKubectlQuiet("get", "pods", "-n", namespace, "-o", "json")
 	if podListJSON != nil {
 		var podList corev1.PodList
 		if parseErr := json.Unmarshal(podListJSON, &podList); parseErr != nil {
@@ -203,7 +214,7 @@ func dumpNamespaceDiagnostics(ctx context.Context, runKubectl func(args ...strin
 					break
 				}
 				pod := podList.Items[i]
-				runKubectl("describe", "pod", pod.Name, "-n", namespace)
+				runKubectl("get", "pod", pod.Name, "-n", namespace, "-o", "jsonpath={.status}")
 				runKubectl("logs", pod.Name, "-n", namespace,
 					"--all-containers", "--tail=100", "--ignore-errors", "--prefix")
 				for _, container := range containersWithPreviousLogs(pod) {
