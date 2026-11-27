@@ -18,8 +18,9 @@ PR opened / updated
   ├─ odh-feast-operator-pull-request    → quay.io/opendatahub/feast-operator:odh-pr-<sha>
   └─ odh-feature-server-pull-request   → quay.io/opendatahub/feature-server:odh-pr-<sha>
         │
-        ├─ /group-test or group-test event auto triggered  → feast-group-test   (tests PR images)
-        └─ /pr-e2etest comment for retest           → feast-pr-test      (tests PR images)
+        ├─ /group-test or group-test event auto triggered  → feast-group-test         (AWS / tests PR images)
+        ├─ /pr-e2etest comment for retest           → feast-pr-test            (AWS / tests PR images)
+        └─ /feast-power-group-test comment (manual) → feast-power-group-test   (shared Power OC / tests PR images)
 
 Merge to master
   ├─ odh-feast-operator-push            → quay.io/opendatahub/feast-operator:odh-master
@@ -28,10 +29,13 @@ Merge to master
         └─ Daily 8 AM UTC cron /  → feast-nightly-test  (tests odh-master images)
 ```
 
-All integration test pipelines provision an ephemeral HyperShift cluster
-(m5.2xlarge, latest OCP 4.x via EaaS), deploy the Feast operator and feature
-server, run the full test suite, collect must-gather artifacts, and post
-results back to GitHub.
+AWS group/PR e2e pipelines provision an ephemeral HyperShift cluster
+(`aws-konflux-prod`, multi-arch OCP release) via OpenShift CI
+`hypershift-hostedcluster-workflow`. Power e2e (`/feast-power-group-test`) is
+**manual only** and runs against a **shared Power OpenShift** cluster via tenant
+Secret `feast-power-shared-kubeconfig` (no ephemeral provision). All variants
+deploy the Feast operator and feature server, run the full test suite, collect
+must-gather artifacts, and post results back to GitHub.
 
 ---
 
@@ -196,13 +200,47 @@ the group-test event.
 
 ---
 
+### `feast-power-group-test.yaml` — Power (ppc64le) group integration test (manual)
+
+Same Feast deploy + e2e suite as `feast-group-test`, but targets a **shared
+Power OpenShift** cluster (kubeconfig Secret in the Konflux tenant). Manual-only
+— does **not** run on PR open/update or `group-test` events.
+
+| | |
+|---|---|
+| **Trigger (manual)** | Comment `/feast-power-group-test` on a pull request |
+| **Images tested** | PR-built multi-arch images (`odh-pr-<sha>`), including `linux/ppc64le` |
+| **Source cloned** | `opendatahub-io/feast` at the PR commit |
+| **Pipeline** | [`pr-power-group-testing-pipeline.yaml`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/integration-tests/feast/pr-power-group-testing-pipeline.yaml) |
+| **Cluster** | Shared Power OC via Secret `feast-power-shared-kubeconfig` (`cluster-kubeconfig-secret`) |
+| **Result reporting** | GitHub check run `Red Hat Konflux / feast-power-group-test`; PR comment with artifacts |
+
+**Notes**
+
+- Create the tenant Secret before the first run (key must be `kubeconfig`):
+
+  ```bash
+  oc create secret generic feast-power-shared-kubeconfig \
+    --from-file=kubeconfig=/path/to/power-shared.kubeconfig \
+    -n open-data-hub-tenant
+  ```
+
+- Konflux worker pods must reach the Power API server in that kubeconfig.
+- Prefer one active Power run at a time on the shared cluster; undeploy runs after tests.
+- After `pr-power-group-testing-pipeline.yaml` merges to
+  `odh-konflux-central` `main`, set `pipelineRef.revision` in this file to
+  `main` (it may temporarily point at a feature branch while validating).
+
+---
+
 ## Trigger reference
 
 | Comment / event | Pipeline | Images tested | When to use |
 |-----------------|----------|---------------|-------------|
 | PR opened/updated | `odh-feast-operator-pull-request` + `odh-feature-server-pull-request` | — (build only) | Automatic on every PR |
-| `group-test` event or `/group-test` | `feast-group-test` | PR images | Multi-component changes |
-| `/pr-e2etest` | `feast-pr-test` | PR images | On-demand full e2e on a PR |
+| `group-test` event or `/group-test` | `feast-group-test` | PR images (AWS) | Multi-component changes |
+| `/pr-e2etest` | `feast-pr-test` | PR images (AWS) | On-demand full e2e on a PR |
+| `/feast-power-group-test` | `feast-power-group-test` | PR images (shared Power OC) | On-demand Power arch e2e (manual) |
 | Daily 8 AM UTC `feast-nightly-test` | `odh-master` images | Master branch quality gate |
 | Merge to master | `odh-feast-operator-push` + `odh-feature-server-push` | — (build only) | Automatic on every merge |
 
@@ -217,5 +255,6 @@ All integration test pipeline definitions live in
 |------|---------|
 | [`nightly-testing-pipeline.yaml`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/integration-tests/feast/nightly-testing-pipeline.yaml) | `feast-nightly-test` |
 | [`pr-group-testing-pipeline.yaml`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/integration-tests/feast/pr-group-testing-pipeline.yaml) | `feast-group-test`, `feast-pr-test` |
+| [`pr-power-group-testing-pipeline.yaml`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/integration-tests/feast/pr-power-group-testing-pipeline.yaml) | `feast-power-group-test` |
 | [`Dockerfile.go-its`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/integration-tests/feast/Dockerfile.go-its) | Test runner image for all test pipelines |
 | [`multi-arch-container-build.yaml`](https://github.com/opendatahub-io/odh-konflux-central/blob/main/pipeline/multi-arch-container-build.yaml) | All build pipelines |
