@@ -110,6 +110,9 @@ var _ = Describe("Feast Workbench Integration Connection Testing", Ordered, func
 		// Pass feastProject parameter to set the opendatahub.io/feast-config annotation
 		CreateNotebookTest(namespace, configMapName, notebookFile, "test/e2e_rhoai/resources/feature_repo", pvcFile, rolebindingName, notebookPVC, notebookName, testDir, "credit_scoring_local")
 
+		By("Verifying FeatureStore NetworkPolicies and workbench feast-integration label")
+		VerifyFeatureStoreNetworkPoliciesBasic(namespace, feastCRName)
+
 		// Verify Feast ConfigMap was created with correct auth type
 		verifyFeastConfigMap(authEnabled)
 
@@ -135,7 +138,7 @@ var _ = Describe("Feast Workbench Integration Connection Testing", Ordered, func
 	Context("Feast Workbench Integration Tests - Without Auth", func() {
 		BeforeEach(func() {
 			By("Applying and validating the credit-scoring FeatureStore CR without auth")
-			ApplyFeastYamlAndVerify(namespace, testDir, feastDeploymentName, feastCRName, "test/testdata/feast_integration_test_crs/feast.yaml")
+			ApplyFeastYamlAndVerify(namespace, testDir, feastDeploymentName, feastCRName, "test/e2e_rhoai/resources/feast_no_auth.yaml")
 
 			By("Verify Feature Store CR is in Ready state")
 			ValidateFeatureStoreCRStatus(namespace, feastCRName)
