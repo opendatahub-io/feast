@@ -134,12 +134,6 @@ rules:
 - apiGroups:
   - dataregistry.opendatahub.io
   resources:
-  - connections
-  verbs:
-  - use
-- apiGroups:
-  - dataregistry.opendatahub.io
-  resources:
   - generic-tables
   - namespaces
   - registries
@@ -280,7 +274,6 @@ rules:
   - rbac.authorization.k8s.io
   resourceNames:
   - feast-data-registry-admin
-  - feast-data-registry-editor
   - feast-data-registry-viewer
   - feast-discover-namespaces
   - feast-oidc-token-review
@@ -290,6 +283,14 @@ rules:
   verbs:
   - delete
   - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - feast-data-registry-editor
+  resources:
+  - clusterroles
+  verbs:
+  - delete
 - apiGroups:
   - route.openshift.io
   resources:
@@ -308,6 +309,14 @@ rules:
   verbs:
   - create
   - update
+- apiGroups:
+  - services.platform.opendatahub.io
+  resources:
+  - auths
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - sparkoperator.k8s.io
   resources:

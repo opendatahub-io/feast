@@ -251,6 +251,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.GlobalDataRegistryReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GlobalDataRegistry")
+		os.Exit(1)
+	}
+
 	// Setup Notebook ConfigMap controller for OpenDataHub integration
 	// Default to kubeflow.org/v1 Notebook CRD (used by OpenDataHub)
 	notebookGVK := schema.GroupVersionKind{
